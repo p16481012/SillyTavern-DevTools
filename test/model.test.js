@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
     buildSources,
     createSnapshotId,
+    findExactRanges,
     flattenPrompt,
     searchSnapshot,
     serializeSnapshot,
@@ -34,8 +35,39 @@ test('buildSources marks exact source content without altering the payload', () 
 
     assert.deepEqual(payload, before);
     assert.equal(sources.find((source) => source.label === 'Character Description')?.attribution, 'exact');
+    assert.deepEqual(
+        sources.find((source) => source.label === 'Character Description')?.ranges,
+        [{ start: 11, end: 37 }],
+    );
     assert.equal(sources.find((source) => source.label === 'Chat History')?.attribution, 'derived');
     assert.equal(sources.at(-1).type, 'final');
+});
+
+test('findExactRanges records every non-overlapping source occurrence', () => {
+    assert.deepEqual(findExactRanges('alpha beta alpha', 'alpha'), [
+        { start: 0, end: 5 },
+        { start: 11, end: 16 },
+    ]);
+});
+
+test('buildSources includes processed character prompt fields', () => {
+    const payload = [{ role: 'system', content: 'System card\nExample dialogue\nDepth instruction' }];
+    const sources = buildSources({
+        character: {},
+        characterFields: {
+            systemPrompt: 'System card',
+            exampleDialogue: 'Example dialogue',
+            depthPrompt: 'Depth instruction',
+        },
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [],
+    }, payload, []);
+
+    assert.equal(sources.find((source) => source.labelKey === 'source.characterSystemPrompt')?.attribution, 'exact');
+    assert.equal(sources.find((source) => source.labelKey === 'source.characterExamples')?.attribution, 'exact');
+    assert.equal(sources.find((source) => source.labelKey === 'source.characterDepthPrompt')?.attribution, 'exact');
 });
 
 test('snapshot ids are stable for identical inputs at the same timestamp', () => {

@@ -3,8 +3,9 @@ import {
     sourceDisplayLabel,
     t,
 } from './i18n.js';
+import { createCaptureBoundary, createRequestRecord } from './request.js';
 
-export const SNAPSHOT_SCHEMA_VERSION = 1;
+export const SNAPSHOT_SCHEMA_VERSION = 2;
 
 const SOURCE_COLORS = {
     system: '#8b5cf6',
@@ -76,9 +77,48 @@ export function flattenPrompt(payload) {
         .join('\n\n');
 }
 
+export function findExactRanges(finalText, content, limit = 50) {
+    const haystack = String(finalText ?? '');
+    const needle = contentToText(content).trim();
+    if (!needle) return [];
+
+    const ranges = [];
+    let offset = 0;
+    while (ranges.length < limit) {
+        const start = haystack.indexOf(needle, offset);
+        if (start < 0) break;
+        ranges.push({ start, end: start + needle.length });
+        offset = start + Math.max(1, needle.length);
+    }
+    return ranges;
+}
+
 function getCharacterData(contextState) {
     const character = contextState.character;
     return character?.data ?? character ?? {};
+}
+
+function getCharacterFields(contextState) {
+    const character = getCharacterData(contextState);
+    return {
+        description: contextState.characterFields?.description ?? character.description,
+        personality: contextState.characterFields?.personality ?? character.personality,
+        scenario: contextState.characterFields?.scenario ?? character.scenario,
+        exampleDialogue: contextState.characterFields?.exampleDialogue
+            ?? contextState.characterFields?.mesExamples
+            ?? character.mes_example,
+        firstMessage: contextState.characterFields?.firstMessage
+            ?? character.first_mes,
+        systemPrompt: contextState.characterFields?.systemPrompt
+            ?? contextState.characterFields?.system
+            ?? character.system_prompt,
+        postHistoryInstructions: contextState.characterFields?.postHistoryInstructions
+            ?? contextState.characterFields?.jailbreak
+            ?? character.post_history_instructions,
+        depthPrompt: contextState.characterFields?.depthPrompt
+            ?? contextState.characterFields?.charDepthPrompt
+            ?? character.extensions?.depth_prompt?.prompt,
+    };
 }
 
 function addSource(sources, {
@@ -96,7 +136,8 @@ function addSource(sources, {
         return;
     }
 
-    const exactMatch = finalText.includes(text);
+    const ranges = findExactRanges(finalText, text);
+    const exactMatch = ranges.length > 0;
     sources.push({
         id: `${type}:${sources.length}`,
         type,
@@ -108,6 +149,7 @@ function addSource(sources, {
         included: included ?? exactMatch,
         tokenCount: null,
         metadata,
+        ranges,
     });
 }
 
@@ -125,7 +167,7 @@ function classifyConfiguredPrompt(prompt) {
 export function buildSources(contextState, payload, activatedLore = []) {
     const finalText = flattenPrompt(payload);
     const sources = [];
-    const character = getCharacterData(contextState);
+    const character = getCharacterFields(contextState);
 
     addSource(sources, {
         type: 'character',
@@ -150,6 +192,46 @@ export function buildSources(contextState, payload, activatedLore = []) {
         content: character.scenario,
         finalText,
         metadata: { field: 'scenario' },
+    });
+    addSource(sources, {
+        type: 'character',
+        label: 'Character Example Dialogue',
+        labelKey: 'source.characterExamples',
+        content: character.exampleDialogue,
+        finalText,
+        metadata: { field: 'mes_example' },
+    });
+    addSource(sources, {
+        type: 'character',
+        label: 'Character First Message',
+        labelKey: 'source.characterFirstMessage',
+        content: character.firstMessage,
+        finalText,
+        metadata: { field: 'first_mes' },
+    });
+    addSource(sources, {
+        type: 'system',
+        label: 'Character System Prompt',
+        labelKey: 'source.characterSystemPrompt',
+        content: character.systemPrompt,
+        finalText,
+        metadata: { field: 'system_prompt' },
+    });
+    addSource(sources, {
+        type: 'jailbreak',
+        label: 'Character Post-History Instructions',
+        labelKey: 'source.characterPostHistory',
+        content: character.postHistoryInstructions,
+        finalText,
+        metadata: { field: 'post_history_instructions' },
+    });
+    addSource(sources, {
+        type: 'extension',
+        label: 'Character Depth Prompt',
+        labelKey: 'source.characterDepthPrompt',
+        content: character.depthPrompt,
+        finalText,
+        metadata: { field: 'extensions.depth_prompt.prompt' },
     });
     addSource(sources, {
         type: 'persona',
@@ -251,6 +333,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
         included: true,
         tokenCount: null,
         metadata: {},
+        ranges: finalText ? [{ start: 0, end: finalText.length }] : [],
     });
 
     return sources;
@@ -274,10 +357,21 @@ export async function finalizeSnapshot({
     activatedLore,
     extensionVersion,
     tokenCounter,
+    capture,
+    request,
 }) {
     const timestamp = Date.now();
     const finalText = flattenPrompt(payload);
     const sources = buildSources(contextState, payload, activatedLore);
+    const normalizedRequest = request ?? createRequestRecord(null);
+    const normalizedCapture = capture ?? createCaptureBoundary({
+        eventName: promptType === 'chat-completion'
+            ? 'CHAT_COMPLETION_PROMPT_READY'
+            : 'GENERATE_AFTER_COMBINE_PROMPTS',
+        stage: 'prompt-ready',
+        requestBodyAvailable: false,
+        fallback: true,
+    });
     const count = async (text) => {
         try {
             return Number(await tokenCounter(text)) || 0;
@@ -292,7 +386,11 @@ export async function finalizeSnapshot({
     });
     const totalTokens = await count(finalText);
     const maxContext = Number(contextState.maxContext) || null;
-    const maxOutput = Number(contextState.maxOutput) || null;
+    const requestMaxOutput = normalizedRequest.settings?.max_tokens
+        ?? normalizedRequest.settings?.max_completion_tokens
+        ?? normalizedRequest.settings?.max_new_tokens
+        ?? normalizedRequest.settings?.max_length;
+    const maxOutput = Number(requestMaxOutput ?? contextState.maxOutput) || null;
     const usableContext = maxContext && maxOutput ? Math.max(0, maxContext - maxOutput) : maxContext;
 
     return {
@@ -303,12 +401,14 @@ export async function finalizeSnapshot({
         chatId: contextState.chatId || '__global__',
         messageCount: contextState.messageCount,
         api: contextState.mainApi || 'unknown',
-        model: contextState.model || null,
+        model: normalizedRequest.settings?.model ?? contextState.model ?? null,
         preset: contextState.preset || null,
         promptType,
         generationType: generationType || 'unknown',
         payload,
         finalText,
+        capture: normalizedCapture,
+        request: normalizedRequest,
         sources,
         lorebookEntries: activatedLore,
         stats: {

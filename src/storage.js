@@ -1,3 +1,5 @@
+import { migrateSnapshot, migrateTimeline } from './migrations.js';
+
 const INDEX_KEY = 'chat-index';
 
 export class SnapshotStore {
@@ -39,10 +41,11 @@ export class SnapshotStore {
     }
 
     async addSnapshot(snapshot) {
-        const chatId = snapshot.chatId || '__global__';
+        const normalizedSnapshot = migrateSnapshot(snapshot);
+        const chatId = normalizedSnapshot.chatId || '__global__';
         const key = this.timelineKey(chatId);
         const timeline = await this.read(key, []);
-        const next = [...timeline.filter((item) => item.id !== snapshot.id), snapshot]
+        const next = [...timeline.filter((item) => item.id !== normalizedSnapshot.id), normalizedSnapshot]
             .sort((left, right) => left.timestamp - right.timestamp)
             .slice(-this.maxSnapshotsPerChat);
         await this.write(key, next);
@@ -51,16 +54,39 @@ export class SnapshotStore {
         if (!chatIndex.includes(chatId)) {
             await this.write(INDEX_KEY, [...chatIndex, chatId]);
         }
-        return snapshot;
+        return normalizedSnapshot;
     }
 
     async getTimeline(chatId) {
-        return this.read(this.timelineKey(chatId), []);
+        const key = this.timelineKey(chatId);
+        const stored = await this.read(key, []);
+        const { snapshots, changed } = migrateTimeline(stored);
+        if (changed) {
+            await this.write(key, snapshots);
+        }
+        return snapshots;
     }
 
     async getLatest(chatId) {
         const timeline = await this.getTimeline(chatId);
         return timeline.at(-1) ?? null;
+    }
+
+    async deleteSnapshot(chatId, snapshotId) {
+        const key = this.timelineKey(chatId);
+        const timeline = await this.getTimeline(chatId);
+        const next = timeline.filter((snapshot) => snapshot.id !== snapshotId);
+        if (next.length === timeline.length) {
+            return false;
+        }
+        if (next.length > 0) {
+            await this.write(key, next);
+        } else if (this.backend) {
+            await this.backend.removeItem(key);
+        } else {
+            this.memory.delete(key);
+        }
+        return true;
     }
 
     async clearTimeline(chatId) {
