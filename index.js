@@ -1,9 +1,10 @@
 import { CaptureController } from './src/capture.js';
+import { t } from './src/i18n.js';
 import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',
@@ -38,7 +39,7 @@ function createLaunchButton(openWindow) {
     button.id = `${EXTENSION_ID}-launch`;
     button.className = 'list-group-item flex-container flexGap5 interactable';
     button.tabIndex = 0;
-    button.title = 'Open ST DevTools';
+    button.title = t('app.open');
 
     const icon = document.createElement('i');
     icon.className = 'fa-solid fa-code';
@@ -105,7 +106,7 @@ async function initialize() {
 function reportInitializationError(error) {
     console.error('[ST DevTools] Initialization failed.', error);
     globalThis.toastr?.error?.(
-        'ST DevTools could not start. Update SillyTavern and check the browser console.',
+        t('app.initializationError'),
         'ST DevTools',
     );
 }

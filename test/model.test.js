@@ -68,6 +68,6 @@ test('serializeSnapshot emits JSON, text, and Markdown', () => {
         }],
     };
     assert.equal(JSON.parse(serializeSnapshot(snapshot, 'json')).id, 'id');
-    assert.match(serializeSnapshot(snapshot, 'txt'), /Final Prompt/);
-    assert.match(serializeSnapshot(snapshot, 'markdown'), /# ST DevTools Snapshot/);
+    assert.match(serializeSnapshot(snapshot, 'txt'), /최종 프롬프트/);
+    assert.match(serializeSnapshot(snapshot, 'markdown'), /# ST DevTools 스냅샷/);
 });

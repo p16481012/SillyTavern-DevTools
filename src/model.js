@@ -1,3 +1,9 @@
+import {
+    attributionDisplayLabel,
+    sourceDisplayLabel,
+    t,
+} from './i18n.js';
+
 export const SNAPSHOT_SCHEMA_VERSION = 1;
 
 const SOURCE_COLORS = {
@@ -78,6 +84,7 @@ function getCharacterData(contextState) {
 function addSource(sources, {
     type,
     label,
+    labelKey = null,
     content,
     finalText,
     metadata = {},
@@ -94,6 +101,7 @@ function addSource(sources, {
         id: `${type}:${sources.length}`,
         type,
         label,
+        labelKey,
         content: text,
         color: SOURCE_COLORS[type] ?? SOURCE_COLORS.utility,
         attribution: attribution ?? (exactMatch ? 'exact' : 'unmatched'),
@@ -122,6 +130,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
     addSource(sources, {
         type: 'character',
         label: 'Character Description',
+        labelKey: 'source.characterDescription',
         content: character.description,
         finalText,
         metadata: { field: 'description' },
@@ -129,6 +138,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
     addSource(sources, {
         type: 'character',
         label: 'Character Personality',
+        labelKey: 'source.characterPersonality',
         content: character.personality,
         finalText,
         metadata: { field: 'personality' },
@@ -136,6 +146,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
     addSource(sources, {
         type: 'character',
         label: 'Scenario',
+        labelKey: 'source.scenario',
         content: character.scenario,
         finalText,
         metadata: { field: 'scenario' },
@@ -143,12 +154,14 @@ export function buildSources(contextState, payload, activatedLore = []) {
     addSource(sources, {
         type: 'persona',
         label: 'Persona',
+        labelKey: 'source.persona',
         content: contextState.personaDescription,
         finalText,
     });
     addSource(sources, {
         type: 'authors_note',
         label: "Author's Note",
+        labelKey: 'source.authorsNote',
         content: contextState.authorsNote,
         finalText,
     });
@@ -157,6 +170,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
         addSource(sources, {
             type: 'lorebook',
             label: entry?.comment || entry?.key?.join(', ') || `Lorebook entry ${entry?.uid ?? '?'}`,
+            labelKey: entry?.comment || entry?.key?.length ? null : 'source.lorebookEntry',
             content: entry?.content,
             finalText,
             metadata: {
@@ -187,6 +201,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
         addSource(sources, {
             type,
             label: prompt?.name || prompt?.identifier || 'Configured prompt',
+            labelKey: prompt?.name || prompt?.identifier ? null : 'source.configuredPrompt',
             content: prompt?.content,
             finalText,
             metadata: {
@@ -202,6 +217,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
         addSource(sources, {
             type: 'chat_history',
             label: 'Chat History',
+            labelKey: 'source.chatHistory',
             content: flattenPrompt(historyMessages),
             finalText,
             metadata: { messageCount: historyMessages.length },
@@ -214,6 +230,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
             addSource(sources, {
                 type: 'assistant_prefill',
                 label: 'Assistant Prefill / Last Assistant Message',
+                labelKey: 'source.assistantPrefill',
                 content: lastMessage.content,
                 finalText,
                 metadata: { inferred: true },
@@ -227,6 +244,7 @@ export function buildSources(contextState, payload, activatedLore = []) {
         id: `final:${sources.length}`,
         type: 'final',
         label: 'Final Prompt',
+        labelKey: 'source.finalPrompt',
         content: finalText,
         color: SOURCE_COLORS.final,
         attribution: 'exact',
@@ -324,7 +342,7 @@ export function searchSnapshot(snapshot, query, options = {}) {
             const end = Math.min(source.content.length, match.index + Math.max(match[0].length, 1) + 60);
             results.push({
                 sourceId: source.id,
-                sourceLabel: source.label,
+                sourceLabel: sourceDisplayLabel(source),
                 index: match.index,
                 length: match[0].length,
                 snippet: source.content.slice(start, end),
@@ -347,26 +365,26 @@ export function serializeSnapshot(snapshot, format) {
     }
 
     const header = [
-        `ST DevTools snapshot ${snapshot.id}`,
-        `Captured: ${new Date(snapshot.timestamp).toISOString()}`,
+        `ST DevTools 스냅샷 ${snapshot.id}`,
+        `캡처 시각: ${new Date(snapshot.timestamp).toISOString()}`,
         `API: ${snapshot.api}`,
-        `Model: ${snapshot.model ?? 'Unknown'}`,
-        `Tokens: ${snapshot.stats?.totalTokens ?? 'Unknown'}`,
+        `모델: ${snapshot.model ?? t('common.unknown')}`,
+        `토큰: ${snapshot.stats?.totalTokens ?? t('common.unknown')}`,
     ];
 
     if (format === 'markdown') {
         const sections = snapshot.sources.map((source) => (
-            `## ${source.label}\n\n` +
-            `- Type: \`${source.type}\`\n` +
-            `- Tokens: ${source.tokenCount ?? 'Unknown'}\n` +
-            `- Attribution: ${source.attribution}\n\n` +
+            `## ${sourceDisplayLabel(source)}\n\n` +
+            `- 유형: \`${source.type}\`\n` +
+            `- 토큰: ${source.tokenCount ?? t('common.unknown')}\n` +
+            `- 소스 연결: ${attributionDisplayLabel(source.attribution)}\n\n` +
             `\`\`\`text\n${source.content.replaceAll('```', '``\\`')}\n\`\`\``
         ));
-        return `# ST DevTools Snapshot\n\n${header.map((line) => `- ${line}`).join('\n')}\n\n${sections.join('\n\n')}`;
+        return `# ST DevTools 스냅샷\n\n${header.map((line) => `- ${line}`).join('\n')}\n\n${sections.join('\n\n')}`;
     }
 
     const sections = snapshot.sources.map((source) => (
-        `\n\n===== ${source.label} [${source.type}] =====\n${source.content}`
+        `\n\n===== ${sourceDisplayLabel(source)} [${source.type}] =====\n${source.content}`
     ));
     return `${header.join('\n')}${sections.join('')}`;
 }
