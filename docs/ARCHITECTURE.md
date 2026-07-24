@@ -2,28 +2,61 @@
 
 ## 읽기 전용 경계
 
-ST DevTools는 `generate_interceptor`를 선언하지 않습니다. Prompt-ready 이벤트 payload를 즉시 복제하고 원본 객체를 수정하지 않습니다. 토큰 계산과 IndexedDB 쓰기는 이벤트 리스너가 반환된 뒤 실행되어 일반 생성을 의도적으로 차단하지 않습니다.
+ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이벤트 payload를 수정하지 않습니다. Prompt-ready 리스너는 캡처 대기 항목을 만들고 즉시 반환합니다. 요청 설정 객체는 같은 이벤트의 동기적 후속 변경이 반영될 수 있도록 리스너 반환 직후 복제하며, 토큰 계산과 IndexedDB 쓰기는 이벤트 처리 흐름 밖에서 실행됩니다.
 
 ## 캡처 파이프라인
 
-1. `GENERATION_STARTED`가 생성 단위 상태를 초기화합니다.
+1. `GENERATION_STARTED`가 생성 유형과 생성 단위 상태를 초기화합니다.
 2. `WORLD_INFO_ACTIVATED`가 활성화된 로어북 항목을 기록합니다.
-3. Chat 또는 Text Completion prompt-ready 이벤트의 payload를 복제합니다.
-4. 캐릭터·페르소나·작가 노트·설정 프롬프트·확장 프롬프트·API·모델·컨텍스트 상태를 수집합니다.
-5. 토큰 수와 소스 연결 상태를 비동기로 계산합니다.
-6. 정규화한 스냅샷을 현재 채팅의 IndexedDB 타임라인에 추가합니다.
-7. 내부 `snapshot` 이벤트로 열려 있는 UI를 갱신합니다.
+3. `CHAT_COMPLETION_PROMPT_READY` 또는 `GENERATE_AFTER_COMBINE_PROMPTS`가 prompt-ready payload와 현재 컨텍스트를 복제합니다.
+4. 가능한 경우 다음 이벤트와 대기 중인 prompt를 FIFO 방식으로 연결합니다.
+   - `CHAT_COMPLETION_SETTINGS_READY`
+   - `TEXT_COMPLETION_SETTINGS_READY`
+   - `GENERATE_AFTER_DATA`
+5. 같은 이벤트 전달 중 동기적으로 설정이 바뀔 수 있으므로 리스너 반환 직후 요청 객체를 복제합니다.
+6. 요청 객체에서 `messages`, `chat`, `prompt`, `input`을 우선 payload로 사용합니다.
+7. credential 형태의 필드를 제거하고 요청 본문·생성 설정·제거된 경로를 기록합니다.
+8. 요청 설정 이벤트가 일정 시간 안에 없으면 prompt-ready payload를 대체 캡처합니다.
+9. 토큰 수와 소스 연결 상태를 비동기로 계산한 뒤 현재 채팅 타임라인에 저장합니다.
+
+## 캡처 경계
+
+`backend-request-ready`는 SillyTavern 프런트엔드가 자체 백엔드로 전달하기 직전의 생성 데이터를 뜻합니다. 외부 provider로 전달되기 전 SillyTavern 서버가 요청을 변환하거나 필드를 추가할 수 있으므로 provider에 도달한 최종 HTTP 본문과 동일하다고 주장하지 않습니다.
+
+`generation-data-ready`는 API별 생성 데이터가 조립된 시점이며 이후 프런트엔드 또는 백엔드 변환이 남을 수 있습니다.
+
+`prompt-ready`는 요청 설정 이벤트를 사용할 수 없을 때의 대체 경계입니다. v0.2 이하 스냅샷도 이 경계로 마이그레이션됩니다.
 
 ## 스냅샷 스키마
 
-스키마 버전 1:
+스키마 버전 2:
 
 - 식별 정보: ID, 시각, 확장 버전, 채팅 ID, 메시지 수
 - 생성 정보: API, 모델, 프리셋, 프롬프트 유형, 생성 유형
-- payload: 변경 불가능하게 복제한 요청 프롬프트와 평탄화 텍스트
-- provenance: 알려진 소스, 연결 신뢰도, 소스 메타데이터
+- `capture`: 이벤트 이름, 캡처 단계, 대체 캡처 여부, 서버 변환 포함 여부
+- `request`: 민감 정보가 제거된 요청 본문, 프롬프트 필드를 제외한 생성 설정, 제거된 필드 경로
+- `payload`: 변경 불가능하게 복제한 요청 프롬프트와 평탄화 텍스트
+- provenance: 알려진 소스, 연결 신뢰도, 소스 메타데이터, 최종 텍스트 문자 범위
 - 로어북: 활성화된 항목 객체
 - 통계: 토큰, 컨텍스트 한도, 출력 예약량, 사용률, 남은 토큰
+
+스토리지를 읽을 때 스키마 v1 스냅샷을 v2로 한 번 변환하고 같은 타임라인에 다시 저장합니다. 기존 payload·최종 텍스트·ID는 변경하지 않으며, 과거에 캡처하지 않은 요청 본문은 비어 있는 상태로 유지합니다.
+
+## 소스 수집
+
+가능한 경우 SillyTavern의 `getCharacterCardFields()` 결과를 사용해 매크로와 그룹 카드 처리가 반영된 필드를 읽습니다. 구버전에서는 원본 캐릭터 데이터로 대체합니다.
+
+- 설명, 성격, 시나리오
+- 예시 대화, 첫 메시지
+- 캐릭터 시스템 프롬프트
+- 캐릭터 후처리 지시
+- 캐릭터 깊이 프롬프트
+- 페르소나, 작가 노트
+- 활성 로어북
+- 확장·설정 프롬프트
+- 채팅 기록과 어시스턴트 프리필
+
+직접 포함된 문자열은 최종 평탄화 텍스트에서 모든 비중첩 범위를 최대 50개까지 기록합니다. 매크로·템플릿 처리로 문자열이 바뀐 소스는 계속 보수적으로 `미확인` 처리합니다.
 
 ## 규칙 검사
 
@@ -33,13 +66,4 @@ ST DevTools는 `generate_interceptor`를 선언하지 않습니다. Prompt-ready
 
 ## 불투명 테마
 
-SillyTavern 테마의 `--SmartThemeBlurTintColor`에는 알파 값이 포함될 수 있으므로 패널 배경에 직접 사용하지 않습니다. 현재 본문 글자의 계산된 명도를 확인한 후 다음 중 하나의 완전 불투명 팔레트를 선택합니다.
-
-- 밝은 글자 → 어두운 불투명 패널
-- 어두운 글자 → 밝은 불투명 패널
-
-SillyTavern의 강조 색상은 탭과 포커스 표시에서만 사용합니다.
-
-## 호환성 경계
-
-Chat Completion 캡처는 backend 전용 후처리 전의 prompt-ready 메시지 컬렉션입니다. Text Completion은 SillyTavern이 프롬프트를 결합한 뒤 캡처합니다. 해당 이벤트 이후 provider 또는 서버에서 실행되는 변환은 현재 캡처 범위에 포함되지 않습니다.
+SillyTavern 테마의 `--SmartThemeBlurTintColor`에는 알파 값이 포함될 수 있으므로 패널 배경에 직접 사용하지 않습니다. 본문 글자의 계산된 명도를 확인한 후 밝은 글자에는 어두운 패널, 어두운 글자에는 밝은 패널을 사용합니다.

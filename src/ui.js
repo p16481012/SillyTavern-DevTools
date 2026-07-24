@@ -329,6 +329,12 @@ export class DevToolsWindow {
                     text: attributionDisplayLabel(source.attribution),
                 }),
             );
+            if (source.ranges?.length) {
+                badges.appendChild(element('span', {
+                    className: 'st-devtools-badge',
+                    text: t('capture.rangeCount', { count: source.ranges.length }),
+                }));
+            }
             summary.append(name, badges);
             const pre = element('pre', { text: source.content });
             details.append(summary, pre);
@@ -440,6 +446,38 @@ export class DevToolsWindow {
     renderContext(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         page.appendChild(this.renderSnapshotPicker());
+        const capture = snapshot.capture ?? {};
+        const captureCard = element('section', { className: 'st-devtools-capture-boundary' });
+        const captureHeader = element('header');
+        captureHeader.append(
+            element('strong', { text: t('capture.title') }),
+            element('span', {
+                className: `st-devtools-capture-stage${capture.fallback ? ' fallback' : ''}`,
+                text: t(`capture.stage.${capture.stage ?? 'prompt-ready'}`),
+            }),
+        );
+        let captureDescription = capture.stage === 'backend-request-ready'
+            ? t('capture.backendDescription')
+            : capture.stage === 'generation-data-ready'
+                ? t('capture.generationDescription')
+                : t('capture.fallbackDescription');
+        if (capture.migratedFrom) {
+            captureDescription = t('capture.legacyDescription');
+        }
+        captureCard.append(
+            captureHeader,
+            element('p', { text: captureDescription }),
+            element('small', {
+                text: t('capture.event', { event: capture.eventName ?? t('common.unknown') }),
+            }),
+        );
+        if (snapshot.request?.redactedPaths?.length) {
+            captureCard.appendChild(element('small', {
+                className: 'st-devtools-capture-redacted',
+                text: t('capture.redacted', { count: snapshot.request.redactedPaths.length }),
+            }));
+        }
+
         const stats = element('div', { className: 'st-devtools-stats' });
         const statValues = [
             [t('stat.promptTokens'), snapshot.stats.totalTokens],
@@ -477,7 +515,33 @@ export class DevToolsWindow {
                 ? JSON.stringify(snapshot.payload, null, 2)
                 : snapshot.finalText,
         });
-        page.append(stats, toolbar, payload);
+        const settingsDetails = element('details', { className: 'st-devtools-context-details' });
+        settingsDetails.append(
+            element('summary', { text: t('context.requestSettings') }),
+            element('pre', {
+                text: JSON.stringify(snapshot.request?.settings ?? {}, null, 2),
+            }),
+        );
+        const requestDetails = element('details', { className: 'st-devtools-context-details' });
+        requestDetails.append(
+            element('summary', { text: t('context.requestBody') }),
+            snapshot.request?.body
+                ? element('pre', { text: JSON.stringify(snapshot.request.body, null, 2) })
+                : element('p', { text: t('context.notCaptured') }),
+        );
+        const payloadHeading = element('strong', {
+            className: 'st-devtools-context-heading',
+            text: t('context.promptPayload'),
+        });
+        page.append(
+            captureCard,
+            stats,
+            toolbar,
+            settingsDetails,
+            requestDetails,
+            payloadHeading,
+            payload,
+        );
         return page;
     }
 

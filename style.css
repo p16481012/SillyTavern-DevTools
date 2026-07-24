@@ -289,6 +289,79 @@
     opacity: 0.68;
 }
 
+.st-devtools-capture-boundary {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-left: 4px solid #22c55e;
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-capture-boundary > header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.st-devtools-capture-boundary > p {
+    margin: 0;
+}
+
+.st-devtools-capture-boundary > small {
+    opacity: 0.72;
+}
+
+.st-devtools-capture-stage {
+    padding: 0.2rem 0.55rem;
+    border: 1px solid #22c55e;
+    border-radius: 999px;
+    color: #22c55e;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.st-devtools-capture-stage.fallback {
+    border-color: #f59e0b;
+    color: #f59e0b;
+}
+
+.st-devtools-capture-redacted {
+    color: #f59e0b;
+}
+
+.st-devtools-context-details {
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-context-details > summary {
+    padding: 0.65rem;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.st-devtools-context-details > pre,
+.st-devtools-context-details > p {
+    max-height: 24rem;
+    margin: 0;
+    padding: 0.75rem;
+    overflow: auto;
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-panel-bg);
+    color: inherit;
+    white-space: pre-wrap;
+}
+
+.st-devtools-context-heading {
+    margin-top: 0.25rem;
+}
+
 .st-devtools-toolbar {
     flex-wrap: wrap;
     justify-content: space-between;
