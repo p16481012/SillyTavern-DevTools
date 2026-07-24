@@ -14,3 +14,4 @@
 - literal, case-sensitive, and regular expression search
 - draggable, resizable, theme-aware window with remembered state
 - dependency-free syntax checks and model unit tests
+- GitHub Actions syntax and unit-test workflow
