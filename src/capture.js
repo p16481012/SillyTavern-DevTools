@@ -131,7 +131,6 @@ export class CaptureController extends EventTarget {
             'chat-completion': [],
             'text-completion': [],
         };
-        this.attachedRequestBodies = new WeakSet();
     }
 
     start() {
@@ -200,8 +199,7 @@ export class CaptureController extends EventTarget {
         if (events.GENERATE_AFTER_DATA) {
             context.eventSource.on(events.GENERATE_AFTER_DATA, (data, dryRun) => {
                 if (dryRun) return;
-                const firstPending = this.pending['text-completion']
-                    .find((item) => !item.settled && !item.reserved);
+                const firstPending = this.pending['text-completion'][0];
                 if (!firstPending || firstPending.contextState.mainApi === 'openai') return;
                 this.attachRequestBody(
                     'text-completion',
@@ -224,7 +222,6 @@ export class CaptureController extends EventTarget {
             activatedLore: deepClone(this.pendingLore),
             generationType: this.generationType,
             settled: false,
-            reserved: false,
             timer: null,
         };
         this.pendingLore = [];
@@ -244,20 +241,11 @@ export class CaptureController extends EventTarget {
 
     attachRequestBody(promptType, mutableRequestBody, eventName, stage) {
         const key = pendingKey(promptType);
-        const pending = this.pending[key].find((item) => !item.settled && !item.reserved);
+        const pending = this.pending[key][0];
         if (!pending || pending.settled) return;
-        const canTrackRequestBody = mutableRequestBody !== null
-            && (typeof mutableRequestBody === 'object' || typeof mutableRequestBody === 'function');
-        if (canTrackRequestBody && this.attachedRequestBodies.has(mutableRequestBody)) {
-            return;
-        }
-        pending.reserved = true;
-        if (canTrackRequestBody) {
-            this.attachedRequestBodies.add(mutableRequestBody);
-        }
 
         setTimeout(() => {
-            if (pending.settled || !this.pending[key].includes(pending)) return;
+            if (pending.settled || this.pending[key][0] !== pending) return;
             const requestBody = deepClone(mutableRequestBody);
             const payload = deepClone(extractPromptPayload(
                 requestBody,

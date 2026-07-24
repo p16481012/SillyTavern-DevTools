@@ -387,7 +387,6 @@ export async function finalizeSnapshot({
     const totalTokens = await count(finalText);
     const maxContext = Number(contextState.maxContext) || null;
     const requestMaxOutput = normalizedRequest.settings?.max_tokens
-        ?? normalizedRequest.settings?.max_completion_tokens
         ?? normalizedRequest.settings?.max_new_tokens
         ?? normalizedRequest.settings?.max_length;
     const maxOutput = Number(requestMaxOutput ?? contextState.maxOutput) || null;

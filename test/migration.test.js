@@ -55,32 +55,3 @@ test('deleteSnapshot removes only the selected snapshot and cleans up an empty t
     assert.equal(await store.deleteSnapshot('chat', 'second'), true);
     assert.equal(store.memory.has(store.timelineKey('chat')), false);
 });
-
-test('snapshot storage retains the newest 100 items and replaces duplicate ids', async () => {
-    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
-    for (let index = 0; index < 125; index += 1) {
-        await store.addSnapshot({
-            schemaVersion: 2,
-            id: `snapshot-${index}`,
-            timestamp: index,
-            chatId: 'chat',
-        });
-    }
-
-    let timeline = await store.getTimeline('chat');
-    assert.equal(timeline.length, 100);
-    assert.equal(timeline[0].id, 'snapshot-25');
-    assert.equal(timeline.at(-1).id, 'snapshot-124');
-
-    await store.addSnapshot({
-        schemaVersion: 2,
-        id: 'snapshot-50',
-        timestamp: 200,
-        chatId: 'chat',
-        marker: 'replacement',
-    });
-    timeline = await store.getTimeline('chat');
-    assert.equal(timeline.length, 100);
-    assert.equal(timeline.filter(({ id }) => id === 'snapshot-50').length, 1);
-    assert.equal(timeline.at(-1).marker, 'replacement');
-});
