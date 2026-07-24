@@ -1,17 +1,37 @@
-# Changelog
+# 변경 기록
+
+## 0.2.0 - 2026-07-24
+
+### 추가
+
+- 한국어 중심 문자열 카탈로그와 전체 사용자 UI 번역
+- 읽기 전용 상태 배지
+- 중복·반복 문장 검사
+- 언어·출력 형식·역할 충돌 검사
+- 높은 컨텍스트 사용률 및 과도한 단일 소스 검사
+- 소스 연결 미확인 항목 진단
+- 치명적·경고·정보 심각도별 규칙 검사 화면
+- 규칙 검사 및 기존 한국어 호환성 테스트
+
+### 수정
+
+- 투명도가 포함된 SillyTavern 테마 변수에 의존하지 않도록 변경
+- 현재 글자 명도를 기준으로 밝은/어두운 불투명 패널 팔레트를 적용
+- 스냅샷 TXT 및 Markdown 내보내기의 사용자 문구를 한국어로 변경
+- v0.1.0 스냅샷의 영문 기본 소스 이름을 한국어로 표시
 
 ## 0.1.0 - 2026-07-24
 
-### Added
+### 추가
 
-- initial SillyTavern extension manifest and Magic Wand launcher
-- read-only Chat Completion and Text Completion capture
-- activated Lorebook entry capture
-- local per-chat snapshot timeline
-- Prompt Explorer with source colors, token counts, and conservative attribution
-- arbitrary snapshot diff using SillyTavern's bundled DiffMatchPatch
-- Context Inspector with usage statistics, copy, and exports
-- literal, case-sensitive, and regular expression search
-- draggable, resizable, theme-aware window with remembered state
-- dependency-free syntax checks and model unit tests
-- GitHub Actions syntax and unit-test workflow
+- SillyTavern 확장 manifest와 Magic Wand 실행 메뉴
+- 읽기 전용 Chat Completion 및 Text Completion 캡처
+- 활성화된 로어북 항목 캡처
+- 채팅별 로컬 스냅샷 타임라인
+- 토큰 수와 보수적인 소스 연결 상태를 표시하는 프롬프트 탐색기
+- SillyTavern 내장 DiffMatchPatch 기반 임의 스냅샷 비교
+- 사용량 통계·복사·내보내기를 포함한 컨텍스트 검사
+- 일반 검색·대소문자 검색·정규식 검색
+- 드래그·크기 조절·상태 기억이 가능한 테마 대응 창
+- 의존성 없는 구문 검사와 단위 테스트
+- GitHub Actions 검사 워크플로

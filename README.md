@@ -1,83 +1,100 @@
 # ST DevTools
 
-ST DevTools is a read-only prompt pipeline debugger for SillyTavern. It captures the assembled prompt locally and provides a DevTools-style explorer, timeline, diff, context view, search, and exports without changing normal chat prompts.
+ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버거입니다. 일반 채팅 프롬프트를 변경하지 않으면서 조립된 프롬프트를 로컬에 캡처하고, 탐색기·타임라인·비교·컨텍스트·규칙 검사·검색 기능을 제공합니다.
 
-## Status
+## 현재 버전
 
-Version `0.1.0` is the first installable foundation release.
+`v0.2.0`
 
-Included:
+주요 기능:
 
-- Magic Wand menu entry
-- draggable and resizable native-style window
-- Chat Completion and Text Completion prompt capture
-- activated Lorebook entry capture
-- per-chat local timeline with a 100-snapshot retention limit
-- prompt source explorer with token counts and attribution confidence
-- any-snapshot-to-any-snapshot diff
-- final payload/context viewer
-- literal and regular expression search
-- JSON, TXT, and Markdown export
-- remembered window geometry and last selected tab
+- Magic Wand 메뉴에서 실행
+- 밝은/어두운 테마를 감지하는 완전 불투명 패널
+- 드래그·크기 조절이 가능한 한국어 UI
+- 읽기 전용 상태 표시
+- Chat Completion 및 Text Completion 프롬프트 캡처
+- 활성화된 로어북 항목 캡처
+- 채팅별 로컬 타임라인과 최근 100개 보관
+- 소스별 색상·토큰 수·연결 신뢰도를 표시하는 프롬프트 탐색기
+- 임의의 두 스냅샷 간 프롬프트 비교
+- 최종 payload와 컨텍스트 사용량 확인
+- 일반 텍스트·대소문자·정규식 검색
+- JSON·TXT·Markdown 내보내기
+- 외부 API를 사용하지 않는 로컬 규칙 검사
 
-Planned for `0.2.0`:
+## 규칙 검사
 
-- local Rule Inspector
-- duplicate and repeated-instruction detection
-- explicit language, role, identity, and output-format conflict checks
-- severity and confidence levels
-- prompt growth charts and improved source attribution
+`v0.2.0`의 규칙 검사는 다음 항목을 로컬에서 확인합니다.
 
-## Installation
+- 여러 소스에 중복된 문장
+- 한 소스 안에서 반복되는 문장
+- 한국어·영어·일본어·중국어 응답 지시 충돌
+- JSON·XML·Markdown·일반 텍스트 출력 형식 충돌
+- 여러 역할 선언
+- 단일 소스의 과도한 토큰 점유
+- 높은 컨텍스트 사용률
+- 최종 프롬프트와 연결되지 않은 소스
 
-1. Open SillyTavern.
-2. Open **Extensions → Install Extension**.
-3. Enter:
+정적 검사는 자연어의 의미 전체를 이해하지 못합니다. 결과는 검토 보조 자료이며 프롬프트 품질을 보증하지 않습니다.
+
+## 설치
+
+1. SillyTavern을 실행합니다.
+2. **확장 → 확장 설치**를 엽니다.
+3. 다음 저장소 주소를 입력합니다.
 
    ```text
    https://github.com/p16481012/SillyTavern-DevTools
    ```
 
-4. Reload SillyTavern.
-5. Open the Magic Wand menu and select **ST DevTools**.
+4. SillyTavern을 새로고침합니다.
+5. Magic Wand 메뉴에서 **ST DevTools**를 선택합니다.
 
-SillyTavern `1.13.5` or later is required.
+SillyTavern `1.13.5` 이상이 필요합니다.
 
-## How capture works
+## 읽기 전용 캡처
 
-ST DevTools listens to SillyTavern's public prompt-ready events:
+ST DevTools는 다음 SillyTavern 이벤트를 사용합니다.
 
 - `CHAT_COMPLETION_PROMPT_READY`
 - `GENERATE_AFTER_COMBINE_PROMPTS`
 - `WORLD_INFO_ACTIVATED`
 
-The prompt payload is cloned synchronously and all token counting and persistence work is deferred. The extension never registers a prompt interceptor and never mutates the event payload.
+이벤트 payload는 즉시 복제되며 원본을 수정하지 않습니다. 토큰 계산과 IndexedDB 저장은 이벤트 리스너가 반환된 뒤 실행됩니다. `generate_interceptor`를 등록하지 않으므로 일반 생성 프롬프트를 변경하지 않습니다.
 
-Snapshots are stored locally with SillyTavern's bundled `localforage`/IndexedDB instance. They are separated by chat ID and are not added to character cards or chat files.
+## 로컬 저장과 개인정보
 
-## Attribution labels
+스냅샷은 SillyTavern에 포함된 `localforage`와 IndexedDB를 사용해 채팅 ID별로 저장됩니다. 캐릭터 카드나 채팅 파일에는 추가되지 않습니다.
 
-- `exact`: the captured final prompt contains the source text unchanged
-- `derived`: the source was reconstructed from the captured payload rather than matched as one unchanged block
-- `unmatched`: the source was available in current SillyTavern state but could not be matched after macro, template, regex, or provider processing
+내보낸 파일에는 대화, 캐릭터 설정, 시스템 프롬프트 등 민감한 정보가 포함될 수 있으므로 공유하기 전에 반드시 내용을 검토하세요.
 
-Source attribution is intentionally conservative. An unmatched item is not claimed to have been sent.
+## 소스 연결 상태
 
-## Privacy
+- `정확`: 최종 프롬프트 안에서 원본 문자열을 변경 없이 확인
+- `파생`: 캡처된 payload에서 재구성된 소스
+- `미확인`: 매크로·템플릿·정규식 변환 또는 비활성화 때문에 동일 문자열을 확인하지 못한 소스
 
-Core features do not use external services. Exporting data creates a local download. Prompt snapshots may contain private conversation and character data, so review exported files before sharing them.
+`미확인`은 해당 소스가 실제로 전송됐다는 뜻이 아닙니다.
 
-## Development
+## 개발
 
-Requires Node.js 20 or later.
+Node.js 20 이상이 필요합니다.
 
 ```bash
 npm run check
 npm test
 ```
 
-No production dependencies or build step are required.
+프로덕션 의존성과 빌드 단계는 없습니다.
 
-## License
+## v0.3.0 예정
 
-GNU Affero General Public License v3.0 or later.
+- 캡처된 payload를 복제하는 Prompt Playground
+- 임시 프롬프트 편집과 실시간 토큰 재계산
+- 변경 전후 비교와 전체 변경 폐기
+- 내보내기 전 개인정보 마스킹
+- 타임라인 보관량 및 캡처 유형 설정
+
+## 라이선스
+
+GNU Affero General Public License v3.0 이상.

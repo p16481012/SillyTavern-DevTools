@@ -1,12 +1,22 @@
+import {
+    attributionDisplayLabel,
+    generationTypeDisplayLabel,
+    promptTypeDisplayLabel,
+    sourceDisplayLabel,
+    t,
+} from './i18n.js';
 import { searchSnapshot, serializeSnapshot } from './model.js';
+import { analyzeSnapshot } from './rules.js';
+import { inferPanelThemeFromTextColor } from './theme.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const TABS = [
-    ['explorer', 'Prompt Explorer'],
-    ['timeline', 'Timeline'],
-    ['diff', 'Prompt Diff'],
-    ['context', 'Context'],
-    ['search', 'Search'],
+    ['explorer', 'tab.explorer'],
+    ['timeline', 'tab.timeline'],
+    ['diff', 'tab.diff'],
+    ['context', 'tab.context'],
+    ['rules', 'tab.rules'],
+    ['search', 'tab.search'],
 ];
 
 function element(tag, options = {}) {
@@ -19,7 +29,7 @@ function element(tag, options = {}) {
 }
 
 function formatTimestamp(timestamp) {
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat('ko-KR', {
         dateStyle: 'short',
         timeStyle: 'medium',
     }).format(new Date(timestamp));
@@ -80,6 +90,7 @@ export class DevToolsWindow {
         if (!this.root) {
             this.build();
         }
+        this.syncOpaqueTheme();
         this.root.hidden = false;
         await this.refresh();
         this.window.focus();
@@ -106,13 +117,18 @@ export class DevToolsWindow {
         const header = element('header', { className: 'st-devtools-header' });
         const title = element('div', { className: 'st-devtools-title' });
         const titleIcon = element('i', { className: 'fa-solid fa-code' });
-        title.append(titleIcon, element('strong', { text: 'ST DevTools' }), element('small', { text: `v${this.version}` }));
+        title.append(
+            titleIcon,
+            element('strong', { text: 'ST DevTools' }),
+            element('small', { text: `v${this.version}` }),
+            element('span', { className: 'st-devtools-readonly-badge', text: t('app.readOnly') }),
+        );
 
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
-        const refresh = element('button', { className: 'menu_button', title: 'Refresh timeline', type: 'button' });
+        const refresh = element('button', { className: 'menu_button', title: t('action.refresh'), type: 'button' });
         refresh.appendChild(element('i', { className: 'fa-solid fa-rotate' }));
         refresh.addEventListener('click', () => this.refresh());
-        const close = element('button', { className: 'menu_button', title: 'Close', type: 'button' });
+        const close = element('button', { className: 'menu_button', title: t('action.close'), type: 'button' });
         close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
         close.addEventListener('click', () => this.close());
         headerActions.append(refresh, close);
@@ -120,8 +136,8 @@ export class DevToolsWindow {
 
         const tabList = element('nav', { className: 'st-devtools-tabs' });
         tabList.setAttribute('role', 'tablist');
-        for (const [id, label] of TABS) {
-            const button = element('button', { className: 'st-devtools-tab', text: label, type: 'button' });
+        for (const [id, labelKey] of TABS) {
+            const button = element('button', { className: 'st-devtools-tab', text: t(labelKey), type: 'button' });
             button.dataset.tab = id;
             button.setAttribute('role', 'tab');
             button.addEventListener('click', () => this.selectTab(id));
@@ -132,6 +148,7 @@ export class DevToolsWindow {
         this.window.append(header, tabList, this.content);
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
+        this.syncOpaqueTheme();
 
         this.root.addEventListener('pointerdown', (event) => {
             if (event.target === this.root) this.close();
@@ -142,6 +159,18 @@ export class DevToolsWindow {
         this.enableDragging(header);
         this.observeGeometry();
         this.selectTab(this.activeTab);
+    }
+
+    syncOpaqueTheme() {
+        if (!this.root) return;
+        const probe = element('span');
+        probe.style.cssText = 'position:fixed;pointer-events:none;visibility:hidden;color:var(--SmartThemeBodyColor, #eeeeee)';
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        const darkTheme = inferPanelThemeFromTextColor(color) === 'dark';
+        this.root.classList.toggle('st-devtools-theme-dark', darkTheme);
+        this.root.classList.toggle('st-devtools-theme-light', !darkTheme);
     }
 
     restoreGeometry() {
@@ -223,6 +252,7 @@ export class DevToolsWindow {
 
     render() {
         if (!this.content) return;
+        this.syncOpaqueTheme();
         for (const button of this.window.querySelectorAll('.st-devtools-tab')) {
             const active = button.dataset.tab === this.activeTab;
             button.classList.toggle('active', active);
@@ -241,6 +271,7 @@ export class DevToolsWindow {
             timeline: () => this.renderTimeline(),
             diff: () => this.renderDiff(),
             context: () => this.renderContext(snapshot),
+            rules: () => this.renderRules(snapshot),
             search: () => this.renderSearch(snapshot),
         };
         this.content.appendChild(renderers[this.activeTab]());
@@ -250,19 +281,19 @@ export class DevToolsWindow {
         const empty = element('div', { className: 'st-devtools-empty' });
         empty.append(
             element('i', { className: 'fa-solid fa-wave-square' }),
-            element('h3', { text: 'No prompt snapshots yet' }),
-            element('p', { text: 'Send a normal chat message. ST DevTools will capture the assembled prompt without changing it.' }),
+            element('h3', { text: t('empty.title') }),
+            element('p', { text: t('empty.description') }),
         );
         return empty;
     }
 
-    renderSnapshotPicker(labelText = 'Snapshot') {
+    renderSnapshotPicker(labelText = t('snapshot.label')) {
         const wrapper = element('label', { className: 'st-devtools-picker' });
         wrapper.appendChild(element('span', { text: labelText }));
         const select = element('select');
         for (const snapshot of [...this.timeline].reverse()) {
             const option = element('option', {
-                text: `${formatTimestamp(snapshot.timestamp)} · ${snapshot.api} · ${snapshot.stats.totalTokens} tokens`,
+                text: `${formatTimestamp(snapshot.timestamp)} · ${snapshot.api} · ${t('snapshot.tokens', { count: snapshot.stats.totalTokens })}`,
             });
             option.value = snapshot.id;
             option.selected = snapshot.id === this.selectedId;
@@ -286,13 +317,16 @@ export class DevToolsWindow {
             if (source.type === 'final') details.open = true;
             details.style.setProperty('--source-color', source.color);
             const summary = element('summary');
-            const name = element('span', { className: 'st-devtools-source-name', text: source.label });
+            const name = element('span', { className: 'st-devtools-source-name', text: sourceDisplayLabel(source) });
             const badges = element('span', { className: 'st-devtools-badges' });
             badges.append(
-                element('span', { className: 'st-devtools-badge', text: `${source.tokenCount} tok` }),
+                element('span', {
+                    className: 'st-devtools-badge',
+                    text: t('snapshot.tokens', { count: source.tokenCount }),
+                }),
                 element('span', {
                     className: `st-devtools-badge attribution-${source.attribution}`,
-                    text: source.attribution,
+                    text: attributionDisplayLabel(source.attribution),
                 }),
             );
             summary.append(name, badges);
@@ -307,11 +341,13 @@ export class DevToolsWindow {
     renderTimeline() {
         const page = element('div', { className: 'st-devtools-page' });
         const toolbar = element('div', { className: 'st-devtools-toolbar' });
-        toolbar.appendChild(element('span', { text: `${this.timeline.length} snapshots retained for this chat` }));
-        const clear = element('button', { className: 'menu_button', text: 'Clear timeline', type: 'button' });
+        toolbar.appendChild(element('span', {
+            text: t('snapshot.retained', { count: this.timeline.length }),
+        }));
+        const clear = element('button', { className: 'menu_button', text: t('action.clearTimeline'), type: 'button' });
         clear.disabled = this.timeline.length === 0;
         clear.addEventListener('click', async () => {
-            if (!confirm('Delete all ST DevTools snapshots for this chat? This cannot be undone.')) return;
+            if (!confirm(t('timeline.deleteConfirm'))) return;
             await this.store.clearTimeline(this.currentChatId());
             this.timeline = [];
             this.selectedId = null;
@@ -331,10 +367,10 @@ export class DevToolsWindow {
             button.classList.toggle('active', snapshot.id === this.selectedId);
             const heading = element('strong', { text: formatTimestamp(snapshot.timestamp) });
             const metadata = element('span', {
-                text: `${snapshot.api} · ${snapshot.model ?? 'Unknown model'} · ${snapshot.stats.totalTokens} tokens`,
+                text: `${snapshot.api} · ${snapshot.model ?? t('timeline.unknownModel')} · ${t('snapshot.tokens', { count: snapshot.stats.totalTokens })}`,
             });
             const lore = element('small', {
-                text: `${snapshot.promptType} · ${snapshot.lorebookEntries.length} lore entries · ${snapshot.generationType}`,
+                text: `${promptTypeDisplayLabel(snapshot.promptType)} · ${t('timeline.loreCount', { count: snapshot.lorebookEntries.length })} · ${generationTypeDisplayLabel(snapshot.generationType)}`,
             });
             button.append(heading, metadata, lore);
             button.addEventListener('click', () => {
@@ -350,13 +386,13 @@ export class DevToolsWindow {
     renderDiff() {
         const page = element('div', { className: 'st-devtools-page' });
         if (this.timeline.length < 2) {
-            page.appendChild(element('p', { text: 'At least two snapshots are required for a diff.' }));
+            page.appendChild(element('p', { text: t('diff.minimum') }));
             return page;
         }
 
         const selectors = element('div', { className: 'st-devtools-diff-selectors' });
-        const baseSelect = this.createTimelineSelect(this.timeline.at(-2).id, 'Base');
-        const compareSelect = this.createTimelineSelect(this.selectedSnapshot()?.id ?? this.timeline.at(-1).id, 'Compare');
+        const baseSelect = this.createTimelineSelect(this.timeline.at(-2).id, t('diff.base'));
+        const compareSelect = this.createTimelineSelect(this.selectedSnapshot()?.id ?? this.timeline.at(-1).id, t('diff.compare'));
         selectors.append(baseSelect.wrapper, compareSelect.wrapper);
         const diffOutput = element('pre', { className: 'st-devtools-diff-output' });
         const renderDiff = () => {
@@ -367,7 +403,7 @@ export class DevToolsWindow {
 
             const DiffMatchPatch = globalThis.SillyTavern?.libs?.DiffMatchPatch;
             if (!DiffMatchPatch) {
-                diffOutput.textContent = `${base.finalText}\n\n--- COMPARE ---\n\n${compare.finalText}`;
+                diffOutput.textContent = `${base.finalText}\n\n--- ${t('diff.compare')} ---\n\n${compare.finalText}`;
                 return;
             }
             const dmp = new DiffMatchPatch();
@@ -406,29 +442,32 @@ export class DevToolsWindow {
         page.appendChild(this.renderSnapshotPicker());
         const stats = element('div', { className: 'st-devtools-stats' });
         const statValues = [
-            ['Prompt tokens', snapshot.stats.totalTokens],
-            ['Context limit', snapshot.stats.maxContext ?? 'Unknown'],
-            ['Reserved output', snapshot.stats.maxOutput ?? 'Unknown'],
-            ['Remaining', snapshot.stats.remainingContext ?? 'Unknown'],
-            ['Context usage', snapshot.stats.contextUsage == null ? 'Unknown' : `${(snapshot.stats.contextUsage * 100).toFixed(1)}%`],
+            [t('stat.promptTokens'), snapshot.stats.totalTokens],
+            [t('stat.contextLimit'), snapshot.stats.maxContext ?? t('common.unknown')],
+            [t('stat.reservedOutput'), snapshot.stats.maxOutput ?? t('common.unknown')],
+            [t('stat.remaining'), snapshot.stats.remainingContext ?? t('common.unknown')],
+            [t('stat.contextUsage'), snapshot.stats.contextUsage == null ? t('common.unknown') : `${(snapshot.stats.contextUsage * 100).toFixed(1)}%`],
             [
-                'Largest source',
+                t('stat.largestSource'),
                 [...snapshot.sources]
                     .filter((source) => source.type !== 'final')
-                    .sort((a, b) => b.tokenCount - a.tokenCount)[0]?.label ?? 'Unknown',
+                    .sort((a, b) => b.tokenCount - a.tokenCount)[0],
             ],
         ];
         for (const [label, value] of statValues) {
             const card = element('div', { className: 'st-devtools-stat' });
-            card.append(element('small', { text: label }), element('strong', { text: value }));
+            const displayValue = typeof value === 'object' && value
+                ? sourceDisplayLabel(value)
+                : value ?? t('common.unknown');
+            card.append(element('small', { text: label }), element('strong', { text: displayValue }));
             stats.appendChild(card);
         }
 
         const toolbar = element('div', { className: 'st-devtools-toolbar' });
-        const copy = element('button', { className: 'menu_button', text: 'Copy', type: 'button' });
+        const copy = element('button', { className: 'menu_button', text: t('action.copy'), type: 'button' });
         copy.addEventListener('click', async () => {
             await copyText(snapshot.finalText);
-            globalThis.toastr?.info?.('Prompt copied.', 'ST DevTools');
+            globalThis.toastr?.info?.(t('action.promptCopied'), 'ST DevTools');
         });
         toolbar.append(copy, this.renderExportButton(snapshot, 'json'), this.renderExportButton(snapshot, 'txt'), this.renderExportButton(snapshot, 'markdown'));
 
@@ -444,7 +483,11 @@ export class DevToolsWindow {
 
     renderExportButton(snapshot, format) {
         const label = format === 'markdown' ? 'Markdown' : format.toUpperCase();
-        const button = element('button', { className: 'menu_button', text: `Export ${label}`, type: 'button' });
+        const button = element('button', {
+            className: 'menu_button',
+            text: t('action.export', { format: label }),
+            type: 'button',
+        });
         button.addEventListener('click', () => {
             const extension = format === 'markdown' ? 'md' : format;
             const mime = format === 'json' ? 'application/json' : 'text/plain';
@@ -453,21 +496,86 @@ export class DevToolsWindow {
         return button;
     }
 
+    renderRules(snapshot) {
+        const page = element('div', { className: 'st-devtools-page' });
+        page.appendChild(this.renderSnapshotPicker());
+        const findings = analyzeSnapshot(snapshot);
+        const counts = findings.reduce((result, item) => {
+            result[item.severity] += 1;
+            return result;
+        }, { critical: 0, warning: 0, info: 0 });
+
+        const summary = element('div', { className: 'st-devtools-rule-summary' });
+        summary.append(
+            element('span', {
+                className: 'st-devtools-rule-count severity-critical',
+                text: `${t('rules.severity.critical')} ${counts.critical}`,
+            }),
+            element('span', {
+                className: 'st-devtools-rule-count severity-warning',
+                text: `${t('rules.severity.warning')} ${counts.warning}`,
+            }),
+            element('span', {
+                className: 'st-devtools-rule-count severity-info',
+                text: `${t('rules.severity.info')} ${counts.info}`,
+            }),
+        );
+        page.appendChild(summary);
+
+        if (findings.length === 0) {
+            const empty = element('div', { className: 'st-devtools-rule-empty' });
+            empty.append(
+                element('i', { className: 'fa-solid fa-circle-check' }),
+                element('strong', { text: t('rules.cleanTitle') }),
+                element('p', { text: t('rules.cleanDescription') }),
+            );
+            page.appendChild(empty);
+            return page;
+        }
+
+        const list = element('div', { className: 'st-devtools-rule-list' });
+        for (const item of findings) {
+            const card = element('article', {
+                className: `st-devtools-rule-card severity-${item.severity}`,
+            });
+            const header = element('header');
+            header.append(
+                element('span', {
+                    className: 'st-devtools-rule-severity',
+                    text: t(`rules.severity.${item.severity}`),
+                }),
+                element('strong', { text: item.title }),
+            );
+            card.append(header, element('p', { text: item.message }));
+            if (item.evidence) {
+                const evidence = element('details', { className: 'st-devtools-rule-evidence' });
+                evidence.append(
+                    element('summary', { text: t('rules.evidence') }),
+                    element('pre', { text: item.evidence }),
+                );
+                card.appendChild(evidence);
+            }
+            list.appendChild(card);
+        }
+        page.appendChild(list);
+        return page;
+    }
+
     renderSearch(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         page.appendChild(this.renderSnapshotPicker());
         const controls = element('div', { className: 'st-devtools-search-controls' });
         const input = element('input');
         input.type = 'search';
-        input.placeholder = 'Find text in all prompt sources';
+        input.placeholder = t('search.placeholder');
         const regexLabel = element('label');
         const regex = element('input');
         regex.type = 'checkbox';
-        regexLabel.append(regex, document.createTextNode(' Regex'));
+        regexLabel.append(regex, document.createTextNode(` ${t('search.regex')}`));
         const caseLabel = element('label');
         const caseSensitive = element('input');
         caseSensitive.type = 'checkbox';
-        caseLabel.append(caseSensitive, document.createTextNode(' Match case'));
+        caseLabel.append(caseSensitive, document.createTextNode(` ${t('search.matchCase')}`));
         controls.append(input, regexLabel, caseLabel);
         const status = element('p', { className: 'st-devtools-search-status' });
         const results = element('div', { className: 'st-devtools-search-results' });
@@ -481,7 +589,9 @@ export class DevToolsWindow {
                     regex: regex.checked,
                     caseSensitive: caseSensitive.checked,
                 });
-                status.textContent = `${matches.length}${matches.length === 200 ? '+' : ''} matches`;
+                status.textContent = matches.length === 200
+                    ? t('search.matchesLimited', { count: matches.length })
+                    : t('search.matches', { count: matches.length });
                 for (const match of matches) {
                     const item = element('button', { className: 'st-devtools-search-result', type: 'button' });
                     item.append(
@@ -504,7 +614,7 @@ export class DevToolsWindow {
                     results.appendChild(item);
                 }
             } catch (error) {
-                status.textContent = `Invalid regular expression: ${error.message}`;
+                status.textContent = t('search.invalidRegex', { message: error.message });
             }
         };
         input.addEventListener('input', run);

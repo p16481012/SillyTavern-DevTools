@@ -1,30 +1,45 @@
-# Architecture
+# 아키텍처
 
-## Read-only boundary
+## 읽기 전용 경계
 
-ST DevTools does not declare a `generate_interceptor`. Prompt-ready event payloads are cloned immediately and never mutated. Expensive token calculations and IndexedDB writes run after the event listener returns so normal generation is not deliberately blocked.
+ST DevTools는 `generate_interceptor`를 선언하지 않습니다. Prompt-ready 이벤트 payload를 즉시 복제하고 원본 객체를 수정하지 않습니다. 토큰 계산과 IndexedDB 쓰기는 이벤트 리스너가 반환된 뒤 실행되어 일반 생성을 의도적으로 차단하지 않습니다.
 
-## Capture pipeline
+## 캡처 파이프라인
 
-1. `GENERATION_STARTED` resets generation-local state.
-2. `WORLD_INFO_ACTIVATED` records the activated entry objects.
-3. The Chat or Text Completion prompt-ready event is cloned.
-4. A context state snapshot captures character, persona, note, configured prompt, extension prompt, API, model, and context settings.
-5. Token counts and source attribution are calculated asynchronously.
-6. The normalized snapshot is appended to the current chat's IndexedDB timeline.
-7. An internal `snapshot` event refreshes the UI when it is open.
+1. `GENERATION_STARTED`가 생성 단위 상태를 초기화합니다.
+2. `WORLD_INFO_ACTIVATED`가 활성화된 로어북 항목을 기록합니다.
+3. Chat 또는 Text Completion prompt-ready 이벤트의 payload를 복제합니다.
+4. 캐릭터·페르소나·작가 노트·설정 프롬프트·확장 프롬프트·API·모델·컨텍스트 상태를 수집합니다.
+5. 토큰 수와 소스 연결 상태를 비동기로 계산합니다.
+6. 정규화한 스냅샷을 현재 채팅의 IndexedDB 타임라인에 추가합니다.
+7. 내부 `snapshot` 이벤트로 열려 있는 UI를 갱신합니다.
 
-## Snapshot schema
+## 스냅샷 스키마
 
-Schema version 1 contains:
+스키마 버전 1:
 
-- identity: `id`, timestamp, extension version, chat ID, message count
-- generation: API, model, preset, prompt type, generation type
-- payload: immutable cloned request prompt and flattened text
-- provenance: known sources with match confidence and metadata
-- Lorebook: activated entry objects
-- statistics: tokens, context limit, reserved output, usage, remaining tokens
+- 식별 정보: ID, 시각, 확장 버전, 채팅 ID, 메시지 수
+- 생성 정보: API, 모델, 프리셋, 프롬프트 유형, 생성 유형
+- payload: 변경 불가능하게 복제한 요청 프롬프트와 평탄화 텍스트
+- provenance: 알려진 소스, 연결 신뢰도, 소스 메타데이터
+- 로어북: 활성화된 항목 객체
+- 통계: 토큰, 컨텍스트 한도, 출력 예약량, 사용률, 남은 토큰
 
-## Compatibility boundary
+## 규칙 검사
 
-The captured Chat Completion payload is the prompt-ready message collection before any backend-only post-processing. Text Completion capture occurs after SillyTavern combines the prompt. Provider/server transformations that happen after these events are outside the `0.1.0` capture boundary.
+규칙 검사는 저장된 스냅샷을 입력받는 순수 로컬 함수입니다. 검사 결과는 스냅샷에 저장하지 않고 화면을 열 때 계산합니다. 따라서 규칙이 개선되어도 기존 스냅샷을 다시 캡처할 필요가 없습니다.
+
+검사는 명시적인 패턴과 정확히 정규화된 문장 비교를 사용합니다. 의미를 추론하는 모델 호출은 사용하지 않으며, 오탐 가능성이 있는 역할 선언은 `정보` 수준으로 제한합니다.
+
+## 불투명 테마
+
+SillyTavern 테마의 `--SmartThemeBlurTintColor`에는 알파 값이 포함될 수 있으므로 패널 배경에 직접 사용하지 않습니다. 현재 본문 글자의 계산된 명도를 확인한 후 다음 중 하나의 완전 불투명 팔레트를 선택합니다.
+
+- 밝은 글자 → 어두운 불투명 패널
+- 어두운 글자 → 밝은 불투명 패널
+
+SillyTavern의 강조 색상은 탭과 포커스 표시에서만 사용합니다.
+
+## 호환성 경계
+
+Chat Completion 캡처는 backend 전용 후처리 전의 prompt-ready 메시지 컬렉션입니다. Text Completion은 SillyTavern이 프롬프트를 결합한 뒤 캡처합니다. 해당 이벤트 이후 provider 또는 서버에서 실행되는 변환은 현재 캡처 범위에 포함되지 않습니다.
