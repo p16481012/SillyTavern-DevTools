@@ -1,0 +1,13 @@
+{
+  "display_name": "ST DevTools",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "p16481012",
+  "version": "0.1.0",
+  "homePage": "https://github.com/p16481012/SillyTavern-DevTools",
+  "auto_update": true,
+  "minimum_client_version": "1.13.5"
+}

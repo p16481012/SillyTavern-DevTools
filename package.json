@@ -1,0 +1,15 @@
+{
+  "name": "sillytavern-devtools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only prompt pipeline diagnostics for SillyTavern.",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "AGPL-3.0-or-later"
+}
