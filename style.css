@@ -232,9 +232,27 @@
     box-shadow: 0 0 0 2px var(--SmartThemeQuoteColor, #60a5fa);
 }
 
+.st-devtools-final-segment.rule-focus {
+    position: relative;
+    z-index: 1;
+    outline: none;
+}
+
+.st-devtools-rule-evidence-mark {
+    border-radius: 2px;
+    background: rgb(245 158 11 / 42%);
+    box-shadow: 0 0 0 2px #f59e0b;
+    color: inherit;
+}
+
 .st-devtools-source.mapping-focus {
     border-color: var(--SmartThemeQuoteColor, #60a5fa);
     box-shadow: 0 0 0 2px var(--SmartThemeQuoteColor, #60a5fa);
+}
+
+.st-devtools-source.rule-focus {
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 2px #f59e0b;
 }
 
 .st-devtools-badge {
@@ -632,6 +650,70 @@
     gap: 0.55rem;
 }
 
+.st-devtools-rule-settings {
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-rule-settings > summary {
+    padding: 0.65rem 0.75rem;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.st-devtools-rule-settings > p {
+    margin: 0;
+    padding: 0 0.75rem 0.65rem;
+    opacity: 0.72;
+}
+
+.st-devtools-rule-settings > form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-rule-setting-toggles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 0.55rem 0.8rem;
+}
+
+.st-devtools-rule-thresholds {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    gap: 0.55rem 0.8rem;
+}
+
+.st-devtools-rule-setting-toggles label {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.st-devtools-rule-thresholds label {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 6.5rem;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.st-devtools-rule-thresholds input {
+    min-width: 0;
+    width: 100%;
+}
+
+.st-devtools-rule-setting-actions,
+.st-devtools-rule-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
 .st-devtools-rule-count,
 .st-devtools-rule-severity {
     padding: 0.2rem 0.55rem;
@@ -679,6 +761,10 @@
 
 .st-devtools-rule-card > p {
     margin: 0.65rem 0 0;
+}
+
+.st-devtools-rule-actions {
+    margin-top: 0.7rem;
 }
 
 .st-devtools-rule-severity {
@@ -753,7 +839,8 @@
     }
 
     .st-devtools-diff-selectors,
-    .st-devtools-search-controls {
+    .st-devtools-search-controls,
+    .st-devtools-rule-thresholds {
         grid-template-columns: 1fr;
     }
 

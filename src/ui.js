@@ -13,10 +13,16 @@ import {
     compareSnapshotSources,
     loreEntryLabel,
 } from './pipeline-analysis.js';
-import { analyzeSnapshot } from './rules.js';
+import {
+    DEFAULT_RULE_SETTINGS,
+    RULE_DEFINITIONS,
+    analyzeSnapshot,
+    normalizeRuleSettings,
+} from './rules.js';
 import { inferPanelThemeFromTextColor } from './theme.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
+const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
 const TABS = [
     ['explorer', 'tab.explorer'],
     ['timeline', 'tab.timeline'],
@@ -92,6 +98,8 @@ export class DevToolsWindow {
         this.timeline = [];
         this.selectedId = null;
         this.activeTab = localStorage.getItem(`${STORAGE_PREFIX}last-tab`) || 'explorer';
+        this.ruleSettings = this.loadRuleSettings();
+        this.ruleSettingsOpen = false;
         this.capture.addEventListener('snapshot', (event) => this.onSnapshot(event.detail));
     }
 
@@ -104,6 +112,24 @@ export class DevToolsWindow {
         return this.timeline.find((snapshot) => snapshot.id === this.selectedId)
             ?? this.timeline.at(-1)
             ?? null;
+    }
+
+    loadRuleSettings() {
+        try {
+            const stored = JSON.parse(localStorage.getItem(RULE_SETTINGS_KEY) ?? 'null');
+            return normalizeRuleSettings(stored ?? DEFAULT_RULE_SETTINGS);
+        } catch {
+            return normalizeRuleSettings(DEFAULT_RULE_SETTINGS);
+        }
+    }
+
+    saveRuleSettings(settings) {
+        this.ruleSettings = normalizeRuleSettings(settings);
+        try {
+            localStorage.setItem(RULE_SETTINGS_KEY, JSON.stringify(this.ruleSettings));
+        } catch {
+            // The current browser may not allow persistent local storage.
+        }
     }
 
     async open() {
@@ -337,6 +363,7 @@ export class DevToolsWindow {
             const details = element('details', { className: 'st-devtools-source' });
             if (source.type === 'final') details.open = true;
             details.dataset.sourceId = source.id;
+            details.dataset.sourceType = source.type;
             details.style.setProperty('--source-color', source.color);
             const summary = element('summary');
             const name = element('span', { className: 'st-devtools-source-name', text: sourceDisplayLabel(source) });
@@ -394,20 +421,31 @@ export class DevToolsWindow {
     renderMappedFinalPrompt(text, sources, sourceById) {
         const pre = element('pre', { className: 'st-devtools-final-prompt' });
         for (const segment of buildRangeSegments(text, sources)) {
+            const classNames = ['st-devtools-final-segment'];
             if (segment.sourceIds.length === 0) {
-                pre.appendChild(document.createTextNode(segment.text));
+                const unmapped = element('span', {
+                    className: classNames.join(' '),
+                    text: segment.text,
+                });
+                unmapped.dataset.start = String(segment.start);
+                unmapped.dataset.end = String(segment.end);
+                unmapped.tabIndex = -1;
+                pre.appendChild(unmapped);
                 continue;
             }
+            classNames.push('st-devtools-final-range');
             const labels = segment.sourceIds
                 .map((id) => sourceById.get(id))
                 .filter(Boolean)
                 .map((source) => sourceDisplayLabel(source));
             const mapped = element('span', {
-                className: 'st-devtools-final-range',
+                className: classNames.join(' '),
                 text: segment.text,
                 title: t('explorer.mappedSources', { sources: labels.join(', ') }),
             });
             mapped.dataset.sourceIds = JSON.stringify(segment.sourceIds);
+            mapped.dataset.start = String(segment.start);
+            mapped.dataset.end = String(segment.end);
             mapped.tabIndex = 0;
             mapped.setAttribute('role', 'button');
             const focus = () => this.highlightSourceMapping(segment.sourceIds);
@@ -473,9 +511,133 @@ export class DevToolsWindow {
         card.querySelector('summary')?.focus({ preventScroll: true });
     }
 
+    clearRuleFocus() {
+        for (const mark of this.window.querySelectorAll('.st-devtools-rule-evidence-mark')) {
+            const parent = mark.parentNode;
+            mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+            parent?.normalize();
+        }
+        for (const node of this.window.querySelectorAll('.rule-focus')) {
+            node.classList.remove('rule-focus');
+        }
+    }
+
+    scheduleExplorerFocus(callback) {
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(callback);
+            return;
+        }
+        setTimeout(callback, 0);
+    }
+
+    openExplorerForFinding(snapshot, finding, target) {
+        this.selectedId = snapshot.id;
+        this.activeTab = 'explorer';
+        localStorage.setItem(`${STORAGE_PREFIX}last-tab`, this.activeTab);
+        this.render();
+        this.scheduleExplorerFocus(() => {
+            if (target === 'sources') {
+                this.focusRuleSources(finding.sourceIds, finding.finalRanges);
+            } else {
+                this.focusRuleEvidence(finding.finalRanges, finding.sourceIds);
+            }
+        });
+    }
+
+    focusRuleSources(sourceIds, finalRanges = []) {
+        this.clearRuleFocus();
+        const selected = new Set(sourceIds);
+        const cards = [...this.window.querySelectorAll('.st-devtools-source')]
+            .filter((node) => selected.has(node.dataset.sourceId));
+        for (const card of cards) {
+            card.open = true;
+            card.classList.add('rule-focus');
+        }
+        this.highlightSourceMapping(sourceIds);
+        this.highlightFinalEvidence(finalRanges);
+        const first = cards[0];
+        if (!first) return;
+        first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        first.querySelector('summary')?.focus({ preventScroll: true });
+    }
+
+    highlightFinalEvidence(ranges) {
+        const normalized = (ranges ?? [])
+            .map(({ start, end }) => ({ start: Number(start), end: Number(end) }))
+            .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start);
+        const matches = [];
+        for (const segment of this.window.querySelectorAll('.st-devtools-final-segment')) {
+            const segmentStart = Number(segment.dataset.start);
+            const segmentEnd = Number(segment.dataset.end);
+            const intersections = normalized
+                .map((range) => ({
+                    start: Math.max(segmentStart, range.start),
+                    end: Math.min(segmentEnd, range.end),
+                }))
+                .filter(({ start, end }) => end > start)
+                .sort((left, right) => left.start - right.start);
+            if (intersections.length === 0) continue;
+
+            const merged = [];
+            for (const intersection of intersections) {
+                const previous = merged.at(-1);
+                if (previous && intersection.start <= previous.end) {
+                    previous.end = Math.max(previous.end, intersection.end);
+                } else {
+                    merged.push({ ...intersection });
+                }
+            }
+            const text = segment.textContent ?? '';
+            const fragment = document.createDocumentFragment();
+            let cursor = segmentStart;
+            for (const intersection of merged) {
+                if (intersection.start > cursor) {
+                    fragment.appendChild(document.createTextNode(
+                        text.slice(cursor - segmentStart, intersection.start - segmentStart),
+                    ));
+                }
+                const mark = element('mark', {
+                    className: 'st-devtools-rule-evidence-mark',
+                    text: text.slice(
+                        intersection.start - segmentStart,
+                        intersection.end - segmentStart,
+                    ),
+                });
+                fragment.appendChild(mark);
+                cursor = intersection.end;
+            }
+            if (cursor < segmentEnd) {
+                fragment.appendChild(document.createTextNode(text.slice(cursor - segmentStart)));
+            }
+            segment.replaceChildren(fragment);
+            segment.classList.add('rule-focus');
+            matches.push(segment);
+        }
+        return matches;
+    }
+
+    focusRuleEvidence(finalRanges, sourceIds = []) {
+        this.clearRuleFocus();
+        this.highlightSourceMapping(sourceIds);
+        const matches = this.highlightFinalEvidence(finalRanges);
+        const first = matches[0];
+        if (first) {
+            first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            first.focus({ preventScroll: true });
+            return;
+        }
+        const finalCard = [...this.window.querySelectorAll('.st-devtools-source')]
+            .find((node) => node.dataset.sourceType === 'final');
+        if (!finalCard) return;
+        finalCard.open = true;
+        finalCard.classList.add('rule-focus');
+        finalCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        finalCard.querySelector('summary')?.focus({ preventScroll: true });
+    }
+
     renderTimeline() {
         const page = element('div', { className: 'st-devtools-page' });
-        const analyses = buildTimelineAnalysis(this.timeline);
+        const analyses = buildTimelineAnalysis(this.timeline, { includeSourceChanges: false });
         const toolbar = element('div', { className: 'st-devtools-toolbar' });
         toolbar.appendChild(element('span', {
             text: t('snapshot.retained', { count: this.timeline.length }),
@@ -901,10 +1063,131 @@ export class DevToolsWindow {
         return button;
     }
 
+    renderRuleSettings() {
+        const details = element('details', { className: 'st-devtools-rule-settings' });
+        details.open = this.ruleSettingsOpen;
+        details.addEventListener('toggle', () => {
+            this.ruleSettingsOpen = details.open;
+        });
+        details.append(
+            element('summary', { text: t('rules.settingsTitle') }),
+            element('p', { text: t('rules.settingsDescription') }),
+        );
+
+        const form = element('form');
+        const toggles = element('div', { className: 'st-devtools-rule-setting-toggles' });
+        for (const definition of RULE_DEFINITIONS) {
+            const label = element('label');
+            const input = element('input');
+            input.type = 'checkbox';
+            input.name = `enabled-${definition.id}`;
+            input.checked = this.ruleSettings.enabled[definition.id];
+            label.append(input, document.createTextNode(` ${t(definition.labelKey)}`));
+            toggles.appendChild(label);
+        }
+
+        const thresholds = element('div', { className: 'st-devtools-rule-thresholds' });
+        const numberField = (name, labelKey, value, minimum, maximum, step = 1) => {
+            const label = element('label');
+            label.appendChild(element('span', { text: t(labelKey) }));
+            const input = element('input');
+            input.type = 'number';
+            input.name = name;
+            input.value = String(value);
+            input.min = String(minimum);
+            input.max = String(maximum);
+            input.step = String(step);
+            label.appendChild(input);
+            return label;
+        };
+        thresholds.append(
+            numberField(
+                'contextWarning',
+                'rules.setting.contextWarning',
+                Math.round(this.ruleSettings.contextWarning * 100),
+                10,
+                98,
+            ),
+            numberField(
+                'contextCritical',
+                'rules.setting.contextCritical',
+                Math.round(this.ruleSettings.contextCritical * 100),
+                11,
+                100,
+            ),
+            numberField(
+                'largeSourceTokens',
+                'rules.setting.largeSourceTokens',
+                this.ruleSettings.largeSourceTokens,
+                1,
+                1_000_000,
+            ),
+            numberField(
+                'largeSourceShare',
+                'rules.setting.largeSourceShare',
+                Math.round(this.ruleSettings.largeSourceShare * 100),
+                1,
+                100,
+            ),
+            numberField(
+                'minimumSentenceLength',
+                'rules.setting.minimumSentenceLength',
+                this.ruleSettings.minimumSentenceLength,
+                5,
+                500,
+            ),
+        );
+
+        const actions = element('div', { className: 'st-devtools-rule-setting-actions' });
+        const apply = element('button', {
+            className: 'menu_button',
+            text: t('action.applySettings'),
+            type: 'submit',
+        });
+        const reset = element('button', {
+            className: 'menu_button',
+            text: t('action.resetSettings'),
+            type: 'button',
+        });
+        reset.addEventListener('click', () => {
+            this.saveRuleSettings(DEFAULT_RULE_SETTINGS);
+            this.ruleSettingsOpen = true;
+            this.render();
+            globalThis.toastr?.info?.(t('rules.settingsReset'), 'ST DevTools');
+        });
+        actions.append(apply, reset);
+        form.append(toggles, thresholds, actions);
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const enabled = Object.fromEntries(RULE_DEFINITIONS.map(({ id }) => [
+                id,
+                form.querySelector(`[name="enabled-${id}"]`)?.checked ?? true,
+            ]));
+            const value = (name) => form.querySelector(`[name="${name}"]`)?.value;
+            const numberValue = (name, divisor = 1) => {
+                const raw = value(name);
+                return raw === '' || raw == null ? undefined : Number(raw) / divisor;
+            };
+            this.saveRuleSettings({
+                enabled,
+                contextWarning: numberValue('contextWarning', 100),
+                contextCritical: numberValue('contextCritical', 100),
+                largeSourceTokens: numberValue('largeSourceTokens'),
+                largeSourceShare: numberValue('largeSourceShare', 100),
+                minimumSentenceLength: numberValue('minimumSentenceLength'),
+            });
+            this.ruleSettingsOpen = true;
+            this.render();
+            globalThis.toastr?.info?.(t('rules.settingsSaved'), 'ST DevTools');
+        });
+        details.appendChild(form);
+        return details;
+    }
+
     renderRules(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
-        page.appendChild(this.renderSnapshotPicker());
-        const findings = analyzeSnapshot(snapshot);
+        page.append(this.renderSnapshotPicker(), this.renderRuleSettings());
+        const findings = analyzeSnapshot(snapshot, this.ruleSettings);
         const counts = findings.reduce((result, item) => {
             result[item.severity] += 1;
             return result;
@@ -929,10 +1212,19 @@ export class DevToolsWindow {
 
         if (findings.length === 0) {
             const empty = element('div', { className: 'st-devtools-rule-empty' });
+            const anyEnabled = Object.values(this.ruleSettings.enabled).some(Boolean);
             empty.append(
-                element('i', { className: 'fa-solid fa-circle-check' }),
-                element('strong', { text: t('rules.cleanTitle') }),
-                element('p', { text: t('rules.cleanDescription') }),
+                element('i', {
+                    className: anyEnabled
+                        ? 'fa-solid fa-circle-check'
+                        : 'fa-solid fa-circle-pause',
+                }),
+                element('strong', {
+                    text: t(anyEnabled ? 'rules.cleanTitle' : 'rules.disabledTitle'),
+                }),
+                element('p', {
+                    text: t(anyEnabled ? 'rules.cleanDescription' : 'rules.disabledDescription'),
+                }),
             );
             page.appendChild(empty);
             return page;
@@ -943,6 +1235,8 @@ export class DevToolsWindow {
             const card = element('article', {
                 className: `st-devtools-rule-card severity-${item.severity}`,
             });
+            card.dataset.findingId = item.id;
+            card.dataset.ruleId = item.ruleId;
             const header = element('header');
             header.append(
                 element('span', {
@@ -960,6 +1254,28 @@ export class DevToolsWindow {
                 );
                 card.appendChild(evidence);
             }
+            const actions = element('div', { className: 'st-devtools-rule-actions' });
+            if (item.sourceIds.length > 0) {
+                const sources = element('button', {
+                    className: 'menu_button',
+                    text: t('action.viewRelatedSources', { count: item.sourceIds.length }),
+                    type: 'button',
+                });
+                sources.addEventListener('click', () => {
+                    this.openExplorerForFinding(snapshot, item, 'sources');
+                });
+                actions.appendChild(sources);
+            }
+            const finalEvidence = element('button', {
+                className: 'menu_button',
+                text: t('action.viewFinalEvidence'),
+                type: 'button',
+            });
+            finalEvidence.addEventListener('click', () => {
+                this.openExplorerForFinding(snapshot, item, 'final');
+            });
+            actions.appendChild(finalEvidence);
+            card.appendChild(actions);
             list.appendChild(card);
         }
         page.appendChild(list);

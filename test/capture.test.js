@@ -47,6 +47,16 @@ function createContext(eventSource) {
     };
 }
 
+async function waitFor(predicate, timeoutMs = 500) {
+    const started = Date.now();
+    while (!predicate()) {
+        if (Date.now() - started >= timeoutMs) {
+            throw new Error(`Condition was not met within ${timeoutMs}ms.`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+}
+
 test('request-ready capture pairs settings without mutating event payloads', async () => {
     const eventSource = new FakeEventSource();
     const saved = [];
@@ -71,6 +81,7 @@ test('request-ready capture pairs settings without mutating event payloads', asy
         messages: [{ role: 'user', content: 'Before extension listener' }],
         model: 'request-model',
         temperature: 0.7,
+        max_completion_tokens: 321,
         api_key: 'must-not-be-stored',
     };
     eventSource.on('chat_completion_settings_ready', (data) => {
@@ -78,7 +89,7 @@ test('request-ready capture pairs settings without mutating event payloads', asy
     });
     const requestReturns = eventSource.emitSynchronously('chat_completion_settings_ready', requestBody);
     assert.deepEqual(requestReturns, [undefined, undefined]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => saved.length === 1);
 
     assert.equal(saved.length, 1);
     assert.equal(saved[0].payload[0].content, 'Request-ready prompt');
@@ -88,6 +99,7 @@ test('request-ready capture pairs settings without mutating event payloads', asy
     assert.equal(saved[0].request.settings.temperature, 0.7);
     assert.equal(saved[0].request.body.api_key, '[민감 정보 제거됨]');
     assert.equal(saved[0].model, 'request-model');
+    assert.equal(saved[0].stats.maxOutput, 321);
 });
 
 test('prompt-ready fallback preserves captures on older SillyTavern versions', async () => {
@@ -107,7 +119,7 @@ test('prompt-ready fallback preserves captures on older SillyTavern versions', a
         chat: [{ role: 'user', content: 'Legacy capture' }],
         dryRun: false,
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => saved.length === 1);
 
     assert.equal(saved.length, 1);
     assert.equal(saved[0].capture.stage, 'prompt-ready');
@@ -140,7 +152,7 @@ test('text completion prefers settings-ready data and ignores the later duplicat
     };
     eventSource.emitSynchronously('text_completion_settings_ready', requestBody);
     eventSource.emitSynchronously('generate_after_data', requestBody, false);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => saved.length === 1);
 
     assert.equal(saved.length, 1);
     assert.equal(saved[0].payload, 'Request-ready text prompt');
@@ -169,10 +181,112 @@ test('generic text APIs capture generation-ready request data', async () => {
         prompt: 'Kobold request prompt',
         max_length: 120,
     }, false);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => saved.length === 1);
 
     assert.equal(saved.length, 1);
     assert.equal(saved[0].capture.stage, 'generation-data-ready');
     assert.equal(saved[0].payload, 'Kobold request prompt');
     assert.equal(saved[0].stats.maxOutput, 120);
+});
+
+test('overlapping settings-ready events reserve different pending captures', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 100,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Prompt A' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Prompt B' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Request A' }],
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Request B' }],
+    });
+    await waitFor(() => saved.length === 2);
+
+    assert.deepEqual(saved.map(({ payload }) => payload[0].content), ['Request A', 'Request B']);
+    assert.equal(saved.every(({ capture }) => capture.stage === 'backend-request-ready'), true);
+});
+
+test('duplicate text request events do not consume the next pending capture', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    context.mainApi = 'textgenerationwebui';
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 100,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generate_after_combine_prompts', {
+        prompt: 'Prompt A',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('generate_after_combine_prompts', {
+        prompt: 'Prompt B',
+        dryRun: false,
+    });
+
+    const firstRequestBody = { prompt: 'Request A', max_new_tokens: 100 };
+    eventSource.emitSynchronously('text_completion_settings_ready', firstRequestBody);
+    eventSource.emitSynchronously('generate_after_data', firstRequestBody, false);
+    eventSource.emitSynchronously('text_completion_settings_ready', {
+        prompt: 'Request B',
+        max_new_tokens: 200,
+    });
+    await waitFor(() => saved.length === 2);
+
+    assert.deepEqual(saved.map(({ payload }) => payload), ['Request A', 'Request B']);
+    assert.deepEqual(saved.map(({ stats }) => stats.maxOutput), [100, 200]);
+});
+
+test('a late duplicate text request does not capture the next generation', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    context.mainApi = 'textgenerationwebui';
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 100,
+    });
+    controller.start();
+
+    const firstRequestBody = { prompt: 'Request A', max_new_tokens: 100 };
+    eventSource.emitSynchronously('generate_after_combine_prompts', {
+        prompt: 'Prompt A',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('text_completion_settings_ready', firstRequestBody);
+    await waitFor(() => saved.length === 1);
+
+    eventSource.emitSynchronously('generate_after_combine_prompts', {
+        prompt: 'Prompt B',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('generate_after_data', firstRequestBody, false);
+    eventSource.emitSynchronously('text_completion_settings_ready', {
+        prompt: 'Request B',
+        max_new_tokens: 200,
+    });
+    await waitFor(() => saved.length === 2);
+
+    assert.deepEqual(saved.map(({ payload }) => payload), ['Request A', 'Request B']);
 });
