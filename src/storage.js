@@ -72,6 +72,23 @@ export class SnapshotStore {
         return timeline.at(-1) ?? null;
     }
 
+    async deleteSnapshot(chatId, snapshotId) {
+        const key = this.timelineKey(chatId);
+        const timeline = await this.getTimeline(chatId);
+        const next = timeline.filter((snapshot) => snapshot.id !== snapshotId);
+        if (next.length === timeline.length) {
+            return false;
+        }
+        if (next.length > 0) {
+            await this.write(key, next);
+        } else if (this.backend) {
+            await this.backend.removeItem(key);
+        } else {
+            this.memory.delete(key);
+        }
+        return true;
+    }
+
     async clearTimeline(chatId) {
         const key = this.timelineKey(chatId);
         if (this.backend) {

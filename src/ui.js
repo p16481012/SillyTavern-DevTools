@@ -6,6 +6,13 @@ import {
     t,
 } from './i18n.js';
 import { searchSnapshot, serializeSnapshot } from './model.js';
+import {
+    buildRangeSegments,
+    buildTimelineAnalysis,
+    compareLoreEntries,
+    compareSnapshotSources,
+    loreEntryLabel,
+} from './pipeline-analysis.js';
 import { analyzeSnapshot } from './rules.js';
 import { inferPanelThemeFromTextColor } from './theme.js';
 
@@ -33,6 +40,19 @@ function formatTimestamp(timestamp) {
         dateStyle: 'short',
         timeStyle: 'medium',
     }).format(new Date(timestamp));
+}
+
+function formatDelta(value) {
+    const number = Number(value) || 0;
+    return `${number > 0 ? '+' : ''}${number}`;
+}
+
+function svgElement(tag, attributes = {}) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [name, value] of Object.entries(attributes)) {
+        node.setAttribute(name, String(value));
+    }
+    return node;
 }
 
 function downloadText(filename, content, mimeType) {
@@ -311,10 +331,12 @@ export class DevToolsWindow {
         const page = element('div', { className: 'st-devtools-page' });
         page.appendChild(this.renderSnapshotPicker());
         const sourceList = element('div', { className: 'st-devtools-source-list' });
+        const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
 
         for (const source of snapshot.sources) {
             const details = element('details', { className: 'st-devtools-source' });
             if (source.type === 'final') details.open = true;
+            details.dataset.sourceId = source.id;
             details.style.setProperty('--source-color', source.color);
             const summary = element('summary');
             const name = element('span', { className: 'st-devtools-source-name', text: sourceDisplayLabel(source) });
@@ -336,16 +358,124 @@ export class DevToolsWindow {
                 }));
             }
             summary.append(name, badges);
-            const pre = element('pre', { text: source.content });
+            if (source.type !== 'final' && source.ranges?.length) {
+                const jump = element('button', {
+                    className: 'st-devtools-range-jump',
+                    text: '↗',
+                    title: t('action.jumpToFinal'),
+                    type: 'button',
+                });
+                jump.setAttribute('aria-label', `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`);
+                jump.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.jumpToFinalRange(source.id);
+                });
+                summary.appendChild(jump);
+            }
+            const pre = source.type === 'final'
+                ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
+                : element('pre', { text: source.content });
             details.append(summary, pre);
+            if (source.type !== 'final' && source.ranges?.length) {
+                details.addEventListener('pointerenter', () => this.highlightSourceMapping([source.id]));
+                details.addEventListener('pointerleave', () => this.clearSourceMapping());
+                details.addEventListener('focusin', () => this.highlightSourceMapping([source.id]));
+                details.addEventListener('focusout', (event) => {
+                    if (!details.contains(event.relatedTarget)) this.clearSourceMapping();
+                });
+            }
             sourceList.appendChild(details);
         }
         page.appendChild(sourceList);
         return page;
     }
 
+    renderMappedFinalPrompt(text, sources, sourceById) {
+        const pre = element('pre', { className: 'st-devtools-final-prompt' });
+        for (const segment of buildRangeSegments(text, sources)) {
+            if (segment.sourceIds.length === 0) {
+                pre.appendChild(document.createTextNode(segment.text));
+                continue;
+            }
+            const labels = segment.sourceIds
+                .map((id) => sourceById.get(id))
+                .filter(Boolean)
+                .map((source) => sourceDisplayLabel(source));
+            const mapped = element('span', {
+                className: 'st-devtools-final-range',
+                text: segment.text,
+                title: t('explorer.mappedSources', { sources: labels.join(', ') }),
+            });
+            mapped.dataset.sourceIds = JSON.stringify(segment.sourceIds);
+            mapped.tabIndex = 0;
+            mapped.setAttribute('role', 'button');
+            const focus = () => this.highlightSourceMapping(segment.sourceIds);
+            mapped.addEventListener('pointerenter', focus);
+            mapped.addEventListener('pointerleave', () => this.clearSourceMapping());
+            mapped.addEventListener('focus', focus);
+            mapped.addEventListener('blur', () => this.clearSourceMapping());
+            mapped.addEventListener('click', () => this.jumpToSourceCard(segment.sourceIds[0]));
+            mapped.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    this.jumpToSourceCard(segment.sourceIds[0]);
+                }
+            });
+            pre.appendChild(mapped);
+        }
+        return pre;
+    }
+
+    rangeSourceIds(node) {
+        try {
+            return JSON.parse(node.dataset.sourceIds ?? '[]');
+        } catch {
+            return [];
+        }
+    }
+
+    highlightSourceMapping(sourceIds) {
+        const selected = new Set(sourceIds);
+        for (const card of this.window.querySelectorAll('.st-devtools-source')) {
+            card.classList.toggle('mapping-focus', selected.has(card.dataset.sourceId));
+        }
+        for (const range of this.window.querySelectorAll('.st-devtools-final-range')) {
+            range.classList.toggle(
+                'mapping-focus',
+                this.rangeSourceIds(range).some((id) => selected.has(id)),
+            );
+        }
+    }
+
+    clearSourceMapping() {
+        for (const node of this.window.querySelectorAll('.mapping-focus')) {
+            node.classList.remove('mapping-focus');
+        }
+    }
+
+    jumpToFinalRange(sourceId) {
+        const range = [...this.window.querySelectorAll('.st-devtools-final-range')]
+            .find((node) => this.rangeSourceIds(node).includes(sourceId));
+        if (!range) return;
+        this.highlightSourceMapping([sourceId]);
+        range.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        range.focus({ preventScroll: true });
+    }
+
+    jumpToSourceCard(sourceId) {
+        const card = [...this.window.querySelectorAll('.st-devtools-source')]
+            .find((node) => node.dataset.sourceId === sourceId);
+        if (!card) return;
+        card.open = true;
+        this.highlightSourceMapping([sourceId]);
+        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        card.querySelector('summary')?.focus({ preventScroll: true });
+    }
+
     renderTimeline() {
         const page = element('div', { className: 'st-devtools-page' });
+        const analyses = buildTimelineAnalysis(this.timeline);
         const toolbar = element('div', { className: 'st-devtools-toolbar' });
         toolbar.appendChild(element('span', {
             text: t('snapshot.retained', { count: this.timeline.length }),
@@ -367,26 +497,165 @@ export class DevToolsWindow {
             return page;
         }
 
+        page.appendChild(this.renderGrowthChart(analyses));
         const list = element('div', { className: 'st-devtools-timeline' });
-        for (const snapshot of [...this.timeline].reverse()) {
+        for (const analysis of [...analyses].reverse()) {
+            const { snapshot, previous, tokenDelta, lore } = analysis;
+            const entry = element('article', { className: 'st-devtools-timeline-entry' });
+            entry.classList.toggle('active', snapshot.id === this.selectedId);
             const button = element('button', { className: 'st-devtools-timeline-item', type: 'button' });
-            button.classList.toggle('active', snapshot.id === this.selectedId);
             const heading = element('strong', { text: formatTimestamp(snapshot.timestamp) });
             const metadata = element('span', {
                 text: `${snapshot.api} · ${snapshot.model ?? t('timeline.unknownModel')} · ${t('snapshot.tokens', { count: snapshot.stats.totalTokens })}`,
             });
-            const lore = element('small', {
-                text: `${promptTypeDisplayLabel(snapshot.promptType)} · ${t('timeline.loreCount', { count: snapshot.lorebookEntries.length })} · ${generationTypeDisplayLabel(snapshot.generationType)}`,
+            const loreMetadata = element('small', {
+                text: `${promptTypeDisplayLabel(snapshot.promptType)} · ${t('timeline.loreCount', { count: snapshot.lorebookEntries?.length ?? 0 })} · ${generationTypeDisplayLabel(snapshot.generationType)}`,
             });
-            button.append(heading, metadata, lore);
+            const changes = element('span', { className: 'st-devtools-timeline-changes' });
+            changes.appendChild(element('span', {
+                className: `st-devtools-change-pill${tokenDelta > 0 ? ' increased' : tokenDelta < 0 ? ' decreased' : ''}`,
+                text: previous
+                    ? t('timeline.tokenDelta', { delta: formatDelta(tokenDelta) })
+                    : t('timeline.firstSnapshot'),
+            }));
+            if (previous) {
+                if (lore.activated.length) {
+                    changes.appendChild(element('span', {
+                        className: 'st-devtools-change-pill activated',
+                        text: t('timeline.loreActivated', { count: lore.activated.length }),
+                    }));
+                }
+                if (lore.removed.length) {
+                    changes.appendChild(element('span', {
+                        className: 'st-devtools-change-pill removed',
+                        text: t('timeline.loreRemoved', { count: lore.removed.length }),
+                    }));
+                }
+                if (!lore.activated.length && !lore.removed.length) {
+                    changes.appendChild(element('span', {
+                        className: 'st-devtools-change-pill',
+                        text: t('timeline.loreNoChanges'),
+                    }));
+                }
+            }
+            button.append(heading, metadata, loreMetadata, changes);
             button.addEventListener('click', () => {
                 this.selectedId = snapshot.id;
                 this.selectTab('explorer');
             });
-            list.appendChild(button);
+
+            const remove = element('button', {
+                className: 'menu_button st-devtools-timeline-delete',
+                title: t('action.deleteSnapshot'),
+                type: 'button',
+            });
+            remove.setAttribute('aria-label', `${formatTimestamp(snapshot.timestamp)}: ${t('action.deleteSnapshot')}`);
+            remove.appendChild(element('i', { className: 'fa-solid fa-trash' }));
+            remove.addEventListener('click', async () => {
+                if (!confirm(t('timeline.deleteSnapshotConfirm'))) return;
+                const deleted = await this.store.deleteSnapshot(this.currentChatId(), snapshot.id);
+                if (!deleted) return;
+                this.timeline = this.timeline.filter((item) => item.id !== snapshot.id);
+                if (this.selectedId === snapshot.id) {
+                    this.selectedId = this.timeline.at(-1)?.id ?? null;
+                }
+                this.render();
+            });
+            entry.append(button, remove);
+
+            if (
+                snapshot.id === this.selectedId
+                && (lore.activated.length || lore.removed.length)
+            ) {
+                entry.appendChild(this.renderLoreChangeList(lore));
+            }
+            list.appendChild(entry);
         }
         page.appendChild(list);
         return page;
+    }
+
+    renderGrowthChart(analyses) {
+        const figure = element('figure', { className: 'st-devtools-growth' });
+        const values = analyses.map(({ snapshot }) => Number(snapshot.stats?.totalTokens) || 0);
+        const maximum = Math.max(1, ...values);
+        const width = 600;
+        const height = 150;
+        const paddingX = 26;
+        const paddingTop = 18;
+        const paddingBottom = 28;
+        const chartHeight = height - paddingTop - paddingBottom;
+        const pointFor = (value, index) => ({
+            x: values.length === 1
+                ? width / 2
+                : paddingX + (index * (width - (paddingX * 2))) / (values.length - 1),
+            y: paddingTop + chartHeight - ((value / maximum) * chartHeight),
+        });
+        const points = values.map(pointFor);
+
+        const caption = element('figcaption');
+        const captionText = element('span');
+        captionText.append(
+            element('strong', { text: t('timeline.growthTitle') }),
+            element('small', {
+                text: t('timeline.growthDescription', { count: analyses.length }),
+            }),
+        );
+        caption.append(
+            captionText,
+            element('span', {
+                className: 'st-devtools-growth-maximum',
+                text: t('timeline.maximumTokens', { count: maximum }),
+            }),
+        );
+
+        const svg = svgElement('svg', {
+            viewBox: `0 0 ${width} ${height}`,
+            role: 'img',
+            'aria-label': t('timeline.growthDescription', { count: analyses.length }),
+        });
+        svg.appendChild(svgElement('line', {
+            class: 'st-devtools-growth-axis',
+            x1: paddingX,
+            y1: height - paddingBottom,
+            x2: width - paddingX,
+            y2: height - paddingBottom,
+        }));
+        svg.appendChild(svgElement('polyline', {
+            class: 'st-devtools-growth-line',
+            points: points.map(({ x, y }) => `${x},${y}`).join(' '),
+        }));
+        points.forEach(({ x, y }, index) => {
+            const point = svgElement('circle', {
+                class: 'st-devtools-growth-point',
+                cx: x,
+                cy: y,
+                r: 4,
+            });
+            point.appendChild(svgElement('title'));
+            point.firstChild.textContent = `${formatTimestamp(analyses[index].snapshot.timestamp)} · ${t('snapshot.tokens', { count: values[index] })}`;
+            svg.appendChild(point);
+        });
+        figure.append(caption, svg);
+        return figure;
+    }
+
+    renderLoreChangeList(lore) {
+        const wrapper = element('div', { className: 'st-devtools-lore-change-list' });
+        const appendGroup = (labelKey, entries, className) => {
+            if (!entries.length) return;
+            const group = element('div', { className });
+            group.appendChild(element('strong', { text: t(labelKey) }));
+            const list = element('ul');
+            for (const entry of entries) {
+                list.appendChild(element('li', { text: loreEntryLabel(entry) }));
+            }
+            group.appendChild(list);
+            wrapper.appendChild(group);
+        };
+        appendGroup('timeline.loreActivatedList', lore.activated, 'activated');
+        appendGroup('timeline.loreRemovedList', lore.removed, 'removed');
+        return wrapper;
     }
 
     renderDiff() {
@@ -401,32 +670,104 @@ export class DevToolsWindow {
         const compareSelect = this.createTimelineSelect(this.selectedSnapshot()?.id ?? this.timeline.at(-1).id, t('diff.compare'));
         selectors.append(baseSelect.wrapper, compareSelect.wrapper);
         const diffOutput = element('pre', { className: 'st-devtools-diff-output' });
+        const sourceSection = element('section', { className: 'st-devtools-diff-section' });
+        const loreSection = element('section', { className: 'st-devtools-diff-section' });
         const renderDiff = () => {
             const base = this.timeline.find((snapshot) => snapshot.id === baseSelect.select.value);
             const compare = this.timeline.find((snapshot) => snapshot.id === compareSelect.select.value);
             diffOutput.replaceChildren();
+            sourceSection.replaceChildren();
+            loreSection.replaceChildren();
             if (!base || !compare) return;
 
-            const DiffMatchPatch = globalThis.SillyTavern?.libs?.DiffMatchPatch;
-            if (!DiffMatchPatch) {
-                diffOutput.textContent = `${base.finalText}\n\n--- ${t('diff.compare')} ---\n\n${compare.finalText}`;
-                return;
-            }
-            const dmp = new DiffMatchPatch();
-            dmp.Diff_Timeout = 1;
-            const changes = dmp.diff_main(base.finalText, compare.finalText);
-            dmp.diff_cleanupSemantic(changes);
-            for (const [operation, text] of changes) {
-                const span = element('span', { text });
-                span.className = operation === 1 ? 'diff-added' : operation === -1 ? 'diff-removed' : 'diff-equal';
-                diffOutput.appendChild(span);
-            }
+            this.appendDiffMarkup(diffOutput, base.finalText, compare.finalText);
+            this.renderSourceChanges(sourceSection, base, compare);
+            this.renderLoreChanges(loreSection, base, compare);
         };
         baseSelect.select.addEventListener('change', renderDiff);
         compareSelect.select.addEventListener('change', renderDiff);
-        page.append(selectors, diffOutput);
+        page.append(selectors, diffOutput, sourceSection, loreSection);
         renderDiff();
         return page;
+    }
+
+    appendDiffMarkup(container, beforeText, afterText) {
+        const DiffMatchPatch = globalThis.SillyTavern?.libs?.DiffMatchPatch;
+        if (!DiffMatchPatch) {
+            container.textContent = `${beforeText}\n\n--- ${t('diff.compare')} ---\n\n${afterText}`;
+            return;
+        }
+        const dmp = new DiffMatchPatch();
+        dmp.Diff_Timeout = 1;
+        const changes = dmp.diff_main(beforeText, afterText);
+        dmp.diff_cleanupSemantic(changes);
+        for (const [operation, text] of changes) {
+            const span = element('span', { text });
+            span.className = operation === 1 ? 'diff-added' : operation === -1 ? 'diff-removed' : 'diff-equal';
+            container.appendChild(span);
+        }
+    }
+
+    renderSourceChanges(section, base, compare) {
+        section.appendChild(element('h3', { text: t('diff.sourceChanges') }));
+        const changes = compareSnapshotSources(base, compare);
+        if (!changes.length) {
+            section.appendChild(element('p', { text: t('diff.noSourceChanges') }));
+            return;
+        }
+
+        const list = element('div', { className: 'st-devtools-source-change-list' });
+        for (const change of changes) {
+            const card = element('article', {
+                className: `st-devtools-source-change status-${change.status}`,
+            });
+            const header = element('header');
+            header.append(
+                element('strong', { text: sourceDisplayLabel(change.source) }),
+                element('span', {
+                    className: 'st-devtools-source-change-status',
+                    text: t(`diff.status.${change.status}`),
+                }),
+                element('span', {
+                    className: 'st-devtools-change-pill',
+                    text: t('diff.tokenDelta', { delta: formatDelta(change.tokenDelta) }),
+                }),
+            );
+            const content = element('pre');
+            if (change.status === 'added') {
+                content.appendChild(element('span', {
+                    className: 'diff-added',
+                    text: change.after?.content ?? '',
+                }));
+            } else if (change.status === 'removed') {
+                content.appendChild(element('span', {
+                    className: 'diff-removed',
+                    text: change.before?.content ?? '',
+                }));
+            } else {
+                this.appendDiffMarkup(
+                    content,
+                    change.before?.content ?? '',
+                    change.after?.content ?? '',
+                );
+            }
+            card.append(header, content);
+            list.appendChild(card);
+        }
+        section.appendChild(list);
+    }
+
+    renderLoreChanges(section, base, compare) {
+        section.appendChild(element('h3', { text: t('diff.loreChanges') }));
+        const changes = compareLoreEntries(
+            base.lorebookEntries ?? [],
+            compare.lorebookEntries ?? [],
+        );
+        if (!changes.activated.length && !changes.removed.length) {
+            section.appendChild(element('p', { text: t('diff.noLoreChanges') }));
+            return;
+        }
+        section.appendChild(this.renderLoreChangeList(changes));
     }
 
     createTimelineSelect(selectedId, labelText) {

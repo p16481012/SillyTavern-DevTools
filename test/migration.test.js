@@ -42,3 +42,16 @@ test('timeline reads persist one-time schema migration', async () => {
     assert.equal(timeline[0].schemaVersion, 2);
     assert.equal(store.memory.get(store.timelineKey('chat'))[0].schemaVersion, 2);
 });
+
+test('deleteSnapshot removes only the selected snapshot and cleans up an empty timeline', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const first = legacySnapshot();
+    const second = { ...legacySnapshot(), id: 'second', timestamp: 2 };
+    store.memory.set(store.timelineKey('chat'), [first, second]);
+
+    assert.equal(await store.deleteSnapshot('chat', 'missing'), false);
+    assert.equal(await store.deleteSnapshot('chat', 'legacy'), true);
+    assert.deepEqual((await store.getTimeline('chat')).map(({ id }) => id), ['second']);
+    assert.equal(await store.deleteSnapshot('chat', 'second'), true);
+    assert.equal(store.memory.has(store.timelineKey('chat')), false);
+});
