@@ -136,3 +136,65 @@ test('buildRangeSegments preserves text and supports overlapping source ranges',
         ['ij', []],
     ]);
 });
+
+test('buildRangeSegments preserves source order when a later source range starts first', () => {
+    const segments = buildRangeSegments('abcdefghij', [
+        source({
+            id: 'first',
+            field: 'first',
+            content: 'fghij',
+            tokenCount: 1,
+            ranges: [{ start: 5, end: 10 }],
+        }),
+        source({
+            id: 'second',
+            field: 'second',
+            content: 'abcdefghij',
+            tokenCount: 1,
+            ranges: [{ start: 0, end: 10 }],
+        }),
+    ]);
+
+    assert.deepEqual(
+        segments.find(({ start }) => start === 5)?.sourceIds,
+        ['first', 'second'],
+    );
+});
+
+test('100-snapshot timeline analysis stays bounded without eager source diffs', () => {
+    const timeline = Array.from({ length: 100 }, (_, snapshotIndex) => snapshot({
+        id: `snapshot-${snapshotIndex}`,
+        timestamp: snapshotIndex,
+        totalTokens: 1000 + snapshotIndex,
+        sources: Array.from({ length: 25 }, (_, sourceIndex) => source({
+            id: `source-${snapshotIndex}-${sourceIndex}`,
+            field: `field-${sourceIndex}`,
+            content: `content ${snapshotIndex} ${sourceIndex}`,
+            tokenCount: sourceIndex + 1,
+        })),
+    }));
+
+    const started = Date.now();
+    const analyses = buildTimelineAnalysis(timeline, { includeSourceChanges: false });
+    const duration = Date.now() - started;
+    assert.equal(analyses.length, 100);
+    assert.equal(analyses.every(({ sourceChanges }) => sourceChanges.length === 0), true);
+    assert.ok(duration < 2000, `timeline analysis took ${duration}ms`);
+});
+
+test('range sweep handles many mappings while preserving the full text', () => {
+    const text = 'x'.repeat(5000);
+    const sources = Array.from({ length: 1000 }, (_, index) => source({
+        id: `range-${index}`,
+        field: `range-${index}`,
+        content: 'x'.repeat(10),
+        tokenCount: 1,
+        ranges: [{ start: index * 4, end: (index * 4) + 10 }],
+    }));
+
+    const started = Date.now();
+    const segments = buildRangeSegments(text, sources);
+    const duration = Date.now() - started;
+    assert.equal(segments.map(({ text: segment }) => segment).join(''), text);
+    assert.ok(duration < 2000, `range segmentation took ${duration}ms`);
+});

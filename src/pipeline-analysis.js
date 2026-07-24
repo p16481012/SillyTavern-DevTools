@@ -86,7 +86,7 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
     return results;
 }
 
-export function buildTimelineAnalysis(timeline = []) {
+export function buildTimelineAnalysis(timeline = [], { includeSourceChanges = true } = {}) {
     const ordered = [...timeline].sort((left, right) => left.timestamp - right.timestamp);
     return ordered.map((snapshot, index) => {
         const previous = ordered[index - 1] ?? null;
@@ -100,7 +100,7 @@ export function buildTimelineAnalysis(timeline = []) {
                 previous?.lorebookEntries ?? [],
                 snapshot.lorebookEntries ?? [],
             ),
-            sourceChanges: previous
+            sourceChanges: includeSourceChanges && previous
                 ? compareSnapshotSources(previous, snapshot)
                 : [],
         };
@@ -111,14 +111,20 @@ export function buildRangeSegments(text, sources = []) {
     const content = String(text ?? '');
     if (!content) return [];
 
-    const mappings = [];
+    const starts = new Map();
+    const ends = new Map();
     const boundaries = new Set([0, content.length]);
+    const sourceOrder = new Map();
     for (const source of sources.filter((item) => item?.type !== 'final')) {
+        if (!sourceOrder.has(source.id)) {
+            sourceOrder.set(source.id, sourceOrder.size);
+        }
         for (const range of source.ranges ?? []) {
             const start = Math.max(0, Math.min(content.length, Number(range.start) || 0));
             const end = Math.max(start, Math.min(content.length, Number(range.end) || 0));
             if (end <= start) continue;
-            mappings.push({ start, end, sourceId: source.id });
+            starts.set(start, [...(starts.get(start) ?? []), source.id]);
+            ends.set(end, [...(ends.get(end) ?? []), source.id]);
             boundaries.add(start);
             boundaries.add(end);
         }
@@ -126,20 +132,26 @@ export function buildRangeSegments(text, sources = []) {
 
     const positions = [...boundaries].sort((left, right) => left - right);
     const segments = [];
+    const active = new Map();
     for (let index = 0; index < positions.length - 1; index += 1) {
         const start = positions[index];
         const end = positions[index + 1];
+        for (const sourceId of ends.get(start) ?? []) {
+            const count = (active.get(sourceId) ?? 0) - 1;
+            if (count > 0) active.set(sourceId, count);
+            else active.delete(sourceId);
+        }
+        for (const sourceId of starts.get(start) ?? []) {
+            active.set(sourceId, (active.get(sourceId) ?? 0) + 1);
+        }
         if (end <= start) continue;
-        const sourceIds = [...new Set(
-            mappings
-                .filter((range) => range.start < end && range.end > start)
-                .map((range) => range.sourceId),
-        )];
         segments.push({
             start,
             end,
             text: content.slice(start, end),
-            sourceIds,
+            sourceIds: [...active.keys()].sort(
+                (left, right) => sourceOrder.get(left) - sourceOrder.get(right),
+            ),
         });
     }
     return segments;
