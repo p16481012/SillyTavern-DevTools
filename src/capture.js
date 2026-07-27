@@ -3,6 +3,8 @@ import {
     createCaptureBoundary,
     createRequestRecord,
     extractPromptPayload,
+    extractRequestCorrelationId,
+    sanitizePromptPayload,
 } from './request.js';
 
 const DEFAULT_SETTINGS_WAIT_MS = 1500;
@@ -132,6 +134,7 @@ export class CaptureController extends EventTarget {
             'text-completion': [],
         };
         this.attachedRequestBodies = new WeakSet();
+        this.attachedCorrelationIds = new Set();
     }
 
     start() {
@@ -161,7 +164,9 @@ export class CaptureController extends EventTarget {
             if (data?.dryRun || !Array.isArray(data?.chat)) {
                 return;
             }
-            this.enqueueCapture('chat-completion', data.chat);
+            this.enqueueCapture('chat-completion', data.chat, {
+                correlationId: extractRequestCorrelationId(data),
+            });
         });
 
         context.eventSource.on(events.GENERATE_AFTER_COMBINE_PROMPTS, (data) => {
@@ -172,7 +177,9 @@ export class CaptureController extends EventTarget {
             if (current.mainApi === 'openai') {
                 return;
             }
-            this.enqueueCapture('text-completion', data.prompt);
+            this.enqueueCapture('text-completion', data.prompt, {
+                correlationId: extractRequestCorrelationId(data),
+            });
         });
 
         if (events.CHAT_COMPLETION_SETTINGS_READY) {
@@ -215,14 +222,15 @@ export class CaptureController extends EventTarget {
         this.started = true;
     }
 
-    enqueueCapture(promptType, mutablePayload) {
+    enqueueCapture(promptType, mutablePayload, { correlationId = null } = {}) {
         const key = pendingKey(promptType);
         const pending = {
             contextState: snapshotContext(this.getContext()),
             promptType,
-            promptReadyPayload: deepClone(mutablePayload),
+            promptReadyPayload: sanitizePromptPayload(deepClone(mutablePayload)),
             activatedLore: deepClone(this.pendingLore),
             generationType: this.generationType,
+            correlationId,
             settled: false,
             reserved: false,
             timer: null,
@@ -238,38 +246,59 @@ export class CaptureController extends EventTarget {
                     : 'GENERATE_AFTER_COMBINE_PROMPTS',
                 stage: 'prompt-ready',
                 fallback: true,
+                correlationMethod: 'prompt-only',
             });
         }, this.settingsWaitMs);
     }
 
     attachRequestBody(promptType, mutableRequestBody, eventName, stage) {
         const key = pendingKey(promptType);
-        const pending = this.pending[key].find((item) => !item.settled && !item.reserved);
+        const requestCorrelationId = extractRequestCorrelationId(mutableRequestBody);
+        const available = this.pending[key].filter((item) => !item.settled && !item.reserved);
+        const exact = requestCorrelationId
+            ? available.find((item) => item.correlationId === requestCorrelationId)
+            : null;
+        const hasConflictingExplicitId = Boolean(
+            requestCorrelationId
+            && available.some((item) => item.correlationId)
+            && !exact,
+        );
+        const pending = exact ?? (hasConflictingExplicitId ? null : available[0]);
         if (!pending || pending.settled) return;
         const canTrackRequestBody = mutableRequestBody !== null
             && (typeof mutableRequestBody === 'object' || typeof mutableRequestBody === 'function');
         if (canTrackRequestBody && this.attachedRequestBodies.has(mutableRequestBody)) {
             return;
         }
+        if (requestCorrelationId && this.attachedCorrelationIds.has(requestCorrelationId)) {
+            return;
+        }
         pending.reserved = true;
         if (canTrackRequestBody) {
             this.attachedRequestBodies.add(mutableRequestBody);
+        }
+        if (requestCorrelationId) {
+            this.attachedCorrelationIds.add(requestCorrelationId);
+            if (this.attachedCorrelationIds.size > 512) {
+                this.attachedCorrelationIds.delete(this.attachedCorrelationIds.values().next().value);
+            }
         }
 
         setTimeout(() => {
             if (pending.settled || !this.pending[key].includes(pending)) return;
             const requestBody = deepClone(mutableRequestBody);
-            const payload = deepClone(extractPromptPayload(
+            const payload = sanitizePromptPayload(deepClone(extractPromptPayload(
                 requestBody,
                 promptType,
                 pending.promptReadyPayload,
-            ));
+            )));
             this.finishPending(pending, {
                 payload,
                 requestBody,
                 eventName,
                 stage,
                 fallback: false,
+                correlationMethod: exact ? 'explicit-id' : 'fifo',
             });
         }, 0);
     }
@@ -280,6 +309,7 @@ export class CaptureController extends EventTarget {
         eventName,
         stage,
         fallback,
+        correlationMethod,
     }) {
         if (pending.settled) return;
         pending.settled = true;
@@ -293,6 +323,8 @@ export class CaptureController extends EventTarget {
             stage,
             requestBodyAvailable: Boolean(request.body),
             fallback,
+            correlationId: request.correlationId ?? pending.correlationId,
+            correlationMethod,
         });
 
         setTimeout(() => {

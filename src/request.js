@@ -1,6 +1,27 @@
 const REDACTED_VALUE = '[민감 정보 제거됨]';
 const CIRCULAR_VALUE = '[순환 참조]';
-const PROMPT_BODY_KEYS = new Set(['messages', 'chat', 'prompt', 'input']);
+const OMITTED_MEDIA_VALUE = '[미디어 데이터 생략됨]';
+const PROMPT_BODY_KEYS = new Set([
+    'messages',
+    'chat',
+    'prompt',
+    'input',
+    'tools',
+    'tool_choice',
+    'functions',
+    'function_call',
+]);
+const CORRELATION_KEYS = [
+    'request_id',
+    'requestId',
+    'generation_id',
+    'generationId',
+    'completion_id',
+    'completionId',
+    'response_id',
+    'responseId',
+];
+const CORRELATION_CONTAINERS = ['metadata', 'meta', '_meta', 'request_metadata'];
 
 function isSensitiveKey(key) {
     const normalized = String(key).replace(/[^a-z0-9]/giu, '').toLocaleLowerCase();
@@ -24,9 +45,14 @@ function isSensitiveKey(key) {
 
 export function sanitizeRequestBody(value) {
     const redactedPaths = [];
+    const omittedMediaPaths = [];
     const seen = new WeakSet();
 
     const visit = (current, path) => {
+        if (typeof current === 'string' && /^data:(?:image|audio|video)\//iu.test(current)) {
+            omittedMediaPaths.push(path);
+            return OMITTED_MEDIA_VALUE;
+        }
         if (current == null || typeof current !== 'object') {
             return current;
         }
@@ -55,7 +81,38 @@ export function sanitizeRequestBody(value) {
     return {
         body: visit(value, ''),
         redactedPaths,
+        omittedMediaPaths,
     };
+}
+
+export function sanitizePromptPayload(value) {
+    return sanitizeRequestBody(value).body;
+}
+
+function normalizeCorrelationValue(value) {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+    const normalized = String(value).trim();
+    return normalized && normalized.length <= 256 ? normalized : null;
+}
+
+export function extractRequestCorrelationId(value) {
+    if (!value || typeof value !== 'object') return null;
+
+    for (const key of CORRELATION_KEYS) {
+        const normalized = normalizeCorrelationValue(value[key]);
+        if (normalized) return normalized;
+    }
+
+    for (const containerKey of CORRELATION_CONTAINERS) {
+        const container = value[containerKey];
+        if (!container || typeof container !== 'object' || Array.isArray(container)) continue;
+        for (const key of CORRELATION_KEYS) {
+            const normalized = normalizeCorrelationValue(container[key]);
+            if (normalized) return normalized;
+        }
+    }
+
+    return null;
 }
 
 export function extractPromptPayload(requestBody, promptType, fallbackPayload) {
@@ -90,15 +147,19 @@ export function createRequestRecord(requestBody) {
             settings: {},
             bodyKeys: [],
             redactedPaths: [],
+            omittedMediaPaths: [],
+            correlationId: null,
         };
     }
 
-    const { body, redactedPaths } = sanitizeRequestBody(requestBody);
+    const { body, redactedPaths, omittedMediaPaths } = sanitizeRequestBody(requestBody);
     return {
         body,
         settings: extractRequestSettings(body),
         bodyKeys: Array.isArray(body) ? [] : Object.keys(body),
         redactedPaths,
+        omittedMediaPaths,
+        correlationId: extractRequestCorrelationId(requestBody),
     };
 }
 
@@ -108,6 +169,8 @@ export function createCaptureBoundary({
     requestBodyAvailable,
     fallback = false,
     migratedFrom = null,
+    correlationId = null,
+    correlationMethod = null,
 }) {
     return {
         eventName,
@@ -117,5 +180,7 @@ export function createCaptureBoundary({
         clientBackendRequestCaptured: stage === 'backend-request-ready',
         serverTransformationsIncluded: false,
         migratedFrom,
+        correlationId,
+        correlationMethod: correlationMethod ?? (fallback ? 'prompt-only' : 'fifo'),
     };
 }

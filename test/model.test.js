@@ -4,6 +4,7 @@ import {
     buildSources,
     createSnapshotId,
     findExactRanges,
+    findNormalizedRanges,
     flattenPrompt,
     searchSnapshot,
     serializeSnapshot,
@@ -48,6 +49,55 @@ test('findExactRanges records every non-overlapping source occurrence', () => {
         { start: 0, end: 5 },
         { start: 11, end: 16 },
     ]);
+});
+
+test('normalized provenance maps conservative whitespace and case transformations', () => {
+    assert.deepEqual(
+        findNormalizedRanges('Prefix HELLO,\n   World suffix', 'hello, world'),
+        [{ start: 7, end: 22 }],
+    );
+    assert.deepEqual(findNormalizedRanges('short', 'SHORT'), []);
+});
+
+test('buildSources separates tool calls, results, schemas, and multimodal parts', () => {
+    const payload = [
+        {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'weather', arguments: '{"city":"Seoul"}' },
+            }],
+        },
+        { role: 'tool', tool_call_id: 'call-1', content: '{"temperature":30}' },
+        {
+            role: 'user',
+            content: [
+                { type: 'text', text: '이 이미지를 설명해줘' },
+                { type: 'image_url', image_url: { url: '[미디어 데이터 생략됨]' } },
+            ],
+        },
+    ];
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [],
+    }, payload, [], {
+        tools: [{
+            type: 'function',
+            function: { name: 'weather', parameters: { type: 'object' } },
+        }],
+    });
+
+    assert.equal(sources.filter((source) => source.type === 'tool_schema').length, 1);
+    assert.equal(sources.filter((source) => source.type === 'tool_call').length, 1);
+    assert.equal(sources.filter((source) => source.type === 'tool_result').length, 1);
+    assert.equal(sources.filter((source) => source.type === 'multimodal').length, 1);
+    assert.match(sources.at(-1).content, /TOOL CALLS/);
+    assert.match(sources.at(-1).content, /\[이미지 입력 2\]/);
 });
 
 test('buildSources includes processed character prompt fields', () => {

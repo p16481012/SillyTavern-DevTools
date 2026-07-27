@@ -1,5 +1,28 @@
 # 변경 기록
 
+## 0.6.0 - 2026-07-27
+
+### 추가
+
+- 공개 `request_id`·`generation_id`·`completion_id`·`response_id`가 있을 때 prompt/settings 이벤트를 ID로 연결
+- ID 일치·FIFO·prompt-ready 단독 캡처를 스냅샷과 UI에 명시
+- tool/function schema·호출·결과 전용 프롬프트 소스와 구조화 입력 통계
+- 이미지·오디오·비디오·파일 입력의 전용 소스와 안정적인 placeholder
+- 대용량·민감 미디어 data URL의 저장 전 생략과 생략 경로 기록
+- NFKC·대소문자·공백·zero-width 차이를 허용하는 보수적 정규화 provenance
+- 프롬프트·요청 본문·요청 ID 값을 포함하지 않는 현재 채팅 전체 타임라인 진단 JSON·Markdown
+- 모달 포커스 트랩, 닫은 뒤 포커스 복원, 탭 좌우/Home/End 이동
+- 성장 그래프 포인트의 Tab·방향키·Enter·Space 탐색
+- 스키마 v3과 이전 스냅샷 자동 마이그레이션
+- 요청 연결·멀티모달 생략·구조화 소스·진단 개인정보·접근성 회귀 검증
+
+### 수정
+
+- Chat Completion 최종 표시에서 tool/function call payload가 누락되지 않도록 구조화 필드를 포함
+- tool schema·tool choice·legacy function 필드를 sampler 설정 목록에서 분리
+- 공식 이벤트에 요청 ID가 없는 현재 SillyTavern에서는 기존 FIFO를 유지하되 연결 방식을 숨기지 않도록 변경
+- 탭을 바꿀 때 이전 화면의 스크롤 위치 때문에 새 화면 상단이 잘리지 않도록 수정
+
 ## 0.5.0 - 2026-07-24
 
 ### 추가

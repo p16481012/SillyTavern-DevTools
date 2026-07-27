@@ -290,3 +290,45 @@ test('a late duplicate text request does not capture the next generation', async
 
     assert.deepEqual(saved.map(({ payload }) => payload), ['Request A', 'Request B']);
 });
+
+test('explicit request identifiers pair out-of-order settings with the matching prompt', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 100,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        request_id: 'request-a',
+        chat: [{ role: 'user', content: 'Prompt A' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        request_id: 'request-b',
+        chat: [{ role: 'user', content: 'Prompt B' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        request_id: 'request-b',
+        messages: [{ role: 'user', content: 'Request B' }],
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        request_id: 'request-a',
+        messages: [{ role: 'user', content: 'Request A' }],
+    });
+    await waitFor(() => saved.length === 2);
+
+    const byId = Object.fromEntries(saved.map((snapshot) => [
+        snapshot.capture.correlationId,
+        snapshot,
+    ]));
+    assert.equal(byId['request-a'].payload[0].content, 'Request A');
+    assert.equal(byId['request-b'].payload[0].content, 'Request B');
+    assert.equal(byId['request-a'].capture.correlationMethod, 'explicit-id');
+    assert.equal(byId['request-b'].capture.correlationMethod, 'explicit-id');
+});

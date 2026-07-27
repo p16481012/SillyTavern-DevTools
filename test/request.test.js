@@ -3,8 +3,10 @@ import test from 'node:test';
 import {
     createCaptureBoundary,
     createRequestRecord,
+    extractRequestCorrelationId,
     extractPromptPayload,
     sanitizeRequestBody,
+    sanitizePromptPayload,
 } from '../src/request.js';
 
 test('request records redact credential-like fields without mutating input', () => {
@@ -50,4 +52,31 @@ test('sanitizer handles circular request metadata safely', () => {
     const value = {};
     value.self = value;
     assert.equal(sanitizeRequestBody(value).body.self, '[순환 참조]');
+});
+
+test('request correlation accepts only explicit public identifier fields', () => {
+    assert.equal(extractRequestCorrelationId({ request_id: 'request-a' }), 'request-a');
+    assert.equal(
+        extractRequestCorrelationId({ metadata: { generationId: 42 } }),
+        '42',
+    );
+    assert.equal(extractRequestCorrelationId({ id: 'generic-id' }), null);
+    assert.equal(extractRequestCorrelationId({ request_id: '' }), null);
+});
+
+test('multimodal data URLs are omitted without removing their part type', () => {
+    const payload = [{
+        role: 'user',
+        content: [{
+            type: 'image_url',
+            image_url: { url: 'data:image/png;base64,private-bytes' },
+        }],
+    }];
+    const sanitized = sanitizeRequestBody({ messages: payload });
+    assert.deepEqual(sanitized.omittedMediaPaths, ['messages[0].content[0].image_url.url']);
+    assert.equal(
+        sanitized.body.messages[0].content[0].image_url.url,
+        '[미디어 데이터 생략됨]',
+    );
+    assert.equal(JSON.stringify(sanitizePromptPayload(payload)).includes('private-bytes'), false);
 });

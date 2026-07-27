@@ -5,7 +5,7 @@ import {
 } from './i18n.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
 
-export const SNAPSHOT_SCHEMA_VERSION = 2;
+export const SNAPSHOT_SCHEMA_VERSION = 3;
 
 const SOURCE_COLORS = {
     system: '#8b5cf6',
@@ -18,6 +18,10 @@ const SOURCE_COLORS = {
     utility: '#64748b',
     chat_history: '#3b82f6',
     assistant_prefill: '#a855f7',
+    tool_schema: '#0f766e',
+    tool_call: '#c2410c',
+    tool_result: '#7c3aed',
+    multimodal: '#0369a1',
     final: '#eab308',
 };
 
@@ -40,15 +44,7 @@ export function contentToText(content) {
 
     if (Array.isArray(content)) {
         return content
-            .map((part) => {
-                if (typeof part === 'string') {
-                    return part;
-                }
-                if (part?.type === 'text' && typeof part.text === 'string') {
-                    return part.text;
-                }
-                return JSON.stringify(part);
-            })
+            .map((part, index) => contentPartToText(part, index))
             .join('\n');
     }
 
@@ -57,6 +53,33 @@ export function contentToText(content) {
     }
 
     return typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
+}
+
+function mediaType(part) {
+    const type = String(part?.type ?? '').toLocaleLowerCase();
+    if (type.includes('image') || part?.image_url || part?.image) return 'image';
+    if (type.includes('audio') || part?.audio_url || part?.input_audio || part?.audio) return 'audio';
+    if (type.includes('video') || part?.video_url || part?.video) return 'video';
+    if (type.includes('file') || part?.file || part?.file_url) return 'file';
+    return null;
+}
+
+export function contentPartToText(part, index = 0) {
+    if (typeof part === 'string') return part;
+    if (
+        ['text', 'input_text', 'output_text'].includes(part?.type)
+        && typeof part.text === 'string'
+    ) {
+        return part.text;
+    }
+
+    const type = mediaType(part);
+    const number = Number(index) + 1;
+    if (type === 'image') return `[이미지 입력 ${number}]`;
+    if (type === 'audio') return `[오디오 입력 ${number}]`;
+    if (type === 'video') return `[비디오 입력 ${number}]`;
+    if (type === 'file') return `[파일 입력 ${number}]`;
+    return JSON.stringify(part);
 }
 
 export function flattenPrompt(payload) {
@@ -72,7 +95,14 @@ export function flattenPrompt(payload) {
         .map((message, index) => {
             const role = String(message?.role ?? 'unknown').toUpperCase();
             const name = message?.name ? ` (${message.name})` : '';
-            return `# ${index + 1} ${role}${name}\n${contentToText(message?.content)}`;
+            const sections = [contentToText(message?.content)];
+            if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
+                sections.push(`TOOL CALLS\n${JSON.stringify(message.tool_calls, null, 2)}`);
+            }
+            if (message?.function_call) {
+                sections.push(`FUNCTION CALL\n${JSON.stringify(message.function_call, null, 2)}`);
+            }
+            return `# ${index + 1} ${role}${name}\n${sections.filter(Boolean).join('\n')}`;
         })
         .join('\n\n');
 }
@@ -89,6 +119,64 @@ export function findExactRanges(finalText, content, limit = 50) {
         if (start < 0) break;
         ranges.push({ start, end: start + needle.length });
         offset = start + Math.max(1, needle.length);
+    }
+    return ranges;
+}
+
+function normalizeWithMap(value) {
+    const normalized = [];
+    const starts = [];
+    const ends = [];
+    let previousWhitespace = false;
+    let offset = 0;
+
+    for (const character of String(value ?? '')) {
+        const start = offset;
+        offset += character.length;
+        if (/[\u200B-\u200D\uFEFF]/u.test(character)) continue;
+
+        const transformed = character.normalize('NFKC').toLocaleLowerCase();
+        for (const transformedCharacter of transformed) {
+            const whitespace = /\s/u.test(transformedCharacter);
+            if (whitespace) {
+                if (previousWhitespace || normalized.length === 0) continue;
+                normalized.push(' ');
+                starts.push(start);
+                ends.push(offset);
+                previousWhitespace = true;
+                continue;
+            }
+            normalized.push(transformedCharacter);
+            starts.push(start);
+            ends.push(offset);
+            previousWhitespace = false;
+        }
+    }
+
+    if (normalized.at(-1) === ' ') {
+        normalized.pop();
+        starts.pop();
+        ends.pop();
+    }
+    return { text: normalized.join(''), starts, ends };
+}
+
+export function findNormalizedRanges(finalText, content, limit = 50) {
+    const haystack = normalizeWithMap(finalText);
+    const needle = normalizeWithMap(content).text;
+    if (needle.length < 8 || !haystack.text) return [];
+
+    const ranges = [];
+    let offset = 0;
+    while (ranges.length < limit) {
+        const normalizedStart = haystack.text.indexOf(needle, offset);
+        if (normalizedStart < 0) break;
+        const normalizedEnd = normalizedStart + needle.length;
+        ranges.push({
+            start: haystack.starts[normalizedStart],
+            end: haystack.ends[normalizedEnd - 1],
+        });
+        offset = normalizedStart + Math.max(1, needle.length);
     }
     return ranges;
 }
@@ -136,8 +224,15 @@ function addSource(sources, {
         return;
     }
 
-    const ranges = findExactRanges(finalText, text);
+    const exactRanges = findExactRanges(finalText, text);
+    const normalizedRanges = exactRanges.length ? [] : findNormalizedRanges(finalText, text);
+    const ranges = exactRanges.length ? exactRanges : normalizedRanges;
     const exactMatch = ranges.length > 0;
+    const inferredAttribution = exactRanges.length
+        ? 'exact'
+        : normalizedRanges.length
+            ? 'normalized'
+            : 'unmatched';
     sources.push({
         id: `${type}:${sources.length}`,
         type,
@@ -145,7 +240,7 @@ function addSource(sources, {
         labelKey,
         content: text,
         color: SOURCE_COLORS[type] ?? SOURCE_COLORS.utility,
-        attribution: attribution ?? (exactMatch ? 'exact' : 'unmatched'),
+        attribution: attribution ?? inferredAttribution,
         included: included ?? exactMatch,
         tokenCount: null,
         metadata,
@@ -164,7 +259,86 @@ function classifyConfiguredPrompt(prompt) {
     return 'utility';
 }
 
-export function buildSources(contextState, payload, activatedLore = []) {
+function addStructuredSources(sources, payload, requestBody, finalText) {
+    const toolSchemas = [
+        ...(Array.isArray(requestBody?.tools)
+            ? requestBody.tools.map((schema) => ({ schema, legacy: false }))
+            : []),
+        ...(Array.isArray(requestBody?.functions)
+            ? requestBody.functions.map((definition) => ({
+                schema: { type: 'function', function: definition },
+                legacy: true,
+            }))
+            : []),
+    ];
+    toolSchemas.forEach(({ schema, legacy }, index) => {
+        const name = schema?.function?.name ?? schema?.name ?? String(index + 1);
+        addSource(sources, {
+            type: 'tool_schema',
+            label: `Tool schema ${name}`,
+            labelKey: 'source.toolSchema',
+            content: JSON.stringify(schema, null, 2),
+            finalText,
+            metadata: { name, index, legacy },
+            attribution: 'derived',
+            included: true,
+        });
+    });
+
+    if (!Array.isArray(payload)) return;
+    payload.forEach((message, messageIndex) => {
+        const calls = Array.isArray(message?.tool_calls)
+            ? message.tool_calls
+            : message?.function_call
+                ? [message.function_call]
+                : [];
+        calls.forEach((call, callIndex) => {
+            const name = call?.function?.name ?? call?.name ?? String(callIndex + 1);
+            addSource(sources, {
+                type: 'tool_call',
+                label: `Tool call ${name}`,
+                labelKey: 'source.toolCall',
+                content: JSON.stringify(call, null, 2),
+                finalText,
+                metadata: { name, messageIndex, callIndex },
+                attribution: 'derived',
+                included: true,
+            });
+        });
+
+        if (message?.role === 'tool') {
+            const name = message?.name ?? message?.tool_call_id ?? String(messageIndex + 1);
+            addSource(sources, {
+                type: 'tool_result',
+                label: `Tool result ${name}`,
+                labelKey: 'source.toolResult',
+                content: message.content,
+                finalText,
+                metadata: {
+                    name,
+                    toolCallId: message?.tool_call_id ?? null,
+                    messageIndex,
+                },
+            });
+        }
+
+        if (!Array.isArray(message?.content)) return;
+        message.content.forEach((part, partIndex) => {
+            const type = mediaType(part);
+            if (!type) return;
+            addSource(sources, {
+                type: 'multimodal',
+                label: `Multimodal ${type} ${partIndex + 1}`,
+                labelKey: `source.multimodal.${type}`,
+                content: contentPartToText(part, partIndex),
+                finalText,
+                metadata: { type, messageIndex, partIndex },
+            });
+        });
+    });
+}
+
+export function buildSources(contextState, payload, activatedLore = [], requestBody = null) {
     const finalText = flattenPrompt(payload);
     const sources = [];
     const character = getCharacterFields(contextState);
@@ -294,6 +468,8 @@ export function buildSources(contextState, payload, activatedLore = []) {
         });
     }
 
+    addStructuredSources(sources, payload, requestBody, finalText);
+
     if (Array.isArray(payload)) {
         const historyMessages = payload.filter((message) => ['user', 'assistant', 'tool'].includes(message?.role));
         addSource(sources, {
@@ -362,8 +538,8 @@ export async function finalizeSnapshot({
 }) {
     const timestamp = Date.now();
     const finalText = flattenPrompt(payload);
-    const sources = buildSources(contextState, payload, activatedLore);
     const normalizedRequest = request ?? createRequestRecord(null);
+    const sources = buildSources(contextState, payload, activatedLore, normalizedRequest.body);
     const normalizedCapture = capture ?? createCaptureBoundary({
         eventName: promptType === 'chat-completion'
             ? 'CHAT_COMPLETION_PROMPT_READY'
@@ -418,6 +594,12 @@ export async function finalizeSnapshot({
             usableContext,
             contextUsage: usableContext ? totalTokens / usableContext : null,
             remainingContext: usableContext ? Math.max(0, usableContext - totalTokens) : null,
+            structured: {
+                toolSchemas: sources.filter((source) => source.type === 'tool_schema').length,
+                toolCalls: sources.filter((source) => source.type === 'tool_call').length,
+                toolResults: sources.filter((source) => source.type === 'tool_result').length,
+                multimodalParts: sources.filter((source) => source.type === 'multimodal').length,
+            },
         },
     };
 }

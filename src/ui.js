@@ -5,6 +5,7 @@ import {
     sourceDisplayLabel,
     t,
 } from './i18n.js';
+import { serializeTimelineDiagnostics } from './diagnostics.js';
 import { searchSnapshot, serializeSnapshot } from './model.js';
 import {
     buildRangeSegments,
@@ -100,6 +101,7 @@ export class DevToolsWindow {
         this.activeTab = localStorage.getItem(`${STORAGE_PREFIX}last-tab`) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
+        this.previouslyFocused = null;
         this.capture.addEventListener('snapshot', (event) => this.onSnapshot(event.detail));
     }
 
@@ -136,16 +138,23 @@ export class DevToolsWindow {
         if (!this.root) {
             this.build();
         }
+        if (!this.root.contains(document.activeElement)) {
+            this.previouslyFocused = document.activeElement;
+        }
         this.syncOpaqueTheme();
         this.root.hidden = false;
         await this.refresh();
-        this.window.focus();
+        this.activeTabButton()?.focus();
     }
 
     close() {
         if (this.root) {
             this.root.hidden = true;
         }
+        if (this.previouslyFocused?.isConnected && typeof this.previouslyFocused.focus === 'function') {
+            this.previouslyFocused.focus();
+        }
+        this.previouslyFocused = null;
     }
 
     build() {
@@ -185,12 +194,16 @@ export class DevToolsWindow {
         for (const [id, labelKey] of TABS) {
             const button = element('button', { className: 'st-devtools-tab', text: t(labelKey), type: 'button' });
             button.dataset.tab = id;
+            button.id = this.tabElementId(id);
             button.setAttribute('role', 'tab');
+            button.setAttribute('aria-controls', this.panelElementId(id));
             button.addEventListener('click', () => this.selectTab(id));
+            button.addEventListener('keydown', (event) => this.handleTabKeydown(event, id));
             tabList.appendChild(button);
         }
 
         this.content = element('main', { className: 'st-devtools-content' });
+        this.content.setAttribute('role', 'tabpanel');
         this.window.append(header, tabList, this.content);
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
@@ -199,9 +212,7 @@ export class DevToolsWindow {
         this.root.addEventListener('pointerdown', (event) => {
             if (event.target === this.root) this.close();
         });
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && !this.root.hidden) this.close();
-        });
+        document.addEventListener('keydown', (event) => this.handleDialogKeydown(event));
         this.enableDragging(header);
         this.observeGeometry();
         this.selectTab(this.activeTab);
@@ -290,10 +301,83 @@ export class DevToolsWindow {
         this.render();
     }
 
-    selectTab(id) {
-        this.activeTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
+    tabElementId(id) {
+        return `st-devtools-tab-${id}`;
+    }
+
+    panelElementId() {
+        return 'st-devtools-panel';
+    }
+
+    activeTabButton() {
+        return this.window?.querySelector(`.st-devtools-tab[data-tab="${this.activeTab}"]`) ?? null;
+    }
+
+    focusableElements() {
+        if (!this.window) return [];
+        return [...this.window.querySelectorAll(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+            'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+        )].filter((node) => (
+            !node.hidden
+            && node.getAttribute('aria-hidden') !== 'true'
+            && node.tabIndex >= 0
+            && typeof node.focus === 'function'
+            && (node.getClientRects().length > 0 || node === document.activeElement)
+        ));
+    }
+
+    handleDialogKeydown(event) {
+        if (!this.root || this.root.hidden) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            this.close();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+
+        const focusable = this.focusableElements();
+        if (focusable.length === 0) {
+            event.preventDefault();
+            this.window.focus();
+            return;
+        }
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        const active = document.activeElement;
+        if (!this.window.contains(active)) {
+            event.preventDefault();
+            (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && active === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && active === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    handleTabKeydown(event, id) {
+        const ids = TABS.map(([tabId]) => tabId);
+        const currentIndex = ids.indexOf(id);
+        let nextIndex = null;
+        if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ids.length;
+        if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + ids.length) % ids.length;
+        if (event.key === 'Home') nextIndex = 0;
+        if (event.key === 'End') nextIndex = ids.length - 1;
+        if (nextIndex == null) return;
+        event.preventDefault();
+        this.selectTab(ids[nextIndex], { focus: true });
+    }
+
+    selectTab(id, { focus = false } = {}) {
+        const nextTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
+        const changed = nextTab !== this.activeTab;
+        this.activeTab = nextTab;
         localStorage.setItem(`${STORAGE_PREFIX}last-tab`, this.activeTab);
         this.render();
+        if (changed && this.content) this.content.scrollTop = 0;
+        if (focus) this.activeTabButton()?.focus();
     }
 
     render() {
@@ -303,7 +387,10 @@ export class DevToolsWindow {
             const active = button.dataset.tab === this.activeTab;
             button.classList.toggle('active', active);
             button.setAttribute('aria-selected', String(active));
+            button.tabIndex = active ? 0 : -1;
         }
+        this.content.id = this.panelElementId(this.activeTab);
+        this.content.setAttribute('aria-labelledby', this.tabElementId(this.activeTab));
         this.content.replaceChildren();
 
         const snapshot = this.selectedSnapshot();
@@ -371,7 +458,12 @@ export class DevToolsWindow {
             badges.append(
                 element('span', {
                     className: 'st-devtools-badge',
-                    text: t('snapshot.tokens', { count: source.tokenCount }),
+                    text: t(
+                        source.type === 'multimodal'
+                            ? 'snapshot.placeholderTokens'
+                            : 'snapshot.tokens',
+                        { count: source.tokenCount },
+                    ),
                 }),
                 element('span', {
                     className: `st-devtools-badge attribution-${source.attribution}`,
@@ -642,6 +734,10 @@ export class DevToolsWindow {
         toolbar.appendChild(element('span', {
             text: t('snapshot.retained', { count: this.timeline.length }),
         }));
+        toolbar.append(
+            this.renderTimelineDiagnosticButton('json'),
+            this.renderTimelineDiagnosticButton('markdown'),
+        );
         const clear = element('button', { className: 'menu_button', text: t('action.clearTimeline'), type: 'button' });
         clear.disabled = this.timeline.length === 0;
         clear.addEventListener('click', async () => {
@@ -653,6 +749,10 @@ export class DevToolsWindow {
         });
         toolbar.appendChild(clear);
         page.appendChild(toolbar);
+        page.appendChild(element('small', {
+            className: 'st-devtools-timeline-diagnostic-note',
+            text: t('timeline.diagnosticDescription'),
+        }));
 
         if (this.timeline.length === 0) {
             page.appendChild(this.renderEmpty());
@@ -737,6 +837,27 @@ export class DevToolsWindow {
         return page;
     }
 
+    renderTimelineDiagnosticButton(format) {
+        const label = format === 'markdown' ? 'Markdown' : format.toUpperCase();
+        const button = element('button', {
+            className: 'menu_button',
+            text: t('action.exportDiagnostics', { format: label }),
+            type: 'button',
+        });
+        button.disabled = this.timeline.length === 0;
+        button.addEventListener('click', () => {
+            const extension = format === 'markdown' ? 'md' : format;
+            const mime = format === 'json' ? 'application/json' : 'text/markdown';
+            const date = new Date().toISOString().replaceAll(':', '-');
+            downloadText(
+                `st-devtools-timeline-diagnostics-${date}.${extension}`,
+                serializeTimelineDiagnostics(this.timeline, format),
+                mime,
+            );
+        });
+        return button;
+    }
+
     renderGrowthChart(analyses) {
         const figure = element('figure', { className: 'st-devtools-growth' });
         const values = analyses.map(({ snapshot }) => Number(snapshot.stats?.totalTokens) || 0);
@@ -788,14 +909,41 @@ export class DevToolsWindow {
             points: points.map(({ x, y }) => `${x},${y}`).join(' '),
         }));
         points.forEach(({ x, y }, index) => {
+            const snapshot = analyses[index].snapshot;
+            const label = `${formatTimestamp(snapshot.timestamp)} · ${t('snapshot.tokens', { count: values[index] })}`;
             const point = svgElement('circle', {
                 class: 'st-devtools-growth-point',
                 cx: x,
                 cy: y,
                 r: 4,
+                tabindex: 0,
+                role: 'button',
+                'aria-label': label,
+                'aria-current': snapshot.id === this.selectedId ? 'true' : 'false',
+                'data-point-index': index,
             });
             point.appendChild(svgElement('title'));
-            point.firstChild.textContent = `${formatTimestamp(analyses[index].snapshot.timestamp)} · ${t('snapshot.tokens', { count: values[index] })}`;
+            point.firstChild.textContent = label;
+            const openSnapshot = () => {
+                this.selectedId = snapshot.id;
+                this.selectTab('explorer');
+            };
+            point.addEventListener('click', openSnapshot);
+            point.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openSnapshot();
+                    return;
+                }
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                let nextIndex = index;
+                if (event.key === 'ArrowLeft') nextIndex = Math.max(0, index - 1);
+                if (event.key === 'ArrowRight') nextIndex = Math.min(points.length - 1, index + 1);
+                if (event.key === 'Home') nextIndex = 0;
+                if (event.key === 'End') nextIndex = points.length - 1;
+                svg.querySelector(`[data-point-index="${nextIndex}"]`)?.focus();
+            });
             svg.appendChild(point);
         });
         figure.append(caption, svg);
@@ -973,6 +1121,11 @@ export class DevToolsWindow {
             element('small', {
                 text: t('capture.event', { event: capture.eventName ?? t('common.unknown') }),
             }),
+            element('small', {
+                text: t('capture.correlationDescription', {
+                    method: t(`capture.correlation.${capture.correlationMethod ?? 'unknown'}`),
+                }),
+            }),
         );
         if (snapshot.request?.redactedPaths?.length) {
             captureCard.appendChild(element('small', {
@@ -980,8 +1133,15 @@ export class DevToolsWindow {
                 text: t('capture.redacted', { count: snapshot.request.redactedPaths.length }),
             }));
         }
+        if (snapshot.request?.omittedMediaPaths?.length) {
+            captureCard.appendChild(element('small', {
+                className: 'st-devtools-capture-redacted',
+                text: t('capture.mediaOmitted', { count: snapshot.request.omittedMediaPaths.length }),
+            }));
+        }
 
         const stats = element('div', { className: 'st-devtools-stats' });
+        const structured = snapshot.stats?.structured ?? {};
         const statValues = [
             [t('stat.promptTokens'), snapshot.stats.totalTokens],
             [t('stat.contextLimit'), snapshot.stats.maxContext ?? t('common.unknown')],
@@ -994,6 +1154,10 @@ export class DevToolsWindow {
                     .filter((source) => source.type !== 'final')
                     .sort((a, b) => b.tokenCount - a.tokenCount)[0],
             ],
+            [t('stat.toolSchemas'), structured.toolSchemas ?? 0],
+            [t('stat.toolCalls'), structured.toolCalls ?? 0],
+            [t('stat.toolResults'), structured.toolResults ?? 0],
+            [t('stat.multimodalParts'), structured.multimodalParts ?? 0],
         ];
         for (const [label, value] of statValues) {
             const card = element('div', { className: 'st-devtools-stat' });
