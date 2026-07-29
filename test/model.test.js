@@ -83,6 +83,8 @@ test('configured prompt sources preserve stable metadata separately from payload
         role: 'system',
         enabled: true,
         configuredEnabled: true,
+        promptOrder: 0,
+        promptOrderSource: 'captured-array',
         position: 'relative',
         depth: 4,
     });

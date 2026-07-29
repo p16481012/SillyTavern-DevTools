@@ -13,9 +13,55 @@ function getEventTypes(context) {
     return context.eventTypes ?? context.event_types ?? {};
 }
 
-function getConfiguredPrompts(context) {
-    const prompts = context.chatCompletionSettings?.prompts;
-    return Array.isArray(prompts) ? deepClone(prompts) : [];
+function selectPromptOrder(settings, prompts) {
+    const orderLists = Array.isArray(settings?.prompt_order)
+        ? settings.prompt_order.filter((entry) => Array.isArray(entry?.order))
+        : [];
+    if (orderLists.length === 0) return null;
+
+    const identifiers = new Set(
+        prompts.map((prompt) => prompt?.identifier).filter(Boolean),
+    );
+    return [...orderLists].sort((left, right) => {
+        const preferredLeft = String(left?.character_id) === '100001' ? 1 : 0;
+        const preferredRight = String(right?.character_id) === '100001' ? 1 : 0;
+        if (preferredLeft !== preferredRight) return preferredRight - preferredLeft;
+        const overlap = (entry) => entry.order.reduce(
+            (count, item) => count + (identifiers.has(item?.identifier) ? 1 : 0),
+            0,
+        );
+        return overlap(right) - overlap(left);
+    })[0];
+}
+
+export function getConfiguredPrompts(context) {
+    const settings = context.chatCompletionSettings ?? {};
+    const prompts = Array.isArray(settings.prompts) ? deepClone(settings.prompts) : [];
+    const selectedOrder = selectPromptOrder(settings, prompts);
+    if (!selectedOrder) {
+        return prompts.map((prompt, promptOrder) => ({
+            ...prompt,
+            promptOrder,
+            promptOrderSource: 'settings-array',
+        }));
+    }
+    if (selectedOrder.order.length === 0) return [];
+
+    const promptByIdentifier = new Map(
+        prompts
+            .filter((prompt) => prompt?.identifier)
+            .map((prompt) => [prompt.identifier, prompt]),
+    );
+    return selectedOrder.order.flatMap((entry, promptOrder) => {
+        const prompt = promptByIdentifier.get(entry?.identifier);
+        if (!prompt) return [];
+        return [{
+            ...prompt,
+            enabled: entry.enabled ?? prompt.enabled ?? null,
+            promptOrder,
+            promptOrderSource: 'prompt-manager',
+        }];
+    });
 }
 
 function getModel(context) {

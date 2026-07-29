@@ -16,6 +16,7 @@ import {
     buildTimelineAnalysis,
     compareLoreEntries,
     compareSnapshotSources,
+    largestIncludedSource,
     loreEntryLabel,
 } from './pipeline-analysis.js';
 import {
@@ -124,6 +125,57 @@ function comparisonRuleError(rule) {
 function isConfiguredPromptSource(source) {
     return source?.metadata?.sourceKind === 'configuredPrompt'
         || Object.prototype.hasOwnProperty.call(source?.metadata ?? {}, 'configuredEnabled');
+}
+
+function explorerSourceState(source) {
+    const metadata = source?.metadata ?? {};
+    if (
+        source?.configuredEnabled === false
+        || metadata.configuredEnabled === false
+        || metadata.enabled === false
+    ) return 'disabled';
+    if (source?.included === true) return 'included';
+    if (source?.included === false) return 'omitted';
+    return 'unknown';
+}
+
+function explorerSourceGroups(sources = []) {
+    const sourceOrder = new Map(sources.map((source, index) => [source.id, index]));
+    const configured = sources
+        .filter(isConfiguredPromptSource)
+        .sort((left, right) => {
+            const leftOrder = Number(left?.metadata?.promptOrder);
+            const rightOrder = Number(right?.metadata?.promptOrder);
+            const leftKnown = Number.isFinite(leftOrder);
+            const rightKnown = Number.isFinite(rightOrder);
+            if (leftKnown && rightKnown && leftOrder !== rightOrder) return leftOrder - rightOrder;
+            if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
+            return sourceOrder.get(left.id) - sourceOrder.get(right.id);
+        });
+    const final = sources.filter((source) => source.type === 'final');
+    const other = sources.filter(
+        (source) => source.type !== 'final' && !isConfiguredPromptSource(source),
+    );
+    return [
+        {
+            key: 'configured',
+            sources: configured,
+            open: configured.length > 0,
+            promptManagerOrder: configured.length > 0 && configured.every(
+                (source) => source?.metadata?.promptOrderSource === 'prompt-manager',
+            ),
+        },
+        {
+            key: 'other',
+            sources: other,
+            open: configured.length === 0,
+        },
+        {
+            key: 'final',
+            sources: final,
+            open: false,
+        },
+    ].filter((group) => group.sources.length > 0);
 }
 
 function policySourceLabel(source) {
@@ -692,88 +744,181 @@ export class DevToolsWindow {
 
     renderExplorer(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
-        page.appendChild(this.renderSnapshotPicker());
-        const sourceList = element('div', { className: 'st-devtools-source-list' });
-        const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
+        const sourceGroups = explorerSourceGroups(snapshot.sources);
+        const configuredGroup = sourceGroups.find((group) => group.key === 'configured');
+        const promptManagerOrder = configuredGroup?.promptManagerOrder ?? false;
+        page.append(
+            this.renderSnapshotPicker(),
+            element('p', {
+                className: 'st-devtools-section-intro',
+                text: t(promptManagerOrder
+                    ? 'explorer.intro'
+                    : 'explorer.introFallback'),
+            }),
+        );
+        const guide = element('details', {
+            className: 'st-devtools-disclosure st-devtools-explorer-guide',
+        });
+        const guideList = element('ul');
+        guideList.append(
+            element('li', {
+                text: t(promptManagerOrder
+                    ? 'explorer.guideOrder'
+                    : 'explorer.guideOrderFallback'),
+            }),
+            element('li', { text: t('explorer.guideColor') }),
+            element('li', { text: t('explorer.guideStatus') }),
+        );
+        guide.append(
+            element('summary', { text: t('explorer.guideTitle') }),
+            guideList,
+        );
+        page.appendChild(guide);
 
-        for (const source of snapshot.sources) {
-            const details = element('details', { className: 'st-devtools-source' });
-            if (source.type === 'final') details.open = true;
-            details.dataset.sourceId = source.id;
-            details.dataset.sourceType = source.type;
-            details.style.setProperty('--source-color', source.color);
-            const summary = element('summary');
-            const name = element('span', { className: 'st-devtools-source-name', text: sourceDisplayLabel(source) });
-            const badges = element('span', { className: 'st-devtools-badges' });
-            const multimodalLabels = source.type === 'multimodal'
-                ? multimodalEstimateLabels(source)
-                : null;
-            badges.append(
+        const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
+        const groups = element('div', { className: 'st-devtools-source-groups' });
+
+        for (const groupData of sourceGroups) {
+            const group = element('details', { className: 'st-devtools-source-group' });
+            group.dataset.group = groupData.key;
+            group.open = groupData.open;
+            const groupSummary = element('summary');
+            const groupHeading = element('span', { className: 'st-devtools-source-group-heading' });
+            groupHeading.append(
+                element('strong', { text: t(`explorer.group.${groupData.key}`) }),
+                element('small', {
+                    text: t(
+                        groupData.key === 'configured' && !groupData.promptManagerOrder
+                            ? 'explorer.group.configuredFallbackDescription'
+                            : `explorer.group.${groupData.key}Description`,
+                    ),
+                }),
+            );
+            groupSummary.append(
+                groupHeading,
                 element('span', {
+                    className: 'st-devtools-source-group-count',
+                    text: t('explorer.groupCount', { count: groupData.sources.length }),
+                }),
+            );
+            const sourceList = element('div', { className: 'st-devtools-source-list' });
+            for (const source of groupData.sources) {
+                const details = element('details', { className: 'st-devtools-source' });
+                details.dataset.sourceId = source.id;
+                details.dataset.sourceType = source.type;
+                details.style.setProperty('--source-color', source.color);
+                const summary = element('summary');
+                const heading = element('span', { className: 'st-devtools-source-heading' });
+                if (isConfiguredPromptSource(source)) {
+                    const promptOrder = Number(source.metadata?.promptOrder);
+                    heading.appendChild(element('span', {
+                        className: 'st-devtools-source-order',
+                        text: t('explorer.promptOrder', {
+                            count: Number.isFinite(promptOrder)
+                                ? promptOrder + 1
+                                : groupData.sources.indexOf(source) + 1,
+                        }),
+                    }));
+                }
+                heading.appendChild(element('span', {
+                    className: 'st-devtools-source-name',
+                    text: sourceDisplayLabel(source),
+                }));
+                const badges = element('span', { className: 'st-devtools-badges' });
+                const multimodalLabels = source.type === 'multimodal'
+                    ? multimodalEstimateLabels(source)
+                    : null;
+                badges.appendChild(element('span', {
                     className: 'st-devtools-badge',
                     text: multimodalLabels?.estimate
                         ?? t('snapshot.tokens', { count: source.tokenCount }),
-                }),
-                element('span', {
-                    className: `st-devtools-badge attribution-${source.attribution}`,
-                    text: attributionDisplayLabel(source.attribution),
-                }),
-            );
-            if (multimodalLabels) {
-                badges.appendChild(element('span', {
-                    className: 'st-devtools-badge st-devtools-multimodal-method',
-                    text: multimodalLabels.method,
                 }));
+                if (source.type !== 'final') {
+                    const state = explorerSourceState(source);
+                    badges.appendChild(element('span', {
+                        className: `st-devtools-badge source-state-${state}`,
+                        text: t(`explorer.state.${state}`),
+                    }));
+                }
+                summary.append(heading, badges);
+
+                const body = element('div', { className: 'st-devtools-source-body' });
+                if (source.type !== 'final') {
+                    const metadata = element('div', { className: 'st-devtools-source-meta' });
+                    const attribution = element('span', {
+                        className: 'st-devtools-source-attribution',
+                    });
+                    attribution.append(
+                        element('strong', {
+                            text: `${t('explorer.attributionLabel')}: ${attributionDisplayLabel(source.attribution)}`,
+                        }),
+                        element('small', {
+                            text: t(`explorer.attribution.${source.attribution}`),
+                        }),
+                    );
+                    metadata.appendChild(attribution);
+                    if (
+                        source.attribution === 'template'
+                        && Number.isFinite(source.provenance?.confidence)
+                    ) {
+                        metadata.appendChild(element('span', {
+                            className: 'st-devtools-badge st-devtools-provenance-confidence',
+                            text: t('provenance.confidence', {
+                                count: Math.round(source.provenance.confidence * 100),
+                            }),
+                            title: source.provenance.method ?? 'macro-template',
+                        }));
+                    }
+                    if (multimodalLabels) {
+                        metadata.appendChild(element('span', {
+                            className: 'st-devtools-badge st-devtools-multimodal-method',
+                            text: multimodalLabels.method,
+                        }));
+                    }
+                    if (source.ranges?.length) {
+                        metadata.appendChild(element('span', {
+                            className: 'st-devtools-badge',
+                            text: t('explorer.finalLocation', { count: source.ranges.length }),
+                        }));
+                    }
+                    body.appendChild(metadata);
+                    if (source.ranges?.length) {
+                        const actions = element('div', {
+                            className: 'st-devtools-source-actions',
+                        });
+                        const jump = element('button', {
+                            className: 'menu_button st-devtools-range-jump',
+                            text: t('action.jumpToFinal'),
+                            type: 'button',
+                        });
+                        jump.setAttribute(
+                            'aria-label',
+                            `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`,
+                        );
+                        jump.addEventListener('click', () => this.jumpToFinalRange(source.id));
+                        actions.appendChild(jump);
+                        body.appendChild(actions);
+                    }
+                }
+                const pre = source.type === 'final'
+                    ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
+                    : element('pre', { text: source.content });
+                body.appendChild(pre);
+                details.append(summary, body);
+                if (source.type !== 'final' && source.ranges?.length) {
+                    details.addEventListener('pointerenter', () => this.highlightSourceMapping([source.id]));
+                    details.addEventListener('pointerleave', () => this.clearSourceMapping());
+                    details.addEventListener('focusin', () => this.highlightSourceMapping([source.id]));
+                    details.addEventListener('focusout', (event) => {
+                        if (!details.contains(event.relatedTarget)) this.clearSourceMapping();
+                    });
+                }
+                sourceList.appendChild(details);
             }
-            if (
-                source.attribution === 'template'
-                && Number.isFinite(source.provenance?.confidence)
-            ) {
-                badges.appendChild(element('span', {
-                    className: 'st-devtools-badge st-devtools-provenance-confidence',
-                    text: t('provenance.confidence', {
-                        count: Math.round(source.provenance.confidence * 100),
-                    }),
-                    title: source.provenance.method ?? 'macro-template',
-                }));
-            }
-            if (source.ranges?.length) {
-                badges.appendChild(element('span', {
-                    className: 'st-devtools-badge',
-                    text: t('capture.rangeCount', { count: source.ranges.length }),
-                }));
-            }
-            summary.append(name, badges);
-            if (source.type !== 'final' && source.ranges?.length) {
-                const jump = element('button', {
-                    className: 'st-devtools-range-jump',
-                    text: '↗',
-                    title: t('action.jumpToFinal'),
-                    type: 'button',
-                });
-                jump.setAttribute('aria-label', `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`);
-                jump.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    this.jumpToFinalRange(source.id);
-                });
-                summary.appendChild(jump);
-            }
-            const pre = source.type === 'final'
-                ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
-                : element('pre', { text: source.content });
-            details.append(summary, pre);
-            if (source.type !== 'final' && source.ranges?.length) {
-                details.addEventListener('pointerenter', () => this.highlightSourceMapping([source.id]));
-                details.addEventListener('pointerleave', () => this.clearSourceMapping());
-                details.addEventListener('focusin', () => this.highlightSourceMapping([source.id]));
-                details.addEventListener('focusout', (event) => {
-                    if (!details.contains(event.relatedTarget)) this.clearSourceMapping();
-                });
-            }
-            sourceList.appendChild(details);
+            group.append(groupSummary, sourceList);
+            groups.appendChild(group);
         }
-        page.appendChild(sourceList);
+        page.appendChild(groups);
         return page;
     }
 
@@ -852,22 +997,28 @@ export class DevToolsWindow {
     }
 
     jumpToFinalRange(sourceId) {
+        const finalCard = [...this.window.querySelectorAll('.st-devtools-source')]
+            .find((node) => node.dataset.sourceType === 'final');
+        if (!finalCard) return;
+        finalCard.closest('.st-devtools-source-group')?.setAttribute('open', '');
+        finalCard.open = true;
         const range = [...this.window.querySelectorAll('.st-devtools-final-range')]
             .find((node) => this.rangeSourceIds(node).includes(sourceId));
         if (!range) return;
         this.highlightSourceMapping([sourceId]);
-        range.scrollIntoView({ block: 'center', behavior: 'smooth' });
         range.focus({ preventScroll: true });
+        range.scrollIntoView({ block: 'center', behavior: 'auto' });
     }
 
     jumpToSourceCard(sourceId) {
         const card = [...this.window.querySelectorAll('.st-devtools-source')]
             .find((node) => node.dataset.sourceId === sourceId);
         if (!card) return;
+        card.closest('.st-devtools-source-group')?.setAttribute('open', '');
         card.open = true;
         this.highlightSourceMapping([sourceId]);
-        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
         card.querySelector('summary')?.focus({ preventScroll: true });
+        card.scrollIntoView({ block: 'center', behavior: 'auto' });
     }
 
     clearRuleFocus() {
@@ -909,6 +1060,7 @@ export class DevToolsWindow {
         const cards = [...this.window.querySelectorAll('.st-devtools-source')]
             .filter((node) => selected.has(node.dataset.sourceId));
         for (const card of cards) {
+            card.closest('.st-devtools-source-group')?.setAttribute('open', '');
             card.open = true;
             card.classList.add('rule-focus');
         }
@@ -978,6 +1130,12 @@ export class DevToolsWindow {
     focusRuleEvidence(finalRanges, sourceIds = []) {
         this.clearRuleFocus();
         this.highlightSourceMapping(sourceIds);
+        const finalCard = [...this.window.querySelectorAll('.st-devtools-source')]
+            .find((node) => node.dataset.sourceType === 'final');
+        if (finalCard) {
+            finalCard.closest('.st-devtools-source-group')?.setAttribute('open', '');
+            finalCard.open = true;
+        }
         const matches = this.highlightFinalEvidence(finalRanges);
         const first = matches[0];
         if (first) {
@@ -985,10 +1143,7 @@ export class DevToolsWindow {
             first.focus({ preventScroll: true });
             return;
         }
-        const finalCard = [...this.window.querySelectorAll('.st-devtools-source')]
-            .find((node) => node.dataset.sourceType === 'final');
         if (!finalCard) return;
-        finalCard.open = true;
         finalCard.classList.add('rule-focus');
         finalCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
         finalCard.querySelector('summary')?.focus({ preventScroll: true });
@@ -997,16 +1152,53 @@ export class DevToolsWindow {
     renderTimeline() {
         const page = element('div', { className: 'st-devtools-page' });
         const analyses = buildTimelineAnalysis(this.timeline, { includeSourceChanges: false });
-        const toolbar = element('div', { className: 'st-devtools-toolbar' });
-        toolbar.appendChild(element('span', {
+        page.appendChild(element('p', {
+            className: 'st-devtools-section-intro',
             text: t('snapshot.retained', { count: this.timeline.length }),
         }));
-        const actions = element('span', { className: 'st-devtools-toolbar-actions' });
-        actions.append(
-            this.renderTimelineDiagnosticButton('json'),
-            this.renderTimelineDiagnosticButton('markdown'),
-            this.renderAllTimelineDiagnosticButton('json'),
-            this.renderAllTimelineDiagnosticButton('markdown'),
+
+        const toolbox = element('details', {
+            className: 'st-devtools-toolbox st-devtools-timeline-toolbox',
+        });
+        const toolboxSummary = element('summary');
+        const toolboxHeading = element('span', { className: 'st-devtools-toolbox-heading' });
+        toolboxHeading.append(
+            element('strong', { text: t('timeline.toolsTitle') }),
+            element('small', { text: t('timeline.toolsDescription') }),
+        );
+        toolboxSummary.appendChild(toolboxHeading);
+        const toolboxContent = element('div', { className: 'st-devtools-toolbox-content' });
+        const toolRow = (titleKey, descriptionKey, buttons, className = '') => {
+            const row = element('div', {
+                className: `st-devtools-tool-row ${className}`.trim(),
+            });
+            const description = element('span', { className: 'st-devtools-tool-description' });
+            description.append(
+                element('strong', { text: t(titleKey) }),
+                element('small', { text: t(descriptionKey) }),
+            );
+            const actions = element('span', { className: 'st-devtools-tool-row-actions' });
+            actions.append(...buttons);
+            row.append(description, actions);
+            return row;
+        };
+        toolboxContent.append(
+            toolRow(
+                'timeline.currentReportTitle',
+                'timeline.diagnosticDescription',
+                [
+                    this.renderTimelineDiagnosticButton('json'),
+                    this.renderTimelineDiagnosticButton('markdown'),
+                ],
+            ),
+            toolRow(
+                'timeline.allReportTitle',
+                'timeline.allDiagnosticDescription',
+                [
+                    this.renderAllTimelineDiagnosticButton('json'),
+                    this.renderAllTimelineDiagnosticButton('markdown'),
+                ],
+            ),
         );
         const importInput = element('input', { className: 'st-devtools-file-input' });
         importInput.type = 'file';
@@ -1023,25 +1215,27 @@ export class DevToolsWindow {
             type: 'button',
         });
         importButton.addEventListener('click', () => importInput.click());
-        actions.append(importButton, importInput);
         const clear = element('button', { className: 'menu_button', text: t('action.clearTimeline'), type: 'button' });
         clear.disabled = this.timeline.length === 0;
         clear.addEventListener('click', async () => {
             if (!confirm(t('timeline.deleteConfirm'))) return;
             await this.clearCurrentTimeline();
         });
-        actions.appendChild(clear);
-        toolbar.appendChild(actions);
-        page.appendChild(toolbar);
-        const diagnosticNote = element('small', {
-            className: 'st-devtools-timeline-diagnostic-note',
-            text: t('timeline.diagnosticDescription'),
-        });
-        diagnosticNote.append(
-            document.createElement('br'),
-            document.createTextNode(t('timeline.allDiagnosticDescription')),
+        toolboxContent.append(
+            toolRow(
+                'timeline.importTitle',
+                'timeline.importDescription',
+                [importButton, importInput],
+            ),
+            toolRow(
+                'timeline.clearTitle',
+                'timeline.clearDescription',
+                [clear],
+                'is-danger',
+            ),
         );
-        page.appendChild(diagnosticNote);
+        toolbox.append(toolboxSummary, toolboxContent);
+        page.appendChild(toolbox);
         const diagnosticStatus = this.renderDiagnosticImportStatus();
         if (diagnosticStatus) page.appendChild(diagnosticStatus);
 
@@ -1050,7 +1244,23 @@ export class DevToolsWindow {
             return page;
         }
 
-        page.appendChild(this.renderGrowthChart(analyses));
+        const growthDetails = element('details', {
+            className: 'st-devtools-disclosure st-devtools-growth-disclosure',
+        });
+        const growthSummary = element('summary');
+        growthSummary.append(
+            element('strong', { text: t('timeline.growthToggle') }),
+            element('small', {
+                text: t('timeline.maximumTokens', {
+                    count: Math.max(
+                        0,
+                        ...analyses.map(({ snapshot }) => Number(snapshot.stats?.totalTokens) || 0),
+                    ),
+                }),
+            }),
+        );
+        growthDetails.append(growthSummary, this.renderGrowthChart(analyses));
+        page.appendChild(growthDetails);
         const list = element('div', { className: 'st-devtools-timeline' });
         for (const analysis of [...analyses].reverse()) {
             const { snapshot, previous, tokenDelta, lore } = analysis;
@@ -1409,7 +1619,22 @@ export class DevToolsWindow {
         const baseSelect = this.createTimelineSelect(this.timeline.at(-2).id, t('diff.base'));
         const compareSelect = this.createTimelineSelect(this.selectedSnapshot()?.id ?? this.timeline.at(-1).id, t('diff.compare'));
         selectors.append(baseSelect.wrapper, compareSelect.wrapper);
+        const description = element('p', {
+            className: 'st-devtools-section-intro',
+            text: t('diff.description'),
+        });
         const diffOutput = element('pre', { className: 'st-devtools-diff-output' });
+        const fullDiff = element('details', {
+            className: 'st-devtools-disclosure st-devtools-full-diff',
+        });
+        const fullDiffSummary = element('summary');
+        const fullDiffHeading = element('span', { className: 'st-devtools-toolbox-heading' });
+        fullDiffHeading.append(
+            element('strong', { text: t('diff.fullPromptChanges') }),
+            element('small', { text: t('diff.fullPromptDescription') }),
+        );
+        fullDiffSummary.appendChild(fullDiffHeading);
+        fullDiff.append(fullDiffSummary, diffOutput);
         const sourceSection = element('section', { className: 'st-devtools-diff-section' });
         const loreSection = element('section', { className: 'st-devtools-diff-section' });
         const renderDiff = () => {
@@ -1426,7 +1651,7 @@ export class DevToolsWindow {
         };
         baseSelect.select.addEventListener('change', renderDiff);
         compareSelect.select.addEventListener('change', renderDiff);
-        page.append(selectors, diffOutput, sourceSection, loreSection);
+        page.append(selectors, description, sourceSection, loreSection, fullDiff);
         renderDiff();
         return page;
     }
@@ -1458,11 +1683,11 @@ export class DevToolsWindow {
 
         const list = element('div', { className: 'st-devtools-source-change-list' });
         for (const change of changes) {
-            const card = element('article', {
+            const card = element('details', {
                 className: `st-devtools-source-change status-${change.status}`,
             });
-            const header = element('header');
-            header.append(
+            const summary = element('summary');
+            summary.append(
                 element('strong', { text: sourceDisplayLabel(change.source) }),
                 element('span', {
                     className: 'st-devtools-source-change-status',
@@ -1491,7 +1716,7 @@ export class DevToolsWindow {
                     change.after?.content ?? '',
                 );
             }
-            card.append(header, content);
+            card.append(summary, content);
             list.appendChild(card);
         }
         section.appendChild(list);
@@ -1528,10 +1753,12 @@ export class DevToolsWindow {
         const page = element('div', { className: 'st-devtools-page' });
         page.appendChild(this.renderSnapshotPicker());
         const capture = snapshot.capture ?? {};
-        const captureCard = element('section', { className: 'st-devtools-capture-boundary' });
-        const captureHeader = element('header');
-        captureHeader.append(
-            element('strong', { text: t('capture.title') }),
+        const captureCard = element('details', {
+            className: 'st-devtools-capture-boundary st-devtools-disclosure',
+        });
+        const captureSummary = element('summary');
+        captureSummary.append(
+            element('strong', { text: t('context.captureDetails') }),
             element('span', {
                 className: `st-devtools-capture-stage${capture.fallback ? ' fallback' : ''}`,
                 text: t(`capture.stage.${capture.stage ?? 'prompt-ready'}`),
@@ -1545,8 +1772,9 @@ export class DevToolsWindow {
         if (capture.migratedFrom) {
             captureDescription = t('capture.legacyDescription');
         }
-        captureCard.append(
-            captureHeader,
+        const captureContent = element('div', { className: 'st-devtools-capture-content' });
+        captureContent.append(
+            element('strong', { text: t('capture.title') }),
             element('p', { text: captureDescription }),
             element('small', {
                 text: t('capture.event', { event: capture.eventName ?? t('common.unknown') }),
@@ -1558,32 +1786,33 @@ export class DevToolsWindow {
             }),
         );
         if (snapshot.request?.redactedPaths?.length) {
-            captureCard.appendChild(element('small', {
+            captureContent.appendChild(element('small', {
                 className: 'st-devtools-capture-redacted',
                 text: t('capture.redacted', { count: snapshot.request.redactedPaths.length }),
             }));
         }
         if (snapshot.request?.omittedMediaPaths?.length) {
-            captureCard.appendChild(element('small', {
+            captureContent.appendChild(element('small', {
                 className: 'st-devtools-capture-redacted',
                 text: t('capture.mediaOmitted', { count: snapshot.request.omittedMediaPaths.length }),
             }));
         }
+        captureCard.append(captureSummary, captureContent);
 
-        const stats = element('div', { className: 'st-devtools-stats' });
         const structured = snapshot.stats?.structured ?? {};
-        const statValues = [
+        const largestSource = largestIncludedSource(snapshot.sources);
+        const coreStatValues = [
             [t('stat.promptTokens'), snapshot.stats.totalTokens],
-            [t('stat.contextLimit'), snapshot.stats.maxContext ?? t('common.unknown')],
-            [t('stat.reservedOutput'), snapshot.stats.maxOutput ?? t('common.unknown')],
-            [t('stat.remaining'), snapshot.stats.remainingContext ?? t('common.unknown')],
             [t('stat.contextUsage'), snapshot.stats.contextUsage == null ? t('common.unknown') : `${(snapshot.stats.contextUsage * 100).toFixed(1)}%`],
+            [t('stat.remaining'), snapshot.stats.remainingContext ?? t('common.unknown')],
             [
                 t('stat.largestSource'),
-                [...snapshot.sources]
-                    .filter((source) => source.type !== 'final')
-                    .sort((a, b) => b.tokenCount - a.tokenCount)[0],
+                largestSource,
             ],
+        ];
+        const detailStatValues = [
+            [t('stat.contextLimit'), snapshot.stats.maxContext ?? t('common.unknown')],
+            [t('stat.reservedOutput'), snapshot.stats.maxOutput ?? t('common.unknown')],
             [t('stat.toolSchemas'), structured.toolSchemas ?? 0],
             [t('stat.toolCalls'), structured.toolCalls ?? 0],
             [t('stat.toolResults'), structured.toolResults ?? 0],
@@ -1601,29 +1830,58 @@ export class DevToolsWindow {
                     : `${(structured.multimodalEstimateCoverage * 100).toFixed(1)}%`,
             ],
         ];
-        for (const [label, value] of statValues) {
-            const card = element('div', { className: 'st-devtools-stat' });
-            const displayValue = typeof value === 'object' && value
-                ? sourceDisplayLabel(value)
-                : value ?? t('common.unknown');
-            card.append(element('small', { text: label }), element('strong', { text: displayValue }));
-            stats.appendChild(card);
-        }
+        const renderStats = (values, className = '') => {
+            const stats = element('div', {
+                className: `st-devtools-stats ${className}`.trim(),
+            });
+            for (const [label, value] of values) {
+                const card = element('div', { className: 'st-devtools-stat' });
+                const displayValue = typeof value === 'object' && value
+                    ? sourceDisplayLabel(value)
+                    : value ?? t('common.unknown');
+                card.append(
+                    element('small', { text: label }),
+                    element('strong', { text: displayValue }),
+                );
+                stats.appendChild(card);
+            }
+            return stats;
+        };
+        const coreStats = renderStats(coreStatValues, 'st-devtools-context-core-stats');
+        const detailStats = element('details', {
+            className: 'st-devtools-context-details st-devtools-disclosure',
+        });
+        detailStats.append(
+            element('summary', { text: t('context.moreStats') }),
+            renderStats(detailStatValues),
+        );
 
-        const toolbar = element('div', { className: 'st-devtools-toolbar' });
+        const exportTools = element('details', {
+            className: 'st-devtools-toolbox st-devtools-context-export',
+        });
+        const exportSummary = element('summary');
+        const exportHeading = element('span', { className: 'st-devtools-toolbox-heading' });
+        exportHeading.append(
+            element('strong', { text: t('context.exportTitle') }),
+            element('small', { text: t('context.exportDescription') }),
+        );
+        exportSummary.appendChild(exportHeading);
+        const exportActions = element('div', { className: 'st-devtools-tool-row-actions' });
         const copy = element('button', { className: 'menu_button', text: t('action.copy'), type: 'button' });
         copy.addEventListener('click', async () => {
             await copyText(snapshot.finalText);
             globalThis.toastr?.info?.(t('action.promptCopied'), 'ST DevTools');
         });
-        toolbar.append(copy, this.renderExportButton(snapshot, 'json'), this.renderExportButton(snapshot, 'txt'), this.renderExportButton(snapshot, 'markdown'));
+        exportActions.append(
+            copy,
+            this.renderExportButton(snapshot, 'json'),
+            this.renderExportButton(snapshot, 'txt'),
+            this.renderExportButton(snapshot, 'markdown'),
+        );
+        const exportContent = element('div', { className: 'st-devtools-toolbox-content' });
+        exportContent.appendChild(exportActions);
+        exportTools.append(exportSummary, exportContent);
 
-        const payload = element('pre', {
-            className: 'st-devtools-context-payload',
-            text: snapshot.promptType === 'chat-completion'
-                ? JSON.stringify(snapshot.payload, null, 2)
-                : snapshot.finalText,
-        });
         const settingsDetails = element('details', { className: 'st-devtools-context-details' });
         settingsDetails.append(
             element('summary', { text: t('context.requestSettings') }),
@@ -1638,18 +1896,26 @@ export class DevToolsWindow {
                 ? element('pre', { text: JSON.stringify(snapshot.request.body, null, 2) })
                 : element('p', { text: t('context.notCaptured') }),
         );
-        const payloadHeading = element('strong', {
-            className: 'st-devtools-context-heading',
-            text: t('context.promptPayload'),
+        const payloadDetails = element('details', {
+            className: 'st-devtools-context-details',
         });
+        payloadDetails.append(
+            element('summary', { text: t('context.promptPayload') }),
+            element('pre', {
+                className: 'st-devtools-context-payload',
+                text: snapshot.promptType === 'chat-completion'
+                    ? JSON.stringify(snapshot.payload, null, 2)
+                    : snapshot.finalText,
+            }),
+        );
         page.append(
+            coreStats,
             captureCard,
-            stats,
-            toolbar,
+            detailStats,
+            exportTools,
             settingsDetails,
             requestDetails,
-            payloadHeading,
-            payload,
+            payloadDetails,
         );
         return page;
     }
@@ -2496,7 +2762,11 @@ export class DevToolsWindow {
             if (item.evidence) {
                 const evidence = element('details', { className: 'st-devtools-rule-evidence' });
                 evidence.append(
-                    element('summary', { text: t('rules.evidence') }),
+                    element('summary', {
+                        text: t(item.ruleId === 'unmatched'
+                            ? 'rules.unmatched.evidence'
+                            : 'rules.evidence'),
+                    }),
                     element('pre', { text: item.evidence }),
                 );
                 card.appendChild(evidence);
@@ -2574,14 +2844,14 @@ export class DevToolsWindow {
                         this.activeTab = 'explorer';
                         localStorage.setItem(`${STORAGE_PREFIX}last-tab`, this.activeTab);
                         this.render();
-                        const source = this.window.querySelectorAll('.st-devtools-source');
-                        const sourceIndex = snapshot.sources.findIndex((entry) => entry.id === match.sourceId);
-                        if (sourceIndex >= 0) {
-                            source[sourceIndex].open = true;
-                            source[sourceIndex].scrollIntoView({ block: 'center' });
-                            source[sourceIndex].classList.add('search-focus');
-                            setTimeout(() => source[sourceIndex]?.classList.remove('search-focus'), 1500);
-                        }
+                        const source = [...this.window.querySelectorAll('.st-devtools-source')]
+                            .find((entry) => entry.dataset.sourceId === match.sourceId);
+                        if (!source) return;
+                        source.closest('.st-devtools-source-group')?.setAttribute('open', '');
+                        source.open = true;
+                        source.scrollIntoView({ block: 'center' });
+                        source.classList.add('search-focus');
+                        setTimeout(() => source?.classList.remove('search-focus'), 1500);
                     });
                     results.appendChild(item);
                 }

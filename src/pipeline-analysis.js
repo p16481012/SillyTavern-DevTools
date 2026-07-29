@@ -86,6 +86,25 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
     return results;
 }
 
+export function sourceIsIncludedInRequest(source) {
+    if (!source || source.type === 'final') return false;
+    return source.included !== false
+        && source.enabled !== false
+        && source.configuredEnabled !== false
+        && source.metadata?.enabled !== false
+        && source.metadata?.configuredEnabled !== false;
+}
+
+export function largestIncludedSource(sources = []) {
+    return sources
+        .filter(sourceIsIncludedInRequest)
+        .reduce((largest, source) => (
+            !largest || (Number(source.tokenCount) || 0) > (Number(largest.tokenCount) || 0)
+                ? source
+                : largest
+        ), null);
+}
+
 export function buildTimelineAnalysis(timeline = [], { includeSourceChanges = true } = {}) {
     const ordered = [...timeline].sort((left, right) => left.timestamp - right.timestamp);
     return ordered.map((snapshot, index) => {

@@ -74,6 +74,50 @@ test('rule inspector reports critical context and language conflicts', () => {
     );
 });
 
+test('unmatched source notice lists only active sources and explains its scope', () => {
+    const findings = analyzeSnapshot(snapshot({
+        sources: [
+            {
+                id: 'active-omitted',
+                type: 'utility',
+                label: '활성 미포함',
+                content: '현재 요청에는 없는 활성 프롬프트',
+                tokenCount: 10,
+                attribution: 'unmatched',
+                included: false,
+                configuredEnabled: true,
+                metadata: { enabled: true, configuredEnabled: true },
+            },
+            {
+                id: 'disabled',
+                type: 'utility',
+                label: '비활성',
+                content: '비활성 프롬프트',
+                tokenCount: 1000,
+                attribution: 'unmatched',
+                included: false,
+                configuredEnabled: false,
+                metadata: { enabled: false, configuredEnabled: false },
+            },
+            {
+                id: 'connected',
+                type: 'system',
+                label: '연결됨',
+                content: '연결된 프롬프트',
+                tokenCount: 10,
+                attribution: 'exact',
+                included: true,
+            },
+        ],
+    }));
+
+    const unmatched = findings.find((item) => item.id === 'unmatched-sources');
+    assert.deepEqual(unmatched?.sourceIds, ['active-omitted']);
+    assert.match(unmatched?.title ?? '', /활성 소스 1개/u);
+    assert.match(unmatched?.message ?? '', /비교 정책의 그룹 결과가 아닙니다/u);
+    assert.match(unmatched?.message ?? '', /설정 비활성이라 제외/u);
+});
+
 test('rule inspector detects duplicate sentences across sources', () => {
     const repeated = 'Always keep every response concise and use exactly one paragraph.';
     const findings = analyzeSnapshot(snapshot({

@@ -5,6 +5,7 @@ import {
     buildTimelineAnalysis,
     compareLoreEntries,
     compareSnapshotSources,
+    largestIncludedSource,
 } from '../src/pipeline-analysis.js';
 
 function source({
@@ -106,6 +107,39 @@ test('buildTimelineAnalysis calculates chronological token and lore deltas', () 
     assert.equal(analyses[1].tokenDelta, 30);
     assert.deepEqual(analyses[1].lore.activated, [beta]);
     assert.deepEqual(analyses[1].lore.removed, [alpha]);
+});
+
+test('largest source ignores disabled and request-omitted prompts', () => {
+    const largest = largestIncludedSource([
+        {
+            id: 'disabled',
+            type: 'utility',
+            tokenCount: 9000,
+            included: false,
+            configuredEnabled: false,
+        },
+        {
+            id: 'active-but-omitted',
+            type: 'utility',
+            tokenCount: 8000,
+            included: false,
+            configuredEnabled: true,
+        },
+        {
+            id: 'included',
+            type: 'system',
+            tokenCount: 120,
+            included: true,
+        },
+        {
+            id: 'final',
+            type: 'final',
+            tokenCount: 9999,
+            included: true,
+        },
+    ]);
+
+    assert.equal(largest?.id, 'included');
 });
 
 test('buildRangeSegments preserves text and supports overlapping source ranges', () => {

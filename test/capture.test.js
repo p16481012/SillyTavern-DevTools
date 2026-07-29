@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CaptureController } from '../src/capture.js';
+import { CaptureController, getConfiguredPrompts } from '../src/capture.js';
 
 class FakeEventSource {
     constructor() {
@@ -46,6 +46,57 @@ function createContext(eventSource) {
         getTokenCountAsync: async (text) => Math.ceil(text.length / 4),
     };
 }
+
+test('configured prompts follow Prompt Manager order and enabled state', () => {
+    const prompts = getConfiguredPrompts({
+        chatCompletionSettings: {
+            prompts: [
+                { identifier: 'dropdown-only', name: 'Dropdown only', enabled: true },
+                { identifier: 'second', name: 'Second', enabled: true },
+                { identifier: 'first', name: 'First', enabled: false },
+            ],
+            prompt_order: [{
+                character_id: 100001,
+                order: [
+                    { identifier: 'first', enabled: true },
+                    { identifier: 'second', enabled: false },
+                ],
+            }],
+        },
+    });
+
+    assert.deepEqual(
+        prompts.map(({ identifier, enabled, promptOrder, promptOrderSource }) => ({
+            identifier,
+            enabled,
+            promptOrder,
+            promptOrderSource,
+        })),
+        [
+            {
+                identifier: 'first',
+                enabled: true,
+                promptOrder: 0,
+                promptOrderSource: 'prompt-manager',
+            },
+            {
+                identifier: 'second',
+                enabled: false,
+                promptOrder: 1,
+                promptOrderSource: 'prompt-manager',
+            },
+        ],
+    );
+});
+
+test('an empty Prompt Manager order does not expose unattached prompt definitions', () => {
+    assert.deepEqual(getConfiguredPrompts({
+        chatCompletionSettings: {
+            prompts: [{ identifier: 'dropdown-only', name: 'Dropdown only' }],
+            prompt_order: [{ character_id: 100001, order: [] }],
+        },
+    }), []);
+});
 
 async function waitFor(predicate, timeoutMs = 500) {
     const started = Date.now();

@@ -803,7 +803,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         });
     }
 
-    for (const prompt of contextState.configuredPrompts ?? []) {
+    for (const [promptIndex, prompt] of (contextState.configuredPrompts ?? []).entries()) {
         const type = classifyConfiguredPrompt(prompt);
         const configuredEnabled = prompt?.enabled ?? null;
         const match = findConfiguredPromptMatch(prompt, messageEntries);
@@ -820,6 +820,10 @@ export function buildSources(contextState, payload, activatedLore = [], request 
                 role: prompt?.role ?? null,
                 enabled: configuredEnabled,
                 configuredEnabled,
+                promptOrder: Number.isFinite(prompt?.promptOrder)
+                    ? prompt.promptOrder
+                    : promptIndex,
+                promptOrderSource: prompt?.promptOrderSource ?? 'captured-array',
                 position: prompt?.position
                     ?? prompt?.injection_position
                     ?? prompt?.injectionPosition
