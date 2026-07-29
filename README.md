@@ -4,12 +4,12 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 
 ## 현재 버전
 
-`v0.8.0`
+`v0.8.1`
 
 주요 기능:
 
 - Magic Wand 메뉴에서 실행
-- 밝은/어두운 테마를 감지하는 완전 불투명 패널
+- 밝은/어두운 테마를 감지하는 완전 불투명 패널과 테마별 고대비 상태색
 - 드래그·크기 조절이 가능한 한국어 UI
 - 읽기 전용 상태 표시
 - Chat Completion 및 Text Completion 요청 준비 시점 캡처
@@ -163,7 +163,7 @@ npm test
 
 UI 접근성을 수동 검토할 때는 `npm run sandbox`를 실행하고 출력된 로컬 주소를 엽니다.
 
-구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요.
+구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.1 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요.
 
 ## v0.9.0 예정 방향
 

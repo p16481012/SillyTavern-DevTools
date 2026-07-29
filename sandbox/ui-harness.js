@@ -2,14 +2,16 @@ import { DevToolsWindow } from '../src/ui.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
-    const koreanInstruction = '반드시 한국어로 답변하세요.';
+    const koreanInstruction = additions.koreanInstruction ?? '반드시 한국어로 답변하세요.';
     const japaneseInstruction = 'Always respond in Japanese.';
     const englishInstruction = 'Always respond in English.';
+    const addedInstruction = additions.addedInstruction ?? null;
     const finalText = [
         '# 1 SYSTEM',
         koreanInstruction,
         japaneseInstruction,
         englishInstruction,
+        ...(addedInstruction ? [addedInstruction] : []),
         '시스템 안전 지시를 따르세요.',
         '사용자 민수에게 친절하게 답하세요.',
         '',
@@ -19,7 +21,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 4,
-        extensionVersion: '0.8.0',
+        extensionVersion: '0.8.1',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -36,6 +38,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     koreanInstruction,
                     japaneseInstruction,
                     englishInstruction,
+                    ...(addedInstruction ? [addedInstruction] : []),
                 ].join('\n'),
             },
             {
@@ -166,6 +169,30 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 }],
                 provenance: { method: 'request-payload', confidence: 1 },
             },
+            ...(addedInstruction ? [{
+                id: 'utility:output-length',
+                type: 'utility',
+                label: 'Custom | 출력 길이',
+                content: addedInstruction,
+                color: '#d97706',
+                attribution: 'exact',
+                included: true,
+                configuredEnabled: true,
+                tokenCount: 9,
+                metadata: {
+                    sourceKind: 'configuredPrompt',
+                    identifier: 'output-length',
+                    name: 'Custom | 출력 길이',
+                    enabled: true,
+                    configuredEnabled: true,
+                    role: 'system',
+                },
+                ranges: [{
+                    start: finalText.indexOf(addedInstruction),
+                    end: finalText.indexOf(addedInstruction) + addedInstruction.length,
+                }],
+                provenance: { method: 'configured-payload-exact', confidence: 1 },
+            }] : []),
             {
                 id: 'extension:1',
                 type: 'extension',
@@ -224,6 +251,27 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 provenance: { method: 'normalized', confidence: 0.95 },
             },
             {
+                id: 'utility:unmatched',
+                type: 'utility',
+                label: 'Sub | NSFW (묘사 중심)',
+                content: '노출 수위와 묘사 강도를 조절합니다.',
+                color: '#b45309',
+                attribution: 'unmatched',
+                included: false,
+                configuredEnabled: false,
+                tokenCount: 7,
+                metadata: {
+                    sourceKind: 'configuredPrompt',
+                    identifier: 'nsfw-description',
+                    name: 'Sub | NSFW (묘사 중심)',
+                    enabled: false,
+                    configuredEnabled: false,
+                    role: 'system',
+                },
+                ranges: [],
+                provenance: { method: 'unmatched', confidence: null },
+            },
+            {
                 id: 'final:4',
                 type: 'final',
                 label: 'Final Prompt',
@@ -266,6 +314,8 @@ let timeline = [
     createSnapshot('sandbox-3', Date.now(), 214, {
         correlationMethod: 'explicit-id',
         correlationId: 'sandbox-request',
+        koreanInstruction: '반드시 자연스러운 한국어로 답변하세요.',
+        addedInstruction: '답변은 300자 이내로 작성하세요.',
     }),
 ];
 const otherTimeline = [
@@ -304,7 +354,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.0',
+    version: '0.8.1',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

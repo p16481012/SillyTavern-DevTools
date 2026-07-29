@@ -5,6 +5,11 @@
     --st-devtools-hover: #343b44;
     --st-devtools-border: #4b5563;
     --st-devtools-text: #f1f5f9;
+    --st-devtools-status-success: #86efac;
+    --st-devtools-status-info: #93c5fd;
+    --st-devtools-status-cyan: #67e8f9;
+    --st-devtools-status-warning: #fcd34d;
+    --st-devtools-status-danger: #fca5a5;
     position: fixed;
     inset: 0;
     z-index: 40000;
@@ -19,6 +24,11 @@
     --st-devtools-hover: #dce2e8;
     --st-devtools-border: #9aa4b2;
     --st-devtools-text: #1f2937;
+    --st-devtools-status-success: #166534;
+    --st-devtools-status-info: #1d4ed8;
+    --st-devtools-status-cyan: #075985;
+    --st-devtools-status-warning: #92400e;
+    --st-devtools-status-danger: #991b1b;
     background-color: rgb(15 23 42 / 35%);
 }
 
@@ -80,11 +90,21 @@
 
 .st-devtools-readonly-badge {
     padding: 0.15rem 0.45rem;
-    border: 1px solid #22c55e;
+    border: 1px solid var(--st-devtools-status-success);
     border-radius: 999px;
-    color: #22c55e;
+    color: var(--st-devtools-status-success);
     font-size: 0.72rem;
     font-weight: 700;
+}
+
+.st-devtools-window .menu_button {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    white-space: nowrap;
+    word-break: keep-all;
+    overflow-wrap: normal;
+    writing-mode: horizontal-tb;
 }
 
 .st-devtools-header-actions .menu_button {
@@ -103,19 +123,37 @@
 .st-devtools-tab {
     appearance: none;
     border: 0;
-    border-bottom: 2px solid transparent;
+    border-bottom: 3px solid transparent;
     padding: 0.55rem 0.75rem;
     background: var(--st-devtools-surface);
     color: inherit;
     cursor: pointer;
+    outline: 0;
+    box-shadow: none;
     white-space: nowrap;
 }
 
 .st-devtools-tab:hover,
-.st-devtools-tab.active,
-.st-devtools-tab:focus-visible {
+.st-devtools-tab:focus {
+    border: 0;
+    border-bottom: 3px solid transparent;
+    outline: 0;
+    box-shadow: none;
+}
+
+.st-devtools-tab.active {
     border-bottom-color: var(--SmartThemeQuoteColor, #60a5fa);
     background: var(--st-devtools-hover);
+}
+
+@media (hover: hover) {
+    .st-devtools-tab:not(.active):hover {
+        background: color-mix(
+            in srgb,
+            var(--st-devtools-hover) 45%,
+            var(--st-devtools-surface)
+        );
+    }
 }
 
 .st-devtools-tab:focus-visible {
@@ -275,23 +313,23 @@
 }
 
 .attribution-exact {
-    color: #86efac;
+    color: var(--st-devtools-status-success);
 }
 
 .attribution-normalized {
-    color: #67e8f9;
+    color: var(--st-devtools-status-cyan);
 }
 
 .attribution-template {
-    color: #fcd34d;
+    color: var(--st-devtools-status-warning);
 }
 
 .attribution-derived {
-    color: #93c5fd;
+    color: var(--st-devtools-status-info);
 }
 
 .attribution-unmatched {
-    color: #fbbf24;
+    color: var(--st-devtools-status-warning);
 }
 
 .st-devtools-multimodal-method,
@@ -370,12 +408,12 @@
     background: var(--st-devtools-hover);
 }
 
-.st-devtools-timeline-item span,
-.st-devtools-timeline-item small {
+.st-devtools-timeline-item > span:not(.st-devtools-timeline-changes),
+.st-devtools-timeline-item > small {
     opacity: 0.75;
 }
 
-.st-devtools-timeline-delete {
+.st-devtools-window .st-devtools-timeline-delete {
     align-self: stretch;
     min-width: 2.7rem;
     margin: 0;
@@ -403,20 +441,20 @@
 .st-devtools-change-pill.increased,
 .st-devtools-change-pill.activated,
 .status-added .st-devtools-source-change-status {
-    color: #86efac;
+    color: var(--st-devtools-status-success);
 }
 
 .st-devtools-change-pill.decreased {
-    color: #93c5fd;
+    color: var(--st-devtools-status-cyan);
 }
 
 .st-devtools-change-pill.removed,
 .status-removed .st-devtools-source-change-status {
-    color: #fca5a5;
+    color: var(--st-devtools-status-danger);
 }
 
 .status-changed .st-devtools-source-change-status {
-    color: #fcd34d;
+    color: var(--st-devtools-status-warning);
 }
 
 .st-devtools-lore-change-list {
@@ -430,11 +468,11 @@
 }
 
 .st-devtools-lore-change-list strong {
-    color: #86efac;
+    color: var(--st-devtools-status-success);
 }
 
 .st-devtools-lore-change-list .removed strong {
-    color: #fca5a5;
+    color: var(--st-devtools-status-danger);
 }
 
 .st-devtools-lore-change-list ul {
@@ -668,20 +706,20 @@
 
 .st-devtools-capture-stage {
     padding: 0.2rem 0.55rem;
-    border: 1px solid #22c55e;
+    border: 1px solid var(--st-devtools-status-success);
     border-radius: 999px;
-    color: #22c55e;
+    color: var(--st-devtools-status-success);
     font-size: 0.78rem;
     font-weight: 700;
 }
 
 .st-devtools-capture-stage.fallback {
-    border-color: #f59e0b;
-    color: #f59e0b;
+    border-color: var(--st-devtools-status-warning);
+    color: var(--st-devtools-status-warning);
 }
 
 .st-devtools-capture-redacted {
-    color: #f59e0b;
+    color: var(--st-devtools-status-warning);
 }
 
 .st-devtools-context-details {
@@ -719,12 +757,22 @@
 
 .st-devtools-search-controls {
     display: grid;
-    grid-template-columns: minmax(15rem, 1fr) auto auto;
+    grid-template-columns: minmax(15rem, 1fr) auto;
     align-items: center;
     gap: 0.8rem;
 }
 
-.st-devtools-search-controls label {
+.st-devtools-search-options {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem 1rem;
+}
+
+.st-devtools-search-options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     white-space: nowrap;
 }
 
@@ -871,7 +919,7 @@
 
 .st-devtools-policy-invalid,
 .st-devtools-policy-form-status {
-    color: #ef4444;
+    color: var(--st-devtools-status-danger);
 }
 
 .st-devtools-policy-invalid {
@@ -991,8 +1039,8 @@
 }
 
 .st-devtools-policy-result-count.has-warning {
-    border-color: #f59e0b;
-    color: #f59e0b;
+    border-color: var(--st-devtools-status-warning);
+    color: var(--st-devtools-status-warning);
 }
 
 .st-devtools-policy-result-content {
@@ -1075,15 +1123,15 @@
 }
 
 .severity-critical {
-    --severity-color: #ef4444;
+    --severity-color: var(--st-devtools-status-danger);
 }
 
 .severity-warning {
-    --severity-color: #f59e0b;
+    --severity-color: var(--st-devtools-status-warning);
 }
 
 .severity-info {
-    --severity-color: #3b82f6;
+    --severity-color: var(--st-devtools-status-info);
 }
 
 .st-devtools-rule-count {
@@ -1155,7 +1203,7 @@
 }
 
 .st-devtools-rule-empty > i {
-    color: #22c55e;
+    color: var(--st-devtools-status-success);
     font-size: 2rem;
 }
 

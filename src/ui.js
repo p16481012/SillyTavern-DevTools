@@ -2541,12 +2541,14 @@ export class DevToolsWindow {
         const regexLabel = element('label');
         const regex = element('input');
         regex.type = 'checkbox';
-        regexLabel.append(regex, document.createTextNode(` ${t('search.regex')}`));
+        regexLabel.append(regex, document.createTextNode(t('search.regex')));
         const caseLabel = element('label');
         const caseSensitive = element('input');
         caseSensitive.type = 'checkbox';
-        caseLabel.append(caseSensitive, document.createTextNode(` ${t('search.matchCase')}`));
-        controls.append(input, regexLabel, caseLabel);
+        caseLabel.append(caseSensitive, document.createTextNode(t('search.matchCase')));
+        const options = element('div', { className: 'st-devtools-search-options' });
+        options.append(regexLabel, caseLabel);
+        controls.append(input, options);
         const status = element('p', { className: 'st-devtools-search-status' });
         const results = element('div', { className: 'st-devtools-search-results' });
 
