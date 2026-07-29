@@ -1,3 +1,11 @@
+import {
+    DEFAULT_COMPARISON_POLICY_SETTINGS,
+    annotateSourcesWithPolicies,
+    compareSourcePair,
+    normalizeComparisonPolicySettings,
+    sourceEligibility,
+    summarizeAlternativeGroups,
+} from './comparison-policy.js';
 import { sourceDisplayLabel, t } from './i18n.js';
 
 export const RULE_DEFINITIONS = Object.freeze([
@@ -123,14 +131,16 @@ function finding(ruleId, id, severity, titleKey, messageKey, variables = {}, det
         evidence: details.evidence ?? null,
         sourceIds: details.sourceIds ?? [],
         finalRanges: details.finalRanges ?? [],
+        method: details.method ?? 'source-static',
+        confidence: details.confidence ?? 'medium',
     };
 }
 
 function normalizeSentence(sentence) {
     return sentence
         .toLocaleLowerCase()
-        .replace(/[`*_>#()[\]{}]/g, ' ')
-        .replace(/\s+/g, ' ')
+        .replace(/[`*_>#()[\]{}]/gu, ' ')
+        .replace(/\s+/gu, ' ')
         .trim();
 }
 
@@ -144,64 +154,56 @@ function getSentences(source, minimumLength) {
         .filter((sentence) => sentence.normalized.length >= minimumLength);
 }
 
+function validRanges(source) {
+    return (source?.ranges ?? [])
+        .map(({ start, end }) => ({ start: Number(start), end: Number(end) }))
+        .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start);
+}
+
 function sourceRanges(sources, sourceIds) {
     const selected = new Set(sourceIds);
     return sources
         .filter((source) => selected.has(source.id))
-        .flatMap((source) => source.ranges ?? [])
-        .map(({ start, end }) => ({ start, end }));
+        .flatMap(validRanges);
 }
 
-function analyzeDuplicates(sources, minimumLength) {
-    const occurrences = new Map();
-    for (const source of sources) {
-        for (const sentence of getSentences(source, minimumLength)) {
-            const list = occurrences.get(sentence.normalized) ?? [];
-            list.push({ source, original: sentence.original });
-            occurrences.set(sentence.normalized, list);
-        }
+function projectLocalRange(source, start, end) {
+    if (source.synthetic) {
+        return [{ start, end }];
     }
-
-    const results = [];
-    for (const [normalized, items] of occurrences) {
-        const sourceIds = [...new Set(items.map((item) => item.source.id))];
-        if (sourceIds.length > 1) {
-            results.push(finding(
-                'duplicates',
-                `duplicate:${normalized.slice(0, 40)}`,
-                'warning',
-                'rules.duplicate.title',
-                'rules.duplicate.message',
-                { count: sourceIds.length },
-                {
-                    evidence: items[0].original,
-                    sourceIds,
-                    finalRanges: sourceRanges(sources, sourceIds),
-                },
-            ));
-            continue;
+    const contentLength = source.content?.length ?? 0;
+    return validRanges(source).map((range) => {
+        if (
+            source.attribution === 'exact'
+            && contentLength > 0
+            && range.end - range.start === contentLength
+        ) {
+            return {
+                start: Math.min(range.end, range.start + start),
+                end: Math.min(range.end, range.start + end),
+            };
         }
+        return range;
+    }).filter((range) => range.end > range.start);
+}
 
-        if (items.length > 1) {
-            results.push(finding(
-                'duplicates',
-                `repeated:${sourceIds[0]}:${normalized.slice(0, 40)}`,
-                'info',
-                'rules.repeated.title',
-                'rules.repeated.message',
-                {
-                    source: sourceDisplayLabel(items[0].source),
-                    count: items.length,
-                },
-                {
-                    evidence: items[0].original,
-                    sourceIds,
-                    finalRanges: sourceRanges(sources, sourceIds),
-                },
-            ));
-        }
-    }
-    return results.slice(0, 30);
+function sourceIdsFromRecords(records) {
+    return [...new Set(records
+        .map(({ source }) => source)
+        .filter((source) => !source.synthetic)
+        .map(({ id }) => id))];
+}
+
+function finalRangesFromRecords(records) {
+    const seen = new Set();
+    return records
+        .flatMap((record) => record.finalRanges ?? [])
+        .filter(({ start, end }) => {
+            const key = `${start}:${end}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
 }
 
 function detectPatternMatches(text, patterns) {
@@ -220,35 +222,6 @@ function detectPatternMatches(text, patterns) {
     return matches;
 }
 
-function sourceIdsForFinalMatches(sources, matches) {
-    const finalRanges = matches
-        .map(({ start, end }) => ({ start: Number(start), end: Number(end) }))
-        .filter(({ start, end }) => (
-            Number.isFinite(start)
-            && Number.isFinite(end)
-            && end > start
-        ));
-    return sources
-        .filter((source) => (source.ranges ?? []).some((range) => {
-            const start = Number(range.start);
-            const end = Number(range.end);
-            return Number.isFinite(start)
-                && Number.isFinite(end)
-                && end > start
-                && finalRanges.some((finalRange) => (
-                    start < finalRange.end && finalRange.start < end
-                ));
-        }))
-        .map((source) => source.id);
-}
-
-function formatsConflict(formats) {
-    const set = new Set(formats);
-    return (set.has('JSON') && set.has('XML'))
-        || (set.has('Markdown') && set.has('일반 텍스트'))
-        || set.size >= 3;
-}
-
 function detectRoles(text) {
     const matches = [];
     const patterns = [
@@ -257,9 +230,10 @@ function detectRoles(text) {
         /(?:역할은|역할:)\s*([^.\n]{3,80})/gu,
     ];
     for (const pattern of patterns) {
+        pattern.lastIndex = 0;
         for (const match of text.matchAll(pattern)) {
             matches.push({
-                label: match[1].replace(/\s+/g, ' ').trim().toLocaleLowerCase(),
+                label: match[1].replace(/\s+/gu, ' ').trim().toLocaleLowerCase(),
                 text: match[0],
                 start: match.index,
                 end: match.index + match[0].length,
@@ -267,23 +241,6 @@ function detectRoles(text) {
         }
     }
     return matches;
-}
-
-function detectDirectiveConflicts(text) {
-    const conflicts = [];
-    for (const pair of DIRECTIVE_PAIRS) {
-        const positive = pair.positive.exec(text);
-        const negative = pair.negative.exec(text);
-        if (!positive || !negative) continue;
-        conflicts.push({
-            label: pair.label,
-            matches: [
-                { text: positive[0], start: positive.index, end: positive.index + positive[0].length },
-                { text: negative[0], start: negative.index, end: negative.index + negative[0].length },
-            ],
-        });
-    }
-    return conflicts;
 }
 
 function matchRanges(text, pattern) {
@@ -295,15 +252,217 @@ function matchRanges(text, pattern) {
     }));
 }
 
-export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
-    const settings = normalizeRuleSettings(rawSettings);
-    const findings = [];
-    const sources = (snapshot?.sources ?? []).filter((source) => (
-        source.type !== 'final'
-        && source.type !== 'chat_history'
-        && source.content?.trim()
+function matchFirst(text, pattern) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(text);
+    if (!match) return null;
+    return {
+        text: match[0],
+        start: match.index,
+        end: match.index + match[0].length,
+    };
+}
+
+function recordsForSources(sources, detector) {
+    return sources.flatMap((source) => detector(source.content).map((match) => ({
+        ...match,
+        source,
+        finalRanges: projectLocalRange(source, match.start, match.end),
+    })));
+}
+
+function suppressionCollector() {
+    const records = [];
+    const keys = new Set();
+    return {
+        records,
+        compare(left, right, category) {
+            if (left.id === right.id) return true;
+            const decision = compareSourcePair(left, right, category);
+            if (decision.compare) return true;
+            const sourceIds = [left.id, right.id].sort();
+            const key = `${category}:${decision.groupKey}:${sourceIds.join(':')}`;
+            if (!keys.has(key)) {
+                keys.add(key);
+                records.push({
+                    leftId: left.id,
+                    rightId: right.id,
+                    sourceIds: [left.id, right.id],
+                    category,
+                    group: decision.group,
+                    groupKey: decision.groupKey,
+                    mode: decision.mode,
+                    reason: decision.reason,
+                });
+            }
+            return false;
+        },
+    };
+}
+
+function conflictingRecords(records, category, incompatible, collector) {
+    const selected = new Set();
+    for (let leftIndex = 0; leftIndex < records.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < records.length; rightIndex += 1) {
+            const left = records[leftIndex];
+            const right = records[rightIndex];
+            if (!incompatible(left.label, right.label)) continue;
+            if (!collector.compare(left.source, right.source, category)) continue;
+            selected.add(left);
+            selected.add(right);
+        }
+    }
+    return [...selected];
+}
+
+function formatsConflict(left, right) {
+    const pair = new Set([left, right]);
+    return (pair.has('JSON') && pair.has('XML'))
+        || (pair.has('Markdown') && pair.has('일반 텍스트'));
+}
+
+function shadowedUnmatchedSources(sources) {
+    const exactContents = new Set(sources
+        .filter((source) => source.attribution !== 'unmatched')
+        .map((source) => source.content?.trim())
+        .filter(Boolean));
+    return sources.filter((source) => (
+        source.attribution === 'unmatched'
+        && exactContents.has(source.content?.trim())
     ));
+}
+
+function analyzeDuplicates(sources, minimumLength, collector) {
+    const occurrences = new Map();
+    for (const source of sources) {
+        for (const sentence of getSentences(source, minimumLength)) {
+            const list = occurrences.get(sentence.normalized) ?? [];
+            list.push({ source, original: sentence.original });
+            occurrences.set(sentence.normalized, list);
+        }
+    }
+
+    const results = [];
+    for (const [normalized, items] of occurrences) {
+        const uniqueSources = [...new Map(items.map((item) => [item.source.id, item.source])).values()];
+        const selected = new Set();
+        for (let leftIndex = 0; leftIndex < uniqueSources.length; leftIndex += 1) {
+            for (
+                let rightIndex = leftIndex + 1;
+                rightIndex < uniqueSources.length;
+                rightIndex += 1
+            ) {
+                const left = uniqueSources[leftIndex];
+                const right = uniqueSources[rightIndex];
+                if (!collector.compare(left, right, 'duplicates')) continue;
+                selected.add(left);
+                selected.add(right);
+            }
+        }
+
+        if (selected.size > 1) {
+            const sourceIds = [...selected].map(({ id }) => id);
+            results.push(finding(
+                'duplicates',
+                `duplicate:${normalized.slice(0, 40)}`,
+                'warning',
+                'rules.duplicate.title',
+                'rules.duplicate.message',
+                { count: sourceIds.length },
+                {
+                    evidence: items[0].original,
+                    sourceIds,
+                    finalRanges: sourceRanges(sources, sourceIds),
+                    confidence: 'high',
+                },
+            ));
+            continue;
+        }
+
+        if (uniqueSources.length === 1 && items.length > 1) {
+            const source = uniqueSources[0];
+            results.push(finding(
+                'duplicates',
+                `repeated:${source.id}:${normalized.slice(0, 40)}`,
+                'info',
+                'rules.repeated.title',
+                'rules.repeated.message',
+                {
+                    source: sourceDisplayLabel(source),
+                    count: items.length,
+                },
+                {
+                    evidence: items[0].original,
+                    sourceIds: source.synthetic ? [] : [source.id],
+                    finalRanges: validRanges(source),
+                    confidence: 'high',
+                },
+            ));
+        }
+    }
+    return results.slice(0, 30);
+}
+
+function sortFindings(findings) {
+    const order = { critical: 0, warning: 1, info: 2 };
+    return findings.sort((left, right) => order[left.severity] - order[right.severity]);
+}
+
+export function analyzeSnapshotDetailed(
+    snapshot,
+    rawSettings = DEFAULT_RULE_SETTINGS,
+    rawComparisonSettings = DEFAULT_COMPARISON_POLICY_SETTINGS,
+) {
+    const settings = normalizeRuleSettings(rawSettings);
+    const comparisonSettings = normalizeComparisonPolicySettings(rawComparisonSettings);
+    const findings = [];
+    const annotatedSources = annotateSourcesWithPolicies(
+        snapshot?.sources ?? [],
+        comparisonSettings,
+    );
+    const skippedSources = [];
+    let eligibleSources = [];
+
+    for (const source of annotatedSources) {
+        const eligibility = sourceEligibility(source);
+        if (eligibility.eligible) {
+            eligibleSources.push(source);
+        } else {
+            skippedSources.push({
+                id: source.id,
+                sourceId: source.id,
+                reason: eligibility.reason,
+            });
+        }
+    }
+
+    const shadowed = new Set(shadowedUnmatchedSources(eligibleSources).map(({ id }) => id));
+    if (shadowed.size > 0) {
+        eligibleSources = eligibleSources.filter((source) => {
+            if (!shadowed.has(source.id)) return true;
+            skippedSources.push({
+                id: source.id,
+                sourceId: source.id,
+                reason: 'shadowed-unmatched',
+            });
+            return false;
+        });
+    }
+
     const finalText = snapshot?.finalText ?? '';
+    const analysisSources = eligibleSources.length > 0 || !finalText.trim()
+        ? eligibleSources
+        : [{
+            id: '__final__',
+            type: 'synthetic',
+            label: '최종 프롬프트',
+            content: finalText,
+            tokenCount: snapshot?.stats?.totalTokens ?? 0,
+            attribution: 'synthetic',
+            ranges: [{ start: 0, end: finalText.length }],
+            synthetic: true,
+        }];
+    const collector = suppressionCollector();
     const usage = snapshot?.stats?.contextUsage;
 
     if (settings.enabled.context && usage >= settings.contextCritical) {
@@ -314,6 +473,7 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
             'rules.contextCritical.title',
             'rules.contextCritical.message',
             { usage: (usage * 100).toFixed(1) },
+            { method: 'context-metric', confidence: 'high' },
         ));
     } else if (settings.enabled.context && usage >= settings.contextWarning) {
         findings.push(finding(
@@ -323,18 +483,31 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
             'rules.contextWarning.title',
             'rules.contextWarning.message',
             { usage: (usage * 100).toFixed(1) },
+            { method: 'context-metric', confidence: 'high' },
         ));
     }
 
     if (settings.enabled.duplicates) {
-        findings.push(...analyzeDuplicates(sources, settings.minimumSentenceLength));
+        findings.push(...analyzeDuplicates(
+            analysisSources,
+            settings.minimumSentenceLength,
+            collector,
+        ));
     }
 
     if (settings.enabled.language) {
-        const matches = detectPatternMatches(finalText, LANGUAGE_PATTERNS);
-        const languages = [...new Set(matches.map(({ label }) => label))];
-        if (languages.length > 1) {
-            const sourceIds = sourceIdsForFinalMatches(sources, matches);
+        const matches = recordsForSources(
+            analysisSources,
+            (text) => detectPatternMatches(text, LANGUAGE_PATTERNS),
+        );
+        const conflicts = conflictingRecords(
+            matches,
+            'language',
+            (left, right) => left !== right,
+            collector,
+        );
+        if (conflicts.length > 0) {
+            const languages = [...new Set(conflicts.map(({ label }) => label))];
             findings.push(finding(
                 'language',
                 'language-conflict',
@@ -343,19 +516,23 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
                 'rules.language.message',
                 { languages: languages.join(', ') },
                 {
-                    evidence: matches.map(({ text }) => text).join('\n'),
-                    sourceIds,
-                    finalRanges: matches.map(({ start, end }) => ({ start, end })),
+                    evidence: conflicts.map(({ text }) => text).join('\n'),
+                    sourceIds: sourceIdsFromRecords(conflicts),
+                    finalRanges: finalRangesFromRecords(conflicts),
+                    confidence: 'high',
                 },
             ));
         }
     }
 
     if (settings.enabled.format) {
-        const matches = detectPatternMatches(finalText, FORMAT_PATTERNS);
-        const formats = [...new Set(matches.map(({ label }) => label))];
-        if (formatsConflict(formats)) {
-            const sourceIds = sourceIdsForFinalMatches(sources, matches);
+        const matches = recordsForSources(
+            analysisSources,
+            (text) => detectPatternMatches(text, FORMAT_PATTERNS),
+        );
+        const conflicts = conflictingRecords(matches, 'format', formatsConflict, collector);
+        if (conflicts.length > 0) {
+            const formats = [...new Set(conflicts.map(({ label }) => label))];
             findings.push(finding(
                 'format',
                 'format-conflict',
@@ -364,65 +541,91 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
                 'rules.format.message',
                 { formats: formats.join(', ') },
                 {
-                    evidence: matches.map(({ text }) => text).join('\n'),
-                    sourceIds,
-                    finalRanges: matches.map(({ start, end }) => ({ start, end })),
+                    evidence: conflicts.map(({ text }) => text).join('\n'),
+                    sourceIds: sourceIdsFromRecords(conflicts),
+                    finalRanges: finalRangesFromRecords(conflicts),
+                    confidence: 'high',
                 },
             ));
         }
     }
 
     if (settings.enabled.role) {
-        const matches = detectRoles(finalText);
-        const uniqueMatches = [];
-        const seenRoles = new Set();
-        for (const match of matches) {
-            if (seenRoles.has(match.label)) continue;
-            seenRoles.add(match.label);
-            uniqueMatches.push(match);
-            if (uniqueMatches.length === 10) break;
-        }
-        if (uniqueMatches.length > 1) {
-            const sourceIds = sourceIdsForFinalMatches(sources, uniqueMatches);
+        const matches = recordsForSources(analysisSources, detectRoles);
+        const conflicts = conflictingRecords(
+            matches,
+            'role',
+            (left, right) => left !== right,
+            collector,
+        ).slice(0, 10);
+        if (conflicts.length > 0) {
             findings.push(finding(
                 'role',
                 'role-conflict',
                 'info',
                 'rules.role.title',
                 'rules.role.message',
-                { count: uniqueMatches.length },
+                { count: new Set(conflicts.map(({ label }) => label)).size },
                 {
-                    evidence: uniqueMatches.map(({ text }) => text).join('\n'),
-                    sourceIds,
-                    finalRanges: uniqueMatches.map(({ start, end }) => ({ start, end })),
+                    evidence: conflicts.map(({ text }) => text).join('\n'),
+                    sourceIds: sourceIdsFromRecords(conflicts),
+                    finalRanges: finalRangesFromRecords(conflicts),
+                    confidence: 'medium',
                 },
             ));
         }
     }
 
     if (settings.enabled.directives) {
-        const conflicts = detectDirectiveConflicts(finalText);
+        const directiveLabels = [];
+        const directiveMatches = new Set();
+        for (const pair of DIRECTIVE_PAIRS) {
+            const positives = recordsForSources(analysisSources, (text) => {
+                const match = matchFirst(text, pair.positive);
+                return match ? [{ ...match, label: 'positive' }] : [];
+            });
+            const negatives = recordsForSources(analysisSources, (text) => {
+                const match = matchFirst(text, pair.negative);
+                return match ? [{ ...match, label: 'negative' }] : [];
+            });
+            let pairConflict = false;
+            for (const positive of positives) {
+                for (const negative of negatives) {
+                    if (!collector.compare(positive.source, negative.source, 'directives')) continue;
+                    pairConflict = true;
+                    directiveMatches.add(positive);
+                    directiveMatches.add(negative);
+                }
+            }
+            if (pairConflict) directiveLabels.push(pair.label);
+        }
+
+        const conflicts = [...directiveMatches];
         if (conflicts.length > 0) {
-            const matches = conflicts.flatMap(({ matches: items }) => items);
-            const sourceIds = sourceIdsForFinalMatches(sources, matches);
             findings.push(finding(
                 'directives',
                 'directive-conflict',
                 'warning',
                 'rules.directive.title',
                 'rules.directive.message',
-                { directives: conflicts.map(({ label }) => label).join(', ') },
+                { directives: directiveLabels.join(', ') },
                 {
-                    evidence: matches.map(({ text }) => text).join('\n'),
-                    sourceIds,
-                    finalRanges: matches.map(({ start, end }) => ({ start, end })),
+                    evidence: conflicts.map(({ text }) => text).join('\n'),
+                    sourceIds: sourceIdsFromRecords(conflicts),
+                    finalRanges: finalRangesFromRecords(conflicts),
+                    confidence: 'high',
                 },
             ));
         }
 
-        const overrideMatches = matchRanges(finalText, OVERRIDE_PATTERN);
+        const overrideMatches = recordsForSources(
+            analysisSources,
+            (text) => matchRanges(text, OVERRIDE_PATTERN).map((match) => ({
+                ...match,
+                label: 'override',
+            })),
+        );
         if (overrideMatches.length > 0) {
-            const sourceIds = sourceIdsForFinalMatches(sources, overrideMatches);
             findings.push(finding(
                 'directives',
                 'override-attempt',
@@ -432,8 +635,9 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
                 {},
                 {
                     evidence: overrideMatches.map(({ text }) => text).join('\n'),
-                    sourceIds,
-                    finalRanges: overrideMatches.map(({ start, end }) => ({ start, end })),
+                    sourceIds: sourceIdsFromRecords(overrideMatches),
+                    finalRanges: finalRangesFromRecords(overrideMatches),
+                    confidence: 'high',
                 },
             ));
         }
@@ -441,7 +645,7 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
 
     if (settings.enabled.largeSource) {
         const totalTokens = snapshot?.stats?.totalTokens || 0;
-        for (const source of sources) {
+        for (const source of eligibleSources) {
             const share = totalTokens ? source.tokenCount / totalTokens : 0;
             if (
                 source.tokenCount >= settings.largeSourceTokens
@@ -460,7 +664,9 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
                     },
                     {
                         sourceIds: [source.id],
-                        finalRanges: sourceRanges(sources, [source.id]),
+                        finalRanges: validRanges(source),
+                        method: 'source-metric',
+                        confidence: 'high',
                     },
                 ));
             }
@@ -468,7 +674,15 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
     }
 
     if (settings.enabled.unmatched) {
-        const unmatched = sources.filter((source) => source.attribution === 'unmatched');
+        const unmatched = annotatedSources.filter((source) => (
+            source.attribution === 'unmatched'
+            && source.type !== 'final'
+            && source.type !== 'chat_history'
+            && source.enabled !== false
+            && source.configuredEnabled !== false
+            && source.metadata?.configuredEnabled !== false
+            && source.metadata?.enabled !== false
+        ));
         if (unmatched.length > 0) {
             findings.push(finding(
                 'unmatched',
@@ -480,11 +694,47 @@ export function analyzeSnapshot(snapshot, rawSettings = DEFAULT_RULE_SETTINGS) {
                 {
                     evidence: unmatched.map((source) => sourceDisplayLabel(source)).join(', '),
                     sourceIds: unmatched.map((source) => source.id),
+                    method: 'attribution',
+                    confidence: 'high',
                 },
             ));
         }
     }
 
-    const order = { critical: 0, warning: 1, info: 2 };
-    return findings.sort((left, right) => order[left.severity] - order[right.severity]);
+    const groupSummarySources = annotatedSources.map((source) => (
+        shadowed.has(source.id) ? { ...source, included: false } : source
+    ));
+    const groupSummary = summarizeAlternativeGroups(groupSummarySources);
+    for (const warning of groupSummary.warnings) {
+        findings.push({
+            ruleId: 'comparison-policy',
+            id: warning.id,
+            severity: 'warning',
+            title: '대안 그룹에 여러 옵션이 포함됨',
+            message: warning.message,
+            evidence: warning.options.join(', ') || null,
+            sourceIds: warning.sourceIds,
+            finalRanges: sourceRanges(annotatedSources, warning.sourceIds),
+            method: 'comparison-policy',
+            confidence: 'high',
+        });
+    }
+
+    return {
+        findings: sortFindings(findings),
+        comparison: {
+            suppressedComparisons: collector.records,
+            skippedSources,
+            groups: groupSummary.groups,
+            groupWarnings: groupSummary.warnings,
+        },
+    };
+}
+
+export function analyzeSnapshot(
+    snapshot,
+    rawSettings = DEFAULT_RULE_SETTINGS,
+    rawComparisonSettings = DEFAULT_COMPARISON_POLICY_SETTINGS,
+) {
+    return analyzeSnapshotDetailed(snapshot, rawSettings, rawComparisonSettings).findings;
 }

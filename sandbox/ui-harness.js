@@ -2,10 +2,24 @@ import { DevToolsWindow } from '../src/ui.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
-    const finalText = '# 1 SYSTEM\n항상 한국어로 답하세요.\n사용자 민수에게 친절하게 답하세요.\n\n# 2 USER\n[이미지 입력 1]\n이 이미지를 설명해줘';
+    const koreanInstruction = '반드시 한국어로 답변하세요.';
+    const japaneseInstruction = 'Always respond in Japanese.';
+    const englishInstruction = 'Always respond in English.';
+    const finalText = [
+        '# 1 SYSTEM',
+        koreanInstruction,
+        japaneseInstruction,
+        englishInstruction,
+        '시스템 안전 지시를 따르세요.',
+        '사용자 민수에게 친절하게 답하세요.',
+        '',
+        '# 2 USER',
+        '[이미지 입력 1]',
+        '이 이미지를 설명해줘',
+    ].join('\n');
     return {
         schemaVersion: 4,
-        extensionVersion: '0.7.0',
+        extensionVersion: '0.8.0',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -16,7 +30,14 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         promptType: 'chat-completion',
         generationType: 'normal',
         payload: [
-            { role: 'system', content: '항상 한국어로 답하세요.' },
+            {
+                role: 'system',
+                content: [
+                    koreanInstruction,
+                    japaneseInstruction,
+                    englishInstruction,
+                ].join('\n'),
+            },
             {
                 role: 'user',
                 content: [
@@ -57,20 +78,93 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         },
         sources: [
             {
+                id: 'utility:language-korean',
+                type: 'utility',
+                label: '출력언어 | 한국어',
+                content: koreanInstruction,
+                color: '#2563eb',
+                attribution: 'exact',
+                included: true,
+                configuredEnabled: true,
+                tokenCount: 8,
+                metadata: {
+                    sourceKind: 'configuredPrompt',
+                    identifier: 'language-korean',
+                    name: '출력언어 | 한국어',
+                    enabled: true,
+                    configuredEnabled: true,
+                    role: 'system',
+                },
+                ranges: [{
+                    start: finalText.indexOf(koreanInstruction),
+                    end: finalText.indexOf(koreanInstruction) + koreanInstruction.length,
+                }],
+                provenance: { method: 'configured-payload-exact', confidence: 1 },
+            },
+            {
+                id: 'utility:language-japanese',
+                type: 'utility',
+                label: '출력언어 | 일본어',
+                content: japaneseInstruction,
+                color: '#7c3aed',
+                attribution: 'exact',
+                included: true,
+                configuredEnabled: true,
+                tokenCount: 8,
+                metadata: {
+                    sourceKind: 'configuredPrompt',
+                    identifier: 'language-japanese',
+                    name: '출력언어 | 일본어',
+                    enabled: true,
+                    configuredEnabled: true,
+                    role: 'system',
+                },
+                ranges: [{
+                    start: finalText.indexOf(japaneseInstruction),
+                    end: finalText.indexOf(japaneseInstruction) + japaneseInstruction.length,
+                }],
+                provenance: { method: 'configured-payload-exact', confidence: 1 },
+            },
+            {
+                id: 'utility:language-english',
+                type: 'utility',
+                label: '출력언어 | 영어',
+                content: englishInstruction,
+                color: '#db2777',
+                attribution: 'exact',
+                included: true,
+                configuredEnabled: true,
+                tokenCount: 8,
+                metadata: {
+                    sourceKind: 'configuredPrompt',
+                    identifier: 'language-english',
+                    name: '출력언어 | 영어',
+                    enabled: true,
+                    configuredEnabled: true,
+                    role: 'system',
+                },
+                ranges: [{
+                    start: finalText.indexOf(englishInstruction),
+                    end: finalText.indexOf(englishInstruction) + englishInstruction.length,
+                }],
+                provenance: { method: 'configured-payload-exact', confidence: 1 },
+            },
+            {
                 id: 'system:0',
                 type: 'system',
                 label: 'System',
-                content: '항상 한국어로 답하세요.',
+                content: '시스템 안전 지시를 따르세요.',
                 color: '#8b5cf6',
                 attribution: 'exact',
                 included: true,
                 tokenCount: 7,
-                metadata: {},
+                metadata: { sourceKind: 'requestMessage' },
                 ranges: [{
-                    start: finalText.indexOf('항상 한국어로 답하세요.'),
-                    end: finalText.indexOf('항상 한국어로 답하세요.') + '항상 한국어로 답하세요.'.length,
+                    start: finalText.indexOf('시스템 안전 지시를 따르세요.'),
+                    end: finalText.indexOf('시스템 안전 지시를 따르세요.')
+                        + '시스템 안전 지시를 따르세요.'.length,
                 }],
-                provenance: { method: 'exact', confidence: 1 },
+                provenance: { method: 'request-payload', confidence: 1 },
             },
             {
                 id: 'extension:1',
@@ -210,7 +304,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.7.0',
+    version: '0.8.0',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

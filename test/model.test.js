@@ -45,6 +45,141 @@ test('buildSources marks exact source content without altering the payload', () 
     assert.equal(sources.at(-1).type, 'final');
 });
 
+test('configured prompt sources preserve stable metadata separately from payload inclusion', () => {
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [{
+            identifier: 'language-korean',
+            name: 'Output language | Korean',
+            content: 'Always answer in Korean.',
+            enabled: true,
+            role: 'system',
+            injection_position: 'relative',
+            injection_depth: 4,
+        }, {
+            identifier: 'not-sent',
+            name: 'Configured but omitted',
+            content: 'This configured prompt was not sent.',
+            enabled: true,
+            role: 'system',
+        }],
+    }, [{ role: 'system', content: 'Always answer in Korean.' }], []);
+
+    const included = sources.find(
+        (source) => source.metadata?.identifier === 'language-korean',
+    );
+    assert.equal(included.configuredEnabled, true);
+    assert.equal(included.included, true);
+    assert.equal(included.attribution, 'exact');
+    assert.equal(included.provenance.method, 'configured-payload-exact');
+    assert.deepEqual(included.provenance.messageIndexes, [0]);
+    assert.deepEqual(included.metadata, {
+        sourceKind: 'configuredPrompt',
+        identifier: 'language-korean',
+        name: 'Output language | Korean',
+        role: 'system',
+        enabled: true,
+        configuredEnabled: true,
+        position: 'relative',
+        depth: 4,
+    });
+
+    const omitted = sources.find((source) => source.metadata?.identifier === 'not-sent');
+    assert.equal(omitted.configuredEnabled, true);
+    assert.equal(omitted.included, false);
+    assert.equal(omitted.attribution, 'unmatched');
+    assert.equal(omitted.provenance.method, 'configured-payload-unmatched');
+});
+
+test('disabled configured prompts cannot claim an identical active prompt payload', () => {
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [{
+            identifier: 'disabled-copy',
+            name: 'Disabled copy',
+            content: 'Shared configured instruction.',
+            enabled: false,
+            role: 'system',
+        }, {
+            identifier: 'active-copy',
+            name: 'Active copy',
+            content: 'Shared configured instruction.',
+            enabled: true,
+            role: 'system',
+        }],
+    }, [{ role: 'system', content: 'Shared configured instruction.' }], []);
+
+    const disabled = sources.find(
+        (source) => source.metadata?.identifier === 'disabled-copy',
+    );
+    const active = sources.find(
+        (source) => source.metadata?.identifier === 'active-copy',
+    );
+    assert.equal(disabled.configuredEnabled, false);
+    assert.equal(disabled.included, false);
+    assert.equal(disabled.attribution, 'unmatched');
+    assert.deepEqual(disabled.ranges, []);
+    assert.equal(disabled.provenance.method, 'configured-disabled');
+    assert.equal(active.configuredEnabled, true);
+    assert.equal(active.included, true);
+    assert.equal(active.attribution, 'exact');
+    assert.ok(active.ranges.length > 0);
+    assert.equal(
+        sources.some((source) => source.metadata?.sourceKind === 'requestMessage'),
+        false,
+    );
+});
+
+test('configured prompt matching is role-scoped and preserves unknown request system text', () => {
+    const payload = [
+        { role: 'system', name: 'provider', content: 'Provider-injected safety rule.' },
+        { role: 'user', content: 'System-only configured text.' },
+    ];
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [{
+            identifier: 'disabled-provider-copy',
+            name: 'Disabled provider copy',
+            content: 'Provider-injected safety rule.',
+            enabled: false,
+            role: 'system',
+        }, {
+            identifier: 'wrong-role',
+            name: 'System-only',
+            content: 'System-only configured text.',
+            enabled: true,
+            role: 'system',
+        }],
+    }, payload, []);
+
+    const disabled = sources.find(
+        (source) => source.metadata?.identifier === 'disabled-provider-copy',
+    );
+    const wrongRole = sources.find(
+        (source) => source.metadata?.identifier === 'wrong-role',
+    );
+    const requestSystem = sources.find(
+        (source) => source.metadata?.sourceKind === 'requestMessage',
+    );
+    assert.equal(disabled.included, false);
+    assert.equal(wrongRole.included, false);
+    assert.equal(requestSystem.type, 'system');
+    assert.equal(requestSystem.included, true);
+    assert.equal(requestSystem.content, 'Provider-injected safety rule.');
+    assert.equal(requestSystem.metadata.messageIndex, 0);
+    assert.equal(requestSystem.metadata.name, 'provider');
+    assert.equal(requestSystem.provenance.method, 'request-payload');
+});
+
 test('findExactRanges records every non-overlapping source occurrence', () => {
     assert.deepEqual(findExactRanges('alpha beta alpha', 'alpha'), [
         { start: 0, end: 5 },

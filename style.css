@@ -765,6 +765,14 @@
     opacity: 0.72;
 }
 
+.st-devtools-policy-settings > .st-devtools-policy-precedence {
+    margin: 0 0.75rem 0.7rem;
+    padding: 0.55rem 0.65rem;
+    border-left: 3px solid var(--SmartThemeQuoteColor, #60a5fa);
+    background: var(--st-devtools-panel-bg);
+    opacity: 1;
+}
+
 .st-devtools-rule-settings > form {
     display: flex;
     flex-direction: column;
@@ -772,6 +780,252 @@
     padding: 0.75rem;
     border-top: 1px solid var(--st-devtools-border);
     background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-policy-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding: 0.75rem;
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-policy-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-policy-section > h4,
+.st-devtools-policy-section > p {
+    margin: 0;
+}
+
+.st-devtools-policy-section > p {
+    opacity: 0.74;
+}
+
+.st-devtools-policy-rule-list,
+.st-devtools-policy-assignment-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.st-devtools-policy-rule,
+.st-devtools-policy-assignment {
+    padding: 0.65rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 5px;
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-policy-rule > header,
+.st-devtools-policy-assignment > header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.st-devtools-policy-rule > header > strong,
+.st-devtools-policy-assignment > header > strong {
+    flex: 1;
+    min-width: 8rem;
+}
+
+.st-devtools-policy-enabled {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.st-devtools-policy-rule-metadata {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.45rem;
+    margin-top: 0.6rem;
+}
+
+.st-devtools-policy-rule-metadata > span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.15rem;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-policy-rule-metadata small,
+.st-devtools-policy-assignment > small {
+    opacity: 0.68;
+}
+
+.st-devtools-policy-assignment > p {
+    margin: 0.35rem 0 0;
+}
+
+.st-devtools-policy-invalid,
+.st-devtools-policy-form-status {
+    color: #ef4444;
+}
+
+.st-devtools-policy-invalid {
+    margin: 0.55rem 0 0;
+}
+
+.st-devtools-policy-creator,
+.st-devtools-policy-manual-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 0.6rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-policy-creator > label,
+.st-devtools-policy-manual-form > label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.st-devtools-policy-creator input,
+.st-devtools-policy-creator select,
+.st-devtools-policy-manual-form input,
+.st-devtools-policy-manual-form select {
+    min-width: 0;
+    width: 100%;
+}
+
+.st-devtools-policy-creator > small,
+.st-devtools-policy-manual-form > small,
+.st-devtools-policy-form-status {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
+.st-devtools-policy-creator > button,
+.st-devtools-policy-manual-form > button {
+    justify-self: start;
+}
+
+.st-devtools-policy-table-wrapper {
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 5px;
+}
+
+.st-devtools-policy-table {
+    width: 100%;
+    min-width: 42rem;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.st-devtools-policy-table th,
+.st-devtools-policy-table td {
+    padding: 0.55rem 0.65rem;
+    border-bottom: 1px solid var(--st-devtools-border);
+    text-align: left;
+    vertical-align: top;
+}
+
+.st-devtools-policy-table th {
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-policy-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.st-devtools-policy-table td > strong,
+.st-devtools-policy-table td > small,
+.st-devtools-policy-table td > span {
+    display: block;
+}
+
+.st-devtools-policy-table td > small,
+.st-devtools-policy-table td > span + span {
+    margin-top: 0.2rem;
+    opacity: 0.7;
+}
+
+.st-devtools-policy-actions {
+    padding-top: 0.1rem;
+}
+
+.st-devtools-policy-results {
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-policy-results > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.65rem 0.75rem;
+    cursor: pointer;
+}
+
+.st-devtools-policy-results > summary > strong {
+    flex: 1;
+}
+
+.st-devtools-policy-result-count {
+    display: inline-flex;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.st-devtools-policy-result-count.has-warning {
+    border-color: #f59e0b;
+    color: #f59e0b;
+}
+
+.st-devtools-policy-result-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 0.75rem;
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-policy-result-section {
+    padding: 0.65rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 5px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-policy-result-section.has-warning {
+    border-left: 4px solid #f59e0b;
+}
+
+.st-devtools-policy-result-section > h4 {
+    margin: 0 0 0.4rem;
+}
+
+.st-devtools-policy-result-section > ul {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.st-devtools-policy-result-section li + li {
+    margin-top: 0.25rem;
 }
 
 .st-devtools-rule-setting-toggles {
@@ -937,8 +1191,27 @@
 
     .st-devtools-diff-selectors,
     .st-devtools-search-controls,
-    .st-devtools-rule-thresholds {
+    .st-devtools-rule-thresholds,
+    .st-devtools-policy-creator,
+    .st-devtools-policy-manual-form {
         grid-template-columns: 1fr;
+    }
+
+    .st-devtools-policy-creator > small,
+    .st-devtools-policy-manual-form > small,
+    .st-devtools-policy-form-status {
+        grid-column: 1;
+    }
+
+    .st-devtools-policy-rule > header,
+    .st-devtools-policy-assignment > header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .st-devtools-policy-rule > header > strong,
+    .st-devtools-policy-assignment > header > strong {
+        min-width: 0;
     }
 
     .st-devtools-source summary {

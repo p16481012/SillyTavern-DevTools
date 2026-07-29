@@ -86,6 +86,19 @@ export function contentPartToText(part, index = 0) {
     return JSON.stringify(part);
 }
 
+function flattenMessage(message, index) {
+    const role = String(message?.role ?? 'unknown').toUpperCase();
+    const name = message?.name ? ` (${message.name})` : '';
+    const sections = [contentToText(message?.content)];
+    if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
+        sections.push(`TOOL CALLS\n${JSON.stringify(message.tool_calls, null, 2)}`);
+    }
+    if (message?.function_call) {
+        sections.push(`FUNCTION CALL\n${JSON.stringify(message.function_call, null, 2)}`);
+    }
+    return `# ${index + 1} ${role}${name}\n${sections.filter(Boolean).join('\n')}`;
+}
+
 export function flattenPrompt(payload) {
     if (typeof payload === 'string') {
         return payload;
@@ -95,20 +108,37 @@ export function flattenPrompt(payload) {
         return JSON.stringify(payload ?? null, null, 2);
     }
 
-    return payload
-        .map((message, index) => {
-            const role = String(message?.role ?? 'unknown').toUpperCase();
-            const name = message?.name ? ` (${message.name})` : '';
-            const sections = [contentToText(message?.content)];
-            if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
-                sections.push(`TOOL CALLS\n${JSON.stringify(message.tool_calls, null, 2)}`);
-            }
-            if (message?.function_call) {
-                sections.push(`FUNCTION CALL\n${JSON.stringify(message.function_call, null, 2)}`);
-            }
-            return `# ${index + 1} ${role}${name}\n${sections.filter(Boolean).join('\n')}`;
-        })
-        .join('\n\n');
+    return payload.map(flattenMessage).join('\n\n');
+}
+
+function payloadMessageEntries(payload) {
+    if (!Array.isArray(payload)) return [];
+
+    const entries = [];
+    let blockOffset = 0;
+    payload.forEach((message, messageIndex) => {
+        const block = flattenMessage(message, messageIndex);
+        const rawContent = contentToText(message?.content);
+        const content = rawContent.trim();
+        if (content) {
+            const role = String(message?.role ?? 'unknown').toLocaleLowerCase();
+            const header = `# ${messageIndex + 1} ${role.toUpperCase()}${
+                message?.name ? ` (${message.name})` : ''
+            }\n`;
+            const leadingWhitespace = rawContent.length - rawContent.trimStart().length;
+            const start = blockOffset + header.length + leadingWhitespace;
+            entries.push({
+                content,
+                end: start + content.length,
+                message,
+                messageIndex,
+                role,
+                start,
+            });
+        }
+        blockOffset += block.length + (messageIndex < payload.length - 1 ? 2 : 0);
+    });
+    return entries;
 }
 
 export function findExactRanges(finalText, content, limit = 50) {
@@ -286,22 +316,30 @@ function addSource(sources, {
     metadata = {},
     attribution = null,
     included = null,
+    configuredEnabled = undefined,
+    ranges: providedRanges = null,
+    provenance: providedProvenance = null,
 }) {
     const text = contentToText(content).trim();
     if (!text) {
         return;
     }
 
-    const exactRanges = findExactRanges(finalText, text);
-    const normalizedRanges = exactRanges.length ? [] : findNormalizedRanges(finalText, text);
-    const templateMatch = exactRanges.length || normalizedRanges.length
+    const hasProvidedRanges = Array.isArray(providedRanges);
+    const exactRanges = hasProvidedRanges ? [] : findExactRanges(finalText, text);
+    const normalizedRanges = hasProvidedRanges || exactRanges.length
+        ? []
+        : findNormalizedRanges(finalText, text);
+    const templateMatch = hasProvidedRanges || exactRanges.length || normalizedRanges.length
         ? { ranges: [], confidence: null, method: null }
         : findTemplateRanges(finalText, text);
-    const ranges = exactRanges.length
-        ? exactRanges
-        : normalizedRanges.length
-            ? normalizedRanges
-            : templateMatch.ranges;
+    const ranges = hasProvidedRanges
+        ? providedRanges
+        : exactRanges.length
+            ? exactRanges
+            : normalizedRanges.length
+                ? normalizedRanges
+                : templateMatch.ranges;
     const exactMatch = ranges.length > 0;
     const inferredAttribution = exactRanges.length
         ? 'exact'
@@ -329,9 +367,10 @@ function addSource(sources, {
         tokenCount: null,
         metadata,
         ranges,
-        provenance: attribution
+        provenance: providedProvenance ?? (attribution
             ? { method: attribution, confidence: attribution === 'exact' ? 1 : null }
-            : inferredProvenance,
+            : inferredProvenance),
+        ...(configuredEnabled !== undefined ? { configuredEnabled } : {}),
     });
 }
 
@@ -346,438 +385,53 @@ function classifyConfiguredPrompt(prompt) {
     return 'utility';
 }
 
-function addStructuredSources(sources, payload, request, finalText, contextState) {
-    const requestBody = request?.body ?? request ?? {};
-    const provider = detectMultimodalProvider(contextState, request);
-    const model = request?.settings?.model ?? requestBody?.model ?? contextState?.model ?? '';
-    const toolSchemas = [
-        ...(Array.isArray(requestBody?.tools)
-            ? requestBody.tools.map((schema) => ({ schema, legacy: false }))
-            : []),
-        ...(Array.isArray(requestBody?.functions)
-            ? requestBody.functions.map((definition) => ({
-                schema: { type: 'function', function: definition },
-                legacy: true,
-            }))
-            : []),
-    ];
-    toolSchemas.forEach(({ schema, legacy }, index) => {
-        const name = schema?.function?.name ?? schema?.name ?? String(index + 1);
-        addSource(sources, {
-            type: 'tool_schema',
-            label: `Tool schema ${name}`,
-            labelKey: 'source.toolSchema',
-            content: JSON.stringify(schema, null, 2),
-            finalText,
-            metadata: { name, index, legacy },
-            attribution: 'derived',
-            included: true,
-        });
-    });
+function normalizedConfiguredRole(role) {
+    if (role === 0 || role === '0') return 'system';
+    if (role === 1 || role === '1') return 'user';
+    if (role === 2 || role === '2') return 'assistant';
 
-    if (!Array.isArray(payload)) return;
-    payload.forEach((message, messageIndex) => {
-        const calls = Array.isArray(message?.tool_calls)
-            ? message.tool_calls
-            : message?.function_call
-                ? [message.function_call]
-                : [];
-        calls.forEach((call, callIndex) => {
-            const name = call?.function?.name ?? call?.name ?? String(callIndex + 1);
-            addSource(sources, {
-                type: 'tool_call',
-                label: `Tool call ${name}`,
-                labelKey: 'source.toolCall',
-                content: JSON.stringify(call, null, 2),
-                finalText,
-                metadata: { name, messageIndex, callIndex },
-                attribution: 'derived',
-                included: true,
-            });
-        });
-
-        if (message?.role === 'tool') {
-            const name = message?.name ?? message?.tool_call_id ?? String(messageIndex + 1);
-            addSource(sources, {
-                type: 'tool_result',
-                label: `Tool result ${name}`,
-                labelKey: 'source.toolResult',
-                content: message.content,
-                finalText,
-                metadata: {
-                    name,
-                    toolCallId: message?.tool_call_id ?? null,
-                    messageIndex,
-                },
-            });
-        }
-
-        if (!Array.isArray(message?.content)) return;
-        message.content.forEach((part, partIndex) => {
-            const type = mediaType(part);
-            if (!type) return;
-            addSource(sources, {
-                type: 'multimodal',
-                label: `Multimodal ${type} ${partIndex + 1}`,
-                labelKey: `source.multimodal.${type}`,
-                content: contentPartToText(part, partIndex),
-                finalText,
-                metadata: {
-                    type,
-                    messageIndex,
-                    partIndex,
-                    tokenEstimate: estimateMultimodalTokens({
-                        part,
-                        type,
-                        provider,
-                        model,
-                    }),
-                },
-            });
-        });
-    });
+    const normalized = String(role ?? '').trim().toLocaleLowerCase();
+    return ['system', 'developer', 'user', 'assistant'].includes(normalized)
+        ? normalized
+        : null;
 }
 
-export function buildSources(contextState, payload, activatedLore = [], request = null) {
-    const finalText = flattenPrompt(payload);
-    const sources = [];
-    const character = getCharacterFields(contextState);
+function configuredPromptCandidates(messageEntries, prompt) {
+    const role = normalizedConfiguredRole(prompt?.role);
+    if (role) {
+        return messageEntries.filter((entry) => entry.role === role);
+    }
+    return messageEntries.filter((entry) => ['system', 'developer'].includes(entry.role));
+}
 
-    addSource(sources, {
-        type: 'character',
-        label: 'Character Description',
-        labelKey: 'source.characterDescription',
-        content: character.description,
-        finalText,
-        metadata: { field: 'description' },
-    });
-    addSource(sources, {
-        type: 'character',
-        label: 'Character Personality',
-        labelKey: 'source.characterPersonality',
-        content: character.personality,
-        finalText,
-        metadata: { field: 'personality' },
-    });
-    addSource(sources, {
-        type: 'character',
-        label: 'Scenario',
-        labelKey: 'source.scenario',
-        content: character.scenario,
-        finalText,
-        metadata: { field: 'scenario' },
-    });
-    addSource(sources, {
-        type: 'character',
-        label: 'Character Example Dialogue',
-        labelKey: 'source.characterExamples',
-        content: character.exampleDialogue,
-        finalText,
-        metadata: { field: 'mes_example' },
-    });
-    addSource(sources, {
-        type: 'character',
-        label: 'Character First Message',
-        labelKey: 'source.characterFirstMessage',
-        content: character.firstMessage,
-        finalText,
-        metadata: { field: 'first_mes' },
-    });
-    addSource(sources, {
-        type: 'system',
-        label: 'Character System Prompt',
-        labelKey: 'source.characterSystemPrompt',
-        content: character.systemPrompt,
-        finalText,
-        metadata: { field: 'system_prompt' },
-    });
-    addSource(sources, {
-        type: 'jailbreak',
-        label: 'Character Post-History Instructions',
-        labelKey: 'source.characterPostHistory',
-        content: character.postHistoryInstructions,
-        finalText,
-        metadata: { field: 'post_history_instructions' },
-    });
-    addSource(sources, {
-        type: 'extension',
-        label: 'Character Depth Prompt',
-        labelKey: 'source.characterDepthPrompt',
-        content: character.depthPrompt,
-        finalText,
-        metadata: { field: 'extensions.depth_prompt.prompt' },
-    });
-    addSource(sources, {
-        type: 'persona',
-        label: 'Persona',
-        labelKey: 'source.persona',
-        content: contextState.personaDescription,
-        finalText,
-    });
-    addSource(sources, {
-        type: 'authors_note',
-        label: "Author's Note",
-        labelKey: 'source.authorsNote',
-        content: contextState.authorsNote,
-        finalText,
-    });
+function offsetRanges(ranges, offset) {
+    return ranges.map((range) => ({
+        start: offset + range.start,
+        end: offset + range.end,
+    }));
+}
 
-    for (const entry of activatedLore) {
-        addSource(sources, {
-            type: 'lorebook',
-            label: entry?.comment || entry?.key?.join(', ') || `Lorebook entry ${entry?.uid ?? '?'}`,
-            labelKey: entry?.comment || entry?.key?.length ? null : 'source.lorebookEntry',
-            content: entry?.content,
-            finalText,
-            metadata: {
-                world: entry?.world ?? null,
-                uid: entry?.uid ?? null,
-                position: entry?.position ?? null,
+function findConfiguredPromptMatch(prompt, messageEntries) {
+    const configuredEnabled = prompt?.enabled ?? null;
+    if (configuredEnabled === false) {
+        return {
+            attribution: 'unmatched',
+            included: false,
+            provenance: {
+                method: 'configured-disabled',
+                confidence: 1,
+                messageIndexes: [],
             },
-        });
+            ranges: [],
+        };
     }
 
-    for (const [key, prompt] of Object.entries(contextState.extensionPrompts ?? {})) {
-        addSource(sources, {
-            type: 'extension',
-            label: prompt?.name || key,
-            content: prompt?.value ?? prompt?.content,
-            finalText,
-            metadata: {
-                key,
-                position: prompt?.position ?? null,
-                depth: prompt?.depth ?? null,
-                role: prompt?.role ?? null,
-            },
-        });
-    }
-
-    for (const prompt of contextState.configuredPrompts ?? []) {
-        const type = classifyConfiguredPrompt(prompt);
-        addSource(sources, {
-            type,
-            label: prompt?.name || prompt?.identifier || 'Configured prompt',
-            labelKey: prompt?.name || prompt?.identifier ? null : 'source.configuredPrompt',
-            content: prompt?.content,
-            finalText,
-            metadata: {
-                identifier: prompt?.identifier ?? null,
-                role: prompt?.role ?? null,
-                enabled: prompt?.enabled ?? null,
-            },
-        });
-    }
-
-    addStructuredSources(sources, payload, request, finalText, contextState);
-
-    if (Array.isArray(payload)) {
-        const historyMessages = payload.filter((message) => ['user', 'assistant', 'tool'].includes(message?.role));
-        addSource(sources, {
-            type: 'chat_history',
-            label: 'Chat History',
-            labelKey: 'source.chatHistory',
-            content: flattenPrompt(historyMessages),
-            finalText,
-            metadata: { messageCount: historyMessages.length },
-            attribution: 'derived',
-            included: historyMessages.length > 0,
-        });
-
-        const lastMessage = payload.at(-1);
-        if (lastMessage?.role === 'assistant') {
-            addSource(sources, {
-                type: 'assistant_prefill',
-                label: 'Assistant Prefill / Last Assistant Message',
-                labelKey: 'source.assistantPrefill',
-                content: lastMessage.content,
-                finalText,
-                metadata: { inferred: true },
-                attribution: 'derived',
-                included: true,
-            });
-        }
-    }
-
-    sources.push({
-        id: `final:${sources.length}`,
-        type: 'final',
-        label: 'Final Prompt',
-        labelKey: 'source.finalPrompt',
-        content: finalText,
-        color: SOURCE_COLORS.final,
-        attribution: 'exact',
-        included: true,
-        tokenCount: null,
-        metadata: {},
-        ranges: finalText ? [{ start: 0, end: finalText.length }] : [],
-        provenance: { method: 'exact', confidence: 1 },
-    });
-
-    return sources;
-}
-
-export function createSnapshotId(timestamp, payload) {
-    const input = `${timestamp}:${flattenPrompt(payload)}`;
-    let hash = 2166136261;
-    for (let index = 0; index < input.length; index += 1) {
-        hash ^= input.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
-    }
-    return `${timestamp.toString(36)}-${(hash >>> 0).toString(36)}`;
-}
-
-export async function finalizeSnapshot({
-    contextState,
-    payload,
-    promptType,
-    generationType,
-    activatedLore,
-    extensionVersion,
-    tokenCounter,
-    capture,
-    request,
-}) {
-    const timestamp = Date.now();
-    const finalText = flattenPrompt(payload);
-    const normalizedRequest = request ?? createRequestRecord(null);
-    const sources = buildSources(contextState, payload, activatedLore, normalizedRequest);
-    const normalizedCapture = capture ?? createCaptureBoundary({
-        eventName: promptType === 'chat-completion'
-            ? 'CHAT_COMPLETION_PROMPT_READY'
-            : 'GENERATE_AFTER_COMBINE_PROMPTS',
-        stage: 'prompt-ready',
-        requestBodyAvailable: false,
-        fallback: true,
-    });
-    const count = async (text) => {
-        try {
-            return Number(await tokenCounter(text)) || 0;
-        } catch {
-            return Math.ceil(new TextEncoder().encode(text).length / 3.35);
-        }
-    };
-
-    const tokenCounts = await Promise.all(sources.map((source) => count(source.content)));
-    sources.forEach((source, index) => {
-        source.tokenCount = tokenCounts[index];
-    });
-    const totalTokens = await count(finalText);
-    const maxContext = Number(contextState.maxContext) || null;
-    const requestMaxOutput = normalizedRequest.settings?.max_tokens
-        ?? normalizedRequest.settings?.max_completion_tokens
-        ?? normalizedRequest.settings?.max_new_tokens
-        ?? normalizedRequest.settings?.max_length;
-    const maxOutput = Number(requestMaxOutput ?? contextState.maxOutput) || null;
-    const usableContext = maxContext && maxOutput ? Math.max(0, maxContext - maxOutput) : maxContext;
-    const multimodalEstimates = sources
-        .filter((source) => source.type === 'multimodal')
-        .map((source) => source.metadata?.tokenEstimate)
-        .filter(Boolean);
-    const estimatedMultimodal = multimodalEstimates.filter((estimate) => Number.isFinite(estimate.tokens));
-
-    return {
-        schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-        id: createSnapshotId(timestamp, payload),
-        timestamp,
-        extensionVersion,
-        chatId: contextState.chatId || '__global__',
-        messageCount: contextState.messageCount,
-        api: contextState.mainApi || 'unknown',
-        model: normalizedRequest.settings?.model ?? contextState.model ?? null,
-        preset: contextState.preset || null,
-        promptType,
-        generationType: generationType || 'unknown',
-        payload,
-        finalText,
-        capture: normalizedCapture,
-        request: normalizedRequest,
-        sources,
-        lorebookEntries: activatedLore,
-        stats: {
-            totalTokens,
-            maxContext,
-            maxOutput,
-            usableContext,
-            contextUsage: usableContext ? totalTokens / usableContext : null,
-            remainingContext: usableContext ? Math.max(0, usableContext - totalTokens) : null,
-            structured: {
-                toolSchemas: sources.filter((source) => source.type === 'tool_schema').length,
-                toolCalls: sources.filter((source) => source.type === 'tool_call').length,
-                toolResults: sources.filter((source) => source.type === 'tool_result').length,
-                multimodalParts: sources.filter((source) => source.type === 'multimodal').length,
-                multimodalEstimatedTokens: estimatedMultimodal
-                    .reduce((sum, estimate) => sum + estimate.tokens, 0),
-                multimodalEstimateCoverage: multimodalEstimates.length
-                    ? estimatedMultimodal.length / multimodalEstimates.length
-                    : null,
-            },
-        },
-    };
-}
-
-export function searchSnapshot(snapshot, query, options = {}) {
-    const needle = String(query ?? '');
-    if (!needle) {
-        return [];
-    }
-
-    const flags = options.caseSensitive ? 'g' : 'gi';
-    const expression = options.regex
-        ? new RegExp(needle, flags)
-        : new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
-    const results = [];
-
-    for (const source of snapshot?.sources ?? []) {
-        expression.lastIndex = 0;
-        let match;
-        while ((match = expression.exec(source.content)) !== null && results.length < 200) {
-            const start = Math.max(0, match.index - 60);
-            const end = Math.min(source.content.length, match.index + Math.max(match[0].length, 1) + 60);
-            results.push({
-                sourceId: source.id,
-                sourceLabel: sourceDisplayLabel(source),
-                index: match.index,
-                length: match[0].length,
-                snippet: source.content.slice(start, end),
-            });
-            if (match[0].length === 0) {
-                expression.lastIndex += 1;
-            }
-        }
-        if (results.length >= 200) {
-            break;
-        }
-    }
-
-    return results;
-}
-
-export function serializeSnapshot(snapshot, format) {
-    if (format === 'json') {
-        return JSON.stringify(snapshot, null, 2);
-    }
-
-    const header = [
-        `ST DevTools ìŠ¤ëƒ…ìƒ· ${snapshot.id}`,
-        `ìº¡ì²˜ ì‹œê°: ${new Date(snapshot.timestamp).toISOString()}`,
-        `API: ${snapshot.api}`,
-        `ëª¨ë¸: ${snapshot.model ?? t('common.unknown')}`,
-        `í† í°: ${snapshot.stats?.totalTokens ?? t('common.unknown')}`,
-    ];
-
-    if (format === 'markdown') {
-        const sections = snapshot.sources.map((source) => (
-            `## ${sourceDisplayLabel(source)}\n\n` +
-            `- ìœ í˜•: \`${source.type}\`\n` +
-            `- í† í°: ${source.tokenCount ?? t('common.unknown')}\n` +
-            `- ì†ŒìŠ¤ ì—°ê²°: ${attributionDisplayLabel(source.attribution)}\n\n` +
-            `\`\`\`text\n${source.content.replaceAll('```', '``\\`')}\n\`\`\``
-        ));
-        return `# ST DevTools ìŠ¤ëƒ…ìƒ·\n\n${header.map((line) => `- ${line}`).join('\n')}\n\n${sections.join('\n\n')}`;
-    }
-
-    const sections = snapshot.sources.map((source) => (
-        `\n\n===== ${sourceDisplayLabel(source)} [${source.type}] =====\n${source.content}`
-    ));
-    return `${header.join('\n')}${sections.join('')}`;
-}
+    const content = contentToText(prompt?.content).trim();
+    const candidates = configuredPromptCandidates(messageEntries, prompt);
+    const exactRanges = [];
+    const exactMessageIndexes = new Set();
+    candidates.forEach((entry) => {
+        const localRanges = findExactRanges(entry.content, content);
+        if (!localRanges.length) return;
+        exactRanges.push(...offsetRanges(localRanges, entry.start));
+        exactMessageIndexes.add(entÛž½¶‰žËkºwµçUÍÍ…”ü¹É½±”€ôôô€Ñ½½°œ¤ì(€€€€€€€€€€€½¹ÍÐ¹…µ”€ôµ•ÍÍ…”ü¹¹…µ”€üüµ•ÍÍ…”ü¹Ñ½½±}…±±}¥€üüMÑÉ¥¹œ¡µ•ÍÍ…•%¹‘•à€¬€Ä¤ì(€€€€€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì(€€€€€€€€€€€€€€€ÑåÁ”è€Ñ½½±}É•ÍÕ±Ðœ°(€€€€€€€€€€€€€€€±…‰•°èQ½½°É•ÍÕ±Ð€‘í¹…µ•õ€°(€€€€€€€€€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹Ñ½½±I•ÍÕ±Ðœ°(€€€€€€€€€€€€€€€½¹Ñ•¹Ðèµ•ÍÍ…”¹½¹Ñ•¹Ð°(€€€€€€€€€€€€€€€™¥¹…±Q•áÐ°(€€€€€€€€€€€€€€€µ•Ñ…‘…Ñ„èì(€€€€€€€€€€€€€€€€€€€¹…µ”°(€€€€€€€€€€€€€€€€€€€Ñ½½±…±±%èµ•ÍÍ…”ü¹Ñ½½±}…±±}¥€üü¹Õ±°°(€€€€€€€€€€€€€€€€€€€µ•ÍÍ…•%¹‘•à°(€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€ô¤ì(€€€€€€€ô((€€€€€€€¥˜€ …ÉÉ…ä¹¥ÍÉÉ…ä¡µ•ÍÍ…”ü¹½¹Ñ•¹Ð¤¤É•ÑÕÉ¸ì(€€€€€€€µ•ÍÍ…”¹½¹Ñ•¹Ð¹™½É…  ¡Á…ÉÐ°Á…ÉÑ%¹‘•à¤€ôøì(€€€€€€€€€€€½¹ÍÐÑåÁ”€ôµ•‘¥…QåÁ”¡Á…ÉÐ¤ì(€€€€€€€€€€€¥˜€ …ÑåÁ”¤É•ÑÕÉ¸ì(€€€€€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì(€€€€€€€€€€€€€€€ÑåÁ”è€µÕ±Ñ¥µ½‘…°œ°(€€€€€€€€€€€€€€€±…‰•°è5Õ±Ñ¥µ½‘…°€‘íÑåÁ•ô€‘íÁ…ÉÑ%¹‘•à€¬€Åõ€°(€€€€€€€€€€€€€€€±…‰•±-•äèÍ½ÕÉ”¹µÕ±Ñ¥µ½‘…°¸‘íÑåÁ•õ€°(€€€€€€€€€€€€€€€½¹Ñ•¹Ðè½¹Ñ•¹ÑA…ÉÑQ½Q•áÐ¡Á…ÉÐ°Á…ÉÑ%¹‘•à¤°(€€€€€€€€€€€€€€€™¥¹…±Q•áÐ°(€€€€€€€€€€€€€€€µ•Ñ…‘…Ñ„èì(€€€€€€€€€€€€€€€€€€€ÑåÁ”°(€€€€€€€€€€€€€€€€€€€µ•ÍÍ…•%¹‘•à°(€€€€€€€€€€€€€€€€€€€Á…ÉÑ%¹‘•à°(€€€€€€€€€€€€€€€€€€€Ñ½­•¹ÍÑ¥µ…Ñ”è•ÍÑ¥µ…Ñ•5Õ±Ñ¥µ½‘…±Q½­•¹Ì¡ì(€€€€€€€€€€€€€€€€€€€€€€€Á…ÉÐ°(€€€€€€€€€€€€€€€€€€€€€€€ÑåÁ”°(€€€€€€€€€€€€€€€€€€€€€€€ÁÉ½Ù¥‘•È°(€€€€€€€€€€€€€€€€€€€€€€€µ½‘•°°(€€€€€€€€€€€€€€€€€€€ô¤°(€€€€€€€€€€€€€€€ô°(€€€€€€€€€€€ô¤ì(€€€€€€€ô¤ì(€€€ô¤ì)ô()•áÁ½ÉÐ™Õ¹Ñ¥½¸‰Õ¥±‘M½ÕÉ•Ì¡½¹Ñ•áÑMÑ…Ñ”°Á…å±½…°…Ñ¥Ù…Ñ•‘1½É”€ômt°É•ÅÕ•ÍÐ€ô¹Õ±°¤ì(€€€½¹ÍÐ™¥¹…±Q•áÐ€ô™±…ÑÑ•¹AÉ½µÁÐ¡Á…å±½…¤ì(€€€½¹ÍÐÍ½ÕÉ•Ì€ômtì(€€€½¹ÍÐ¡…É…Ñ•È€ô•Ñ¡…É…Ñ•É¥•±‘Ì¡½¹Ñ•áÑMÑ…Ñ”¤ì(€€€½¹ÍÐµ•ÍÍ…•¹ÑÉ¥•Ì€ôÁ…å±½…‘5•ÍÍ…•¹ÑÉ¥•Ì¡Á…å±½…¤ì(4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€¡…É…Ñ•Èœ°4(€€€€€€€±…‰•°è€¡…É…Ñ•È•ÍÉ¥ÁÑ¥½¸œ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•É•ÍÉ¥ÁÑ¥½¸œ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹‘•ÍÉ¥ÁÑ¥½¸°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€‘•ÍÉ¥ÁÑ¥½¸œô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€¡…É…Ñ•Èœ°4(€€€€€€€±…‰•°è€¡…É…Ñ•ÈA•ÉÍ½¹…±¥Ñäœ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•ÉA•ÉÍ½¹…±¥Ñäœ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹Á•ÉÍ½¹…±¥Ñä°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€Á•ÉÍ½¹…±¥Ñäœô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€¡…É…Ñ•Èœ°4(€€€€€€€±…‰•°è€M•¹…É¥¼œ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹Í•¹…É¥¼œ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹Í•¹…É¥¼°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€Í•¹…É¥¼œô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€¡…É…Ñ•Èœ°4(€€€€€€€±…‰•°è€¡…É…Ñ•Èá…µÁ±”¥…±½Õ”œ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•Éá…µÁ±•Ìœ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹•á…µÁ±•¥…±½Õ”°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€µ•Í}•á…µÁ±”œô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€¡…É…Ñ•Èœ°4(€€€€€€€±…‰•°è€¡…É…Ñ•È¥ÉÍÐ5•ÍÍ…”œ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•É¥ÉÍÑ5•ÍÍ…”œ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹™¥ÉÍÑ5•ÍÍ…”°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€™¥ÉÍÑ}µ•Ìœô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€ÍåÍÑ•´œ°4(€€€€€€€±…‰•°è€¡…É…Ñ•ÈMåÍÑ•´AÉ½µÁÐœ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•ÉMåÍÑ•µAÉ½µÁÐœ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹ÍåÍÑ•µAÉ½µÁÐ°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€ÍåÍÑ•µ}ÁÉ½µÁÐœô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€©…¥±‰É•…¬œ°4(€€€€€€€±…‰•°è€¡…É…Ñ•ÈA½ÍÐµ!¥ÍÑ½Éä%¹ÍÑÉÕÑ¥½¹Ìœ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•ÉA½ÍÑ!¥ÍÑ½Éäœ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹Á½ÍÑ!¥ÍÑ½Éå%¹ÍÑÉÕÑ¥½¹Ì°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€Á½ÍÑ}¡¥ÍÑ½Éå}¥¹ÍÑÉÕÑ¥½¹Ìœô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€•áÑ•¹Í¥½¸œ°4(€€€€€€€±…‰•°è€¡…É…Ñ•È•ÁÑ AÉ½µÁÐœ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…É…Ñ•É•ÁÑ¡AÉ½µÁÐœ°4(€€€€€€€½¹Ñ•¹Ðè¡…É…Ñ•È¹‘•ÁÑ¡AÉ½µÁÐ°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€µ•Ñ…‘…Ñ„èì™¥•±è€•áÑ•¹Í¥½¹Ì¹‘•ÁÑ¡}ÁÉ½µÁÐ¹ÁÉ½µÁÐœô°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€Á•ÉÍ½¹„œ°4(€€€€€€€±…‰•°è€A•ÉÍ½¹„œ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹Á•ÉÍ½¹„œ°4(€€€€€€€½¹Ñ•¹Ðè½¹Ñ•áÑMÑ…Ñ”¹Á•ÉÍ½¹…•ÍÉ¥ÁÑ¥½¸°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€ô¤ì4(€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€ÑåÁ”è€…ÕÑ¡½ÉÍ}¹½Ñ”œ°4(€€€€€€€±…‰•°è€‰ÕÑ¡½ÈÌ9½Ñ”ˆ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹…ÕÑ¡½ÉÍ9½Ñ”œ°4(€€€€€€€½¹Ñ•¹Ðè½¹Ñ•áÑMÑ…Ñ”¹…ÕÑ¡½ÉÍ9½Ñ”°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€ô¤ì4(4(€€€™½È€¡½¹ÍÐ•¹ÑÉä½˜…Ñ¥Ù…Ñ•‘1½É”¤ì4(€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€€€€€ÑåÁ”è€±½É•‰½½¬œ°4(€€€€€€€€€€€±…‰•°è•¹ÑÉäü¹½µµ•¹Ðñð•¹ÑÉäü¹­•äü¹©½¥¸ œ°€œ¤ñð1½É•‰½½¬•¹ÑÉä€‘í•¹ÑÉäü¹Õ¥€üü€œüõ€°4(€€€€€€€€€€€±…‰•±-•äè•¹ÑÉäü¹½µµ•¹Ðñð•¹ÑÉäü¹­•äü¹±•¹Ñ €ü¹Õ±°€è€Í½ÕÉ”¹±½É•‰½½­¹ÑÉäœ°4(€€€€€€€€€€€½¹Ñ•¹Ðè•¹ÑÉäü¹½¹Ñ•¹Ð°4(€€€€€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€€€€€µ•Ñ…‘…Ñ„èì4(€€€€€€€€€€€€€€€Ý½É±è•¹ÑÉäü¹Ý½É±€üü¹Õ±°°4(€€€€€€€€€€€€€€€Õ¥è•¹ÑÉäü¹Õ¥€üü¹Õ±°°4(€€€€€€€€€€€€€€€Á½Í¥Ñ¥½¸è•¹ÑÉäü¹Á½Í¥Ñ¥½¸€üü¹Õ±°°4(€€€€€€€€€€€ô°4(€€€€€€€ô¤ì4(€€€ô4(4(€€€™½È€¡½¹ÍÐm­•ä°ÁÉ½µÁÑt½˜=‰©•Ð¹•¹ÑÉ¥•Ì¡½¹Ñ•áÑMÑ…Ñ”¹•áÑ•¹Í¥½¹AÉ½µÁÑÌ€üüíô¤¤ì4(€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€€€€€ÑåÁ”è€•áÑ•¹Í¥½¸œ°4(€€€€€€€€€€€±…‰•°èÁÉ½µÁÐü¹¹…µ”ñð­•ä°4(€€€€€€€€€€€½¹Ñ•¹ÐèÁÉ½µÁÐü¹Ù…±Õ”€üüÁÉ½µÁÐü¹½¹Ñ•¹Ð°4(€€€€€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€€€€€µ•Ñ…‘…Ñ„èì4(€€€€€€€€€€€€€€€­•ä°4(€€€€€€€€€€€€€€€Á½Í¥Ñ¥½¸èÁÉ½µÁÐü¹Á½Í¥Ñ¥½¸€üü¹Õ±°°4(€€€€€€€€€€€€€€€‘•ÁÑ èÁÉ½µÁÐü¹‘•ÁÑ €üü¹Õ±°°4(€€€€€€€€€€€€€€€É½±”èÁÉ½µÁÐü¹É½±”€üü¹Õ±°°4(€€€€€€€€€€€ô°4(€€€€€€€ô¤ì4(€€€ô((€€€™½È€¡½¹ÍÐÁÉ½µÁÐ½˜½¹Ñ•áÑMÑ…Ñ”¹½¹™¥ÕÉ•‘AÉ½µÁÑÌ€üümt¤ì(€€€€€€€½¹ÍÐÑåÁ”€ô±…ÍÍ¥™å½¹™¥ÕÉ•‘AÉ½µÁÐ¡ÁÉ½µÁÐ¤ì(€€€€€€€½¹ÍÐ½¹™¥ÕÉ•‘¹…‰±•€ôÁÉ½µÁÐü¹•¹…‰±•€üü¹Õ±°ì(€€€€€€€½¹ÍÐµ…Ñ €ô™¥¹‘½¹™¥ÕÉ•‘AÉ½µÁÑ5…Ñ ¡ÁÉ½µÁÐ°µ•ÍÍ…•¹ÑÉ¥•Ì¤ì(€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì(€€€€€€€€€€€ÑåÁ”°(€€€€€€€€€€€±…‰•°èÁÉ½µÁÐü¹¹…µ”ñðÁÉ½µÁÐü¹¥‘•¹Ñ¥™¥•Èñð€½¹™¥ÕÉ•ÁÉ½µÁÐœ°(€€€€€€€€€€€±…‰•±-•äèÁÉ½µÁÐü¹¹…µ”ñðÁÉ½µÁÐü¹¥‘•¹Ñ¥™¥•È€ü¹Õ±°€è€Í½ÕÉ”¹½¹™¥ÕÉ•‘AÉ½µÁÐœ°(€€€€€€€€€€€½¹Ñ•¹ÐèÁÉ½µÁÐü¹½¹Ñ•¹Ð°(€€€€€€€€€€€™¥¹…±Q•áÐ°(€€€€€€€€€€€µ•Ñ…‘…Ñ„èì(€€€€€€€€€€€€€€€Í½ÕÉ•-¥¹è€½¹™¥ÕÉ•‘AÉ½µÁÐœ°(€€€€€€€€€€€€€€€¥‘•¹Ñ¥™¥•ÈèÁÉ½µÁÐü¹¥‘•¹Ñ¥™¥•È€üü¹Õ±°°(€€€€€€€€€€€€€€€¹…µ”èÁÉ½µÁÐü¹¹…µ”€üü¹Õ±°°(€€€€€€€€€€€€€€€É½±”èÁÉ½µÁÐü¹É½±”€üü¹Õ±°°(€€€€€€€€€€€€€€€•¹…‰±•è½¹™¥ÕÉ•‘¹…‰±•°(€€€€€€€€€€€€€€€½¹™¥ÕÉ•‘¹…‰±•°(€€€€€€€€€€€€€€€Á½Í¥Ñ¥½¸èÁÉ½µÁÐü¹Á½Í¥Ñ¥½¸(€€€€€€€€€€€€€€€€€€€€üüÁÉ½µÁÐü¹¥¹©•Ñ¥½¹}Á½Í¥Ñ¥½¸(€€€€€€€€€€€€€€€€€€€€üüÁÉ½µÁÐü¹¥¹©•Ñ¥½¹A½Í¥Ñ¥½¸(€€€€€€€€€€€€€€€€€€€€üü¹Õ±°°(€€€€€€€€€€€€€€€‘•ÁÑ èÁÉ½µÁÐü¹‘•ÁÑ (€€€€€€€€€€€€€€€€€€€€üüÁÉ½µÁÐü¹¥¹©•Ñ¥½¹}‘•ÁÑ (€€€€€€€€€€€€€€€€€€€€üüÁÉ½µÁÐü¹¥¹©•Ñ¥½¹•ÁÑ (€€€€€€€€€€€€€€€€€€€€üü¹Õ±°°(€€€€€€€€€€€ô°(€€€€€€€€€€€…ÑÑÉ¥‰ÕÑ¥½¸èµ…Ñ ¹…ÑÑÉ¥‰ÕÑ¥½¸°(€€€€€€€€€€€½¹™¥ÕÉ•‘¹…‰±•°(€€€€€€€€€€€¥¹±Õ‘•èµ…Ñ ¹¥¹±Õ‘•°(€€€€€€€€€€€ÁÉ½Ù•¹…¹”èµ…Ñ ¹ÁÉ½Ù•¹…¹”°(€€€€€€€€€€€É…¹•Ìèµ…Ñ ¹É…¹•Ì°(€€€€€€€ô¤ì(€€€ô((€€€…‘‘MÑÉÕÑÕÉ•‘M½ÕÉ•Ì¡Í½ÕÉ•Ì°Á…å±½…°É•ÅÕ•ÍÐ°™¥¹…±Q•áÐ°½¹Ñ•áÑMÑ…Ñ”¤ì(€€€…‘‘U¹…ÑÑÉ¥‰ÕÑ•‘I•ÅÕ•ÍÑMåÍÑ•µM½ÕÉ•Ì¡Í½ÕÉ•Ì°µ•ÍÍ…•¹ÑÉ¥•Ì°™¥¹…±Q•áÐ¤ì(4(€€€¥˜€¡ÉÉ…ä¹¥ÍÉÉ…ä¡Á…å±½…¤¤ì4(€€€€€€€½¹ÍÐ¡¥ÍÑ½Éå5•ÍÍ…•Ì€ôÁ…å±½…¹™¥±Ñ•È ¡µ•ÍÍ…”¤€ôølÕÍ•Èœ°€…ÍÍ¥ÍÑ…¹Ðœ°€Ñ½½°t¹¥¹±Õ‘•Ì¡µ•ÍÍ…”ü¹É½±”¤¤ì4(€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€€€€€ÑåÁ”è€¡…Ñ}¡¥ÍÑ½Éäœ°4(€€€€€€€€€€€±…‰•°è€¡…Ð!¥ÍÑ½Éäœ°4(€€€€€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹¡…Ñ!¥ÍÑ½Éäœ°4(€€€€€€€€€€€½¹Ñ•¹Ðè™±…ÑÑ•¹AÉ½µÁÐ¡¡¥ÍÑ½Éå5•ÍÍ…•Ì¤°4(€€€€€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€€€€€µ•Ñ…‘…Ñ„èìµ•ÍÍ…•½Õ¹Ðè¡¥ÍÑ½Éå5•ÍÍ…•Ì¹±•¹Ñ ô°4(€€€€€€€€€€€…ÑÑÉ¥‰ÕÑ¥½¸è€‘•É¥Ù•œ°4(€€€€€€€€€€€¥¹±Õ‘•è¡¥ÍÑ½Éå5•ÍÍ…•Ì¹±•¹Ñ €ø€À°4(€€€€€€€ô¤ì4(4(€€€€€€€½¹ÍÐ±…ÍÑ5•ÍÍ…”€ôÁ…å±½…¹…Ð ´Ä¤ì4(€€€€€€€¥˜€¡±…ÍÑ5•ÍÍ…”ü¹É½±”€ôôô€…ÍÍ¥ÍÑ…¹Ðœ¤ì4(€€€€€€€€€€€…‘‘M½ÕÉ”¡Í½ÕÉ•Ì°ì4(€€€€€€€€€€€€€€€ÑåÁ”è€…ÍÍ¥ÍÑ…¹Ñ}ÁÉ•™¥±°œ°4(€€€€€€€€€€€€€€€±…‰•°è€ÍÍ¥ÍÑ…¹ÐAÉ•™¥±°€¼1…ÍÐÍÍ¥ÍÑ…¹Ð5•ÍÍ…”œ°4(€€€€€€€€€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹…ÍÍ¥ÍÑ…¹ÑAÉ•™¥±°œ°4(€€€€€€€€€€€€€€€½¹Ñ•¹Ðè±…ÍÑ5•ÍÍ…”¹½¹Ñ•¹Ð°4(€€€€€€€€€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€€€€€€€€€µ•Ñ…‘…Ñ„èì¥¹™•ÉÉ•èÑÉÕ”ô°4(€€€€€€€€€€€€€€€…ÑÑÉ¥‰ÕÑ¥½¸è€‘•É¥Ù•œ°4(€€€€€€€€€€€€€€€¥¹±Õ‘•èÑÉÕ”°4(€€€€€€€€€€€ô¤ì4(€€€€€€€ô4(€€€ô4(4(€€€Í½ÕÉ•Ì¹ÁÕÍ ¡ì4(€€€€€€€¥è™¥¹…°è‘íÍ½ÕÉ•Ì¹±•¹Ñ¡õ€°4(€€€€€€€ÑåÁ”è€™¥¹…°œ°4(€€€€€€€±…‰•°è€¥¹…°AÉ½µÁÐœ°4(€€€€€€€±…‰•±-•äè€Í½ÕÉ”¹™¥¹…±AÉ½µÁÐœ°4(€€€€€€€½¹Ñ•¹Ðè™¥¹…±Q•áÐ°4(€€€€€€€½±½ÈèM=UI}=1=IL¹™¥¹…°°4(€€€€€€€…ÑÑÉ¥‰ÕÑ¥½¸è€•á…Ðœ°4(€€€€€€€¥¹±Õ‘•èÑÉÕ”°4(€€€€€€€Ñ½­•¹½Õ¹Ðè¹Õ±°°4(€€€€€€€µ•Ñ…‘…Ñ„èíô°(€€€€€€€É…¹•Ìè™¥¹…±Q•áÐ€ümìÍÑ…ÉÐè€À°•¹è™¥¹…±Q•áÐ¹±•¹Ñ õt€èmt°(€€€€€€€ÁÉ½Ù•¹…¹”èìµ•Ñ¡½è€•á…Ðœ°½¹™¥‘•¹”è€Äô°(€€€ô¤ì4(4(€€€É•ÑÕÉ¸Í½ÕÉ•Ìì4)ô4(4)•áÁ½ÉÐ™Õ¹Ñ¥½¸É•…Ñ•M¹…ÁÍ¡½Ñ%¡Ñ¥µ•ÍÑ…µÀ°Á…å±½…¤ì4(€€€½¹ÍÐ¥¹ÁÕÐ€ô€‘íÑ¥µ•ÍÑ…µÁôè‘í™±…ÑÑ•¹AÉ½µÁÐ¡Á…å±½…¥õ€ì4(€€€±•Ð¡…Í €ô€ÈÄØØÄÌØÈØÄì4(€€€™½È€¡±•Ð¥¹‘•à€ô€Àì¥¹‘•à€ð¥¹ÁÕÐ¹±•¹Ñ ì¥¹‘•à€¬ô€Ä¤ì4(€€€€€€€¡…Í xô¥¹ÁÕÐ¹¡…É½‘•Ð¡¥¹‘•à¤ì4(€€€€€€€¡…Í €ô5…Ñ ¹¥µÕ°¡¡…Í °€ÄØÜÜÜØÄä¤ì4(€€€ô4(€€€É•ÑÕÉ¸€‘íÑ¥µ•ÍÑ…µÀ¹Ñ½MÑÉ¥¹œ ÌØ¥ô´‘ì¡¡…Í €øøø€À¤¹Ñ½MÑÉ¥¹œ ÌØ¥õ€ì4)ô4(4)•áÁ½ÉÐ…Íå¹Œ™Õ¹Ñ¥½¸™¥¹…±¥é•M¹…ÁÍ¡½Ð¡ì(€€€½¹Ñ•áÑMÑ…Ñ”°4(€€€Á…å±½…°4(€€€ÁÉ½µÁÑQåÁ”°4(€€€•¹•É…Ñ¥½¹QåÁ”°4(€€€…Ñ¥Ù…Ñ•‘1½É”°4(€€€•áÑ•¹Í¥½¹Y•ÉÍ¥½¸°4(€€€Ñ½­•¹½Õ¹Ñ•È°4(€€€…ÁÑÕÉ”°4(€€€É•ÅÕ•ÍÐ°)ô¤ì(€€€½¹ÍÐÑ¥µ•ÍÑ…µÀ€ô…Ñ”¹¹½Ü ¤ì(€€€½¹ÍÐ™¥¹…±Q•áÐ€ô™±…ÑÑ•¹AÉ½µÁÐ¡Á…å±½…¤ì(€€€½¹ÍÐ¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ€ôÉ•ÅÕ•ÍÐ€üüÉ•…Ñ•I•ÅÕ•ÍÑI•½É¡¹Õ±°¤ì(€€€½¹ÍÐÍ½ÕÉ•Ì€ô‰Õ¥±‘M½ÕÉ•Ì¡½¹Ñ•áÑMÑ…Ñ”°Á…å±½…°…Ñ¥Ù…Ñ•‘1½É”°¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ¤ì(€€€½¹ÍÐ¹½Éµ…±¥é•‘…ÁÑÕÉ”€ô…ÁÑÕÉ”€üüÉ•…Ñ•…ÁÑÕÉ•	½Õ¹‘…Éä¡ì4(€€€€€€€•Ù•¹Ñ9…µ”èÁÉ½µÁÑQåÁ”€ôôô€¡…Ðµ½µÁ±•Ñ¥½¸œ4(€€€€€€€€€€€€ü€!Q}=5A1Q%=9}AI=5AQ}Idœ4(€€€€€€€€€€€€è€9IQ}QI}=5	%9}AI=5AQLœ°4(€€€€€€€ÍÑ…”è€ÁÉ½µÁÐµÉ•…‘äœ°4(€€€€€€€É•ÅÕ•ÍÑ	½‘åÙ…¥±…‰±”è™…±Í”°4(€€€€€€€™…±±‰…¬èÑÉÕ”°4(€€€ô¤ì4(€€€½¹ÍÐ½Õ¹Ð€ô…Íå¹Œ€¡Ñ•áÐ¤€ôøì4(€€€€€€€ÑÉäì4(€€€€€€€€€€€É•ÑÕÉ¸9Õµ‰•È¡…Ý…¥ÐÑ½­•¹½Õ¹Ñ•È¡Ñ•áÐ¤¤ñð€Àì4(€€€€€€€ô…Ñ ì4(€€€€€€€€€€€É•ÑÕÉ¸5…Ñ ¹•¥°¡¹•ÜQ•áÑ¹½‘•È ¤¹•¹½‘”¡Ñ•áÐ¤¹±•¹Ñ €¼€Ì¸ÌÔ¤ì4(€€€€€€€ô4(€€€ôì4(4(€€€½¹ÍÐÑ½­•¹½Õ¹ÑÌ€ô…Ý…¥ÐAÉ½µ¥Í”¹…±°¡Í½ÕÉ•Ì¹µ…À ¡Í½ÕÉ”¤€ôø½Õ¹Ð¡Í½ÕÉ”¹½¹Ñ•¹Ð¤¤¤ì4(€€€Í½ÕÉ•Ì¹™½É…  ¡Í½ÕÉ”°¥¹‘•à¤€ôøì4(€€€€€€€Í½ÕÉ”¹Ñ½­•¹½Õ¹Ð€ôÑ½­•¹½Õ¹ÑÍm¥¹‘•átì4(€€€ô¤ì4(€€€½¹ÍÐÑ½Ñ…±Q½­•¹Ì€ô…Ý…¥Ð½Õ¹Ð¡™¥¹…±Q•áÐ¤ì4(€€€½¹ÍÐµ…á½¹Ñ•áÐ€ô9Õµ‰•È¡½¹Ñ•áÑMÑ…Ñ”¹µ…á½¹Ñ•áÐ¤ñð¹Õ±°ì4(€€€½¹ÍÐÉ•ÅÕ•ÍÑ5…á=ÕÑÁÕÐ€ô¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ¹Í•ÑÑ¥¹Ìü¹µ…á}Ñ½­•¹Ì4(€€€€€€€€üü¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ¹Í•ÑÑ¥¹Ìü¹µ…á}½µÁ±•Ñ¥½¹}Ñ½­•¹Ì4(€€€€€€€€üü¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ¹Í•ÑÑ¥¹Ìü¹µ…á}¹•Ý}Ñ½­•¹Ì4(€€€€€€€€üü¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ¹Í•ÑÑ¥¹Ìü¹µ…á}±•¹Ñ ì4(€€€½¹ÍÐµ…á=ÕÑÁÕÐ€ô9Õµ‰•È¡É•ÅÕ•ÍÑ5…á=ÕÑÁÕÐ€üü½¹Ñ•áÑMÑ…Ñ”¹µ…á=ÕÑÁÕÐ¤ñð¹Õ±°ì4(€€€½¹ÍÐÕÍ…‰±•½¹Ñ•áÐ€ôµ…á½¹Ñ•áÐ€˜˜µ…á=ÕÑÁÕÐ€ü5…Ñ ¹µ…à À°µ…á½¹Ñ•áÐ€´µ…á=ÕÑÁÕÐ¤€èµ…á½¹Ñ•áÐì(€€€½¹ÍÐµÕ±Ñ¥µ½‘…±ÍÑ¥µ…Ñ•Ì€ôÍ½ÕÉ•Ì(€€€€€€€€¹™¥±Ñ•È ¡Í½ÕÉ”¤€ôøÍ½ÕÉ”¹ÑåÁ”€ôôô€µÕ±Ñ¥µ½‘…°œ¤(€€€€€€€€¹µ…À ¡Í½ÕÉ”¤€ôøÍ½ÕÉ”¹µ•Ñ…‘…Ñ„ü¹Ñ½­•¹ÍÑ¥µ…Ñ”¤(€€€€€€€€¹™¥±Ñ•È¡	½½±•…¸¤ì(€€€½¹ÍÐ•ÍÑ¥µ…Ñ•‘5Õ±Ñ¥µ½‘…°€ôµÕ±Ñ¥µ½‘…±ÍÑ¥µ…Ñ•Ì¹™¥±Ñ•È ¡•ÍÑ¥µ…Ñ”¤€ôø9Õµ‰•È¹¥Í¥¹¥Ñ”¡•ÍÑ¥µ…Ñ”¹Ñ½­•¹Ì¤¤ì(4(€€€É•ÑÕÉ¸ì4(€€€€€€€Í¡•µ…Y•ÉÍ¥½¸èM9AM!=Q}M!5}YIM%=8°4(€€€€€€€¥èÉ•…Ñ•M¹…ÁÍ¡½Ñ%¡Ñ¥µ•ÍÑ…µÀ°Á…å±½…¤°4(€€€€€€€Ñ¥µ•ÍÑ…µÀ°4(€€€€€€€•áÑ•¹Í¥½¹Y•ÉÍ¥½¸°4(€€€€€€€¡…Ñ%è½¹Ñ•áÑMÑ…Ñ”¹¡…Ñ%ñð€}}±½‰…±}|œ°4(€€€€€€€µ•ÍÍ…•½Õ¹Ðè½¹Ñ•áÑMÑ…Ñ”¹µ•ÍÍ…•½Õ¹Ð°4(€€€€€€€…Á¤è½¹Ñ•áÑMÑ…Ñ”¹µ…¥¹Á¤ñð€Õ¹­¹½Ý¸œ°4(€€€€€€€µ½‘•°è¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ¹Í•ÑÑ¥¹Ìü¹µ½‘•°€üü½¹Ñ•áÑMÑ…Ñ”¹µ½‘•°€üü¹Õ±°°4(€€€€€€€ÁÉ•Í•Ðè½¹Ñ•áÑMÑ…Ñ”¹ÁÉ•Í•Ðñð¹Õ±°°4(€€€€€€€ÁÉ½µÁÑQåÁ”°4(€€€€€€€•¹•É…Ñ¥½¹QåÁ”è•¹•É…Ñ¥½¹QåÁ”ñð€Õ¹­¹½Ý¸œ°4(€€€€€€€Á…å±½…°4(€€€€€€€™¥¹…±Q•áÐ°4(€€€€€€€…ÁÑÕÉ”è¹½Éµ…±¥é•‘…ÁÑÕÉ”°4(€€€€€€€É•ÅÕ•ÍÐè¹½Éµ…±¥é•‘I•ÅÕ•ÍÐ°4(€€€€€€€Í½ÕÉ•Ì°4(€€€€€€€±½É•‰½½­¹ÑÉ¥•Ìè…Ñ¥Ù…Ñ•‘1½É”°4(€€€€€€€ÍÑ…ÑÌèì(€€€€€€€€€€€Ñ½Ñ…±Q½­•¹Ì°4(€€€€€€€€€€€µ…á½¹Ñ•áÐ°4(€€€€€€€€€€€µ…á=ÕÑÁÕÐ°4(€€€€€€€€€€€ÕÍ…‰±•½¹Ñ•áÐ°4(€€€€€€€€€€€½¹Ñ•áÑUÍ…”èÕÍ…‰±•½¹Ñ•áÐ€üÑ½Ñ…±Q½­•¹Ì€¼ÕÍ…‰±•½¹Ñ•áÐ€è¹Õ±°°4(€€€€€€€€€€€É•µ…¥¹¥¹½¹Ñ•áÐèÕÍ…‰±•½¹Ñ•áÐ€ü5…Ñ ¹µ…à À°ÕÍ…‰±•½¹Ñ•áÐ€´Ñ½Ñ…±Q½­•¹Ì¤€è¹Õ±°°(€€€€€€€€€€€ÍÑÉÕÑÕÉ•èì(€€€€€€€€€€€€€€€Ñ½½±M¡•µ…ÌèÍ½ÕÉ•Ì¹™¥±Ñ•È ¡Í½ÕÉ”¤€ôøÍ½ÕÉ”¹ÑåÁ”€ôôô€Ñ½½±}Í¡•µ„œ¤¹±•¹Ñ °(€€€€€€€€€€€€€€€Ñ½½±…±±ÌèÍ½ÕÉ•Ì¹™¥±Ñ•È ¡Í½ÕÉ”¤€ôøÍ½ÕÉ”¹ÑåÁ”€ôôô€Ñ½½±}…±°œ¤¹±•¹Ñ °(€€€€€€€€€€€€€€€Ñ½½±I•ÍÕ±ÑÌèÍ½ÕÉ•Ì¹™¥±Ñ•È ¡Í½ÕÉ”¤€ôøÍ½ÕÉ”¹ÑåÁ”€ôôô€Ñ½½±}É•ÍÕ±Ðœ¤¹±•¹Ñ °(€€€€€€€€€€€€€€€µÕ±Ñ¥µ½‘…±A…ÉÑÌèÍ½ÕÉ•Ì¹™¥±Ñ•È ¡Í½ÕÉ”¤€ôøÍ½ÕÉ”¹ÑåÁ”€ôôô€µÕ±Ñ¥µ½‘…°œ¤¹±•¹Ñ °(€€€€€€€€€€€€€€€µÕ±Ñ¥µ½‘…±ÍÑ¥µ…Ñ•‘Q½­•¹Ìè•ÍÑ¥µ…Ñ•‘5Õ±Ñ¥µ½‘…°(€€€€€€€€€€€€€€€€€€€€¹É•‘Õ” ¡ÍÕ´°•ÍÑ¥µ…Ñ”¤€ôøÍÕ´€¬•ÍÑ¥µ…Ñ”¹Ñ½­•¹Ì°€À¤°(€€€€€€€€€€€€€€€µÕ±Ñ¥µ½‘…±ÍÑ¥µ…Ñ•½Ù•É…”èµÕ±Ñ¥µ½‘…±ÍÑ¥µ…Ñ•Ì¹±•¹Ñ (€€€€€€€€€€€€€€€€€€€€ü•ÍÑ¥µ…Ñ•‘5Õ±Ñ¥µ½‘…°¹±•¹Ñ €¼µÕ±Ñ¥µ½‘…±ÍÑ¥µ…Ñ•Ì¹±•¹Ñ (€€€€€€€€€€€€€€€€€€€€è¹Õ±°°(€€€€€€€€€€€ô°(€€€€€€€ô°(€€€ôì4)ô4(4)•áÁ½ÉÐ™Õ¹Ñ¥½¸Í•…É¡M¹…ÁÍ¡½Ð¡Í¹…ÁÍ¡½Ð°ÅÕ•Éä°½ÁÑ¥½¹Ì€ôíô¤ì4(€€€½¹ÍÐ¹••‘±”€ôMÑÉ¥¹œ¡ÅÕ•Éä€üü€œœ¤ì4(€€€¥˜€ …¹••‘±”¤ì4(€€€€€€€É•ÑÕÉ¸mtì4(€€€ô4(4(€€€½¹ÍÐ™±…Ì€ô½ÁÑ¥½¹Ì¹…Í•M•¹Í¥Ñ¥Ù”€ü€œœ€è€¤œì4(€€€½¹ÍÐ•áÁÉ•ÍÍ¥½¸€ô½ÁÑ¥½¹Ì¹É••à4(€€€€€€€€ü¹•ÜI•áÀ¡¹••‘±”°™±…Ì¤4(€€€€€€€€è¹•ÜI•áÀ¡¹••‘±”¹É•Á±…” ½l¸¨¬ýx‘íô ¥ñmquqqt½œ°€qp˜œ¤°™±…Ì¤ì4(€€€½¹ÍÐÉ•ÍÕ±ÑÌ€ômtì4(4(€€€™½È€¡½¹ÍÐÍ½ÕÉ”½˜Í¹…ÁÍ¡½Ðü¹Í½ÕÉ•Ì€üümt¤ì4(€€€€€€€•áÁÉ•ÍÍ¥½¸¹±…ÍÑ%¹‘•à€ô€Àì4(€€€€€€€±•Ðµ…Ñ ì4(€€€€€€€Ý¡¥±”€ ¡µ…Ñ €ô•áÁÉ•ÍÍ¥½¸¹•á•Œ¡Í½ÕÉ”¹½¹Ñ•¹Ð¤¤€„ôô¹Õ±°€˜˜É•ÍÕ±ÑÌ¹±•¹Ñ €ð€ÈÀÀ¤ì4(€€€€€€€€€€€½¹ÍÐÍÑ…ÉÐ€ô5…Ñ ¹µ…à À°µ…Ñ ¹¥¹‘•à€´€ØÀ¤ì4(€€€€€€€€€€€½¹ÍÐ•¹€ô5…Ñ ¹µ¥¸¡Í½ÕÉ”¹½¹Ñ•¹Ð¹±•¹Ñ °µ…Ñ ¹¥¹‘•à€¬5…Ñ ¹µ…à¡µ…Ñ¡lÁt¹±•¹Ñ °€Ä¤€¬€ØÀ¤ì4(€€€€€€€€€€€É•ÍÕ±ÑÌ¹ÁÕÍ ¡ì4(€€€€€€€€€€€€€€€Í½ÕÉ•%èÍ½ÕÉ”¹¥°4(€€€€€€€€€€€€€€€Í½ÕÉ•1…‰•°èÍ½ÕÉ•¥ÍÁ±…å1…‰•°¡Í½ÕÉ”¤°4(€€€€€€€€€€€€€€€¥¹‘•àèµ…Ñ ¹¥¹‘•à°4(€€€€€€€€€€€€€€€±•¹Ñ èµ…Ñ¡lÁt¹±•¹Ñ °4(€€€€€€€€€€€€€€€Í¹¥ÁÁ•ÐèÍ½ÕÉ”¹½¹Ñ•¹Ð¹Í±¥”¡ÍÑ…ÉÐ°•¹¤°4(€€€€€€€€€€€ô¤ì4(€€€€€€€€€€€¥˜€¡µ…Ñ¡lÁt¹±•¹Ñ €ôôô€À¤ì4(€€€€€€€€€€€€€€€•áÁÉ•ÍÍ¥½¸¹±…ÍÑ%¹‘•à€¬ô€Äì4(€€€€€€€€€€€ô4(€€€€€€€ô4(€€€€€€€¥˜€¡É•ÍÕ±ÑÌ¹±•¹Ñ €øô€ÈÀÀ¤ì4(€€€€€€€€€€€‰É•…¬ì4(€€€€€€€ô4(€€€ô4(4(€€€É•ÑÕÉ¸É•ÍÕ±ÑÌì4)ô4(4)•áÁ½ÉÐ™Õ¹Ñ¥½¸Í•É¥…±¥é•M¹…ÁÍ¡½Ð¡Í¹…ÁÍ¡½Ð°™½Éµ…Ð¤ì4(€€€¥˜€¡™½Éµ…Ð€ôôô€©Í½¸œ¤ì4(€€€€€€€É•ÑÕÉ¸)M=8¹ÍÑÉ¥¹¥™ä¡Í¹…ÁÍ¡½Ð°¹Õ±°°€È¤ì4(€€€ô4(4(€€€½¹ÍÐ¡•…‘•È€ôl4(€€€€€€€MP•ÙQ½½±Ìƒ²*“®²Ü€‘íÍ¹…ÁÍ¡½Ð¹¥‘õ€°4(€€€€€€€ƒ²ê‡²Ê`ƒ².sªÂè€‘í¹•Ü…Ñ”¡Í¹…ÁÍ¡½Ð¹Ñ¥µ•ÍÑ…µÀ¤¹Ñ½%M=MÑÉ¥¹œ ¥õ€°4(€€€€€€€A$è€‘íÍ¹…ÁÍ¡½Ð¹…Á¥õ€°4(€€€€€€€ƒ®ª£®6àè€‘íÍ¹…ÁÍ¡½Ð¹µ½‘•°€üüÐ ½µµ½¸¹Õ¹­¹½Ý¸œ¥õ€°4(€€€€€€€ƒ¶ƒ¶Àè€‘íÍ¹…ÁÍ¡½Ð¹ÍÑ…ÑÌü¹Ñ½Ñ…±Q½­•¹Ì€üüÐ ½µµ½¸¹Õ¹­¹½Ý¸œ¥õ€°4(€€€tì4(4(€€€¥˜€¡™½Éµ…Ð€ôôô€µ…É­‘½Ý¸œ¤ì4(€€€€€€€½¹ÍÐÍ•Ñ¥½¹Ì€ôÍ¹…ÁÍ¡½Ð¹Í½ÕÉ•Ì¹µ…À ¡Í½ÕÉ”¤€ôø€ 4(€€€€€€€€€€€€ŒŒ€‘íÍ½ÕÉ•¥ÍÁ±…å1…‰•°¡Í½ÕÉ”¥õq¹q¹€€¬4(€€€€€€€€€€€€´ƒ²rƒ¶bTèq€‘íÍ½ÕÉ”¹ÑåÁ•õqq¹€€¬4(€€€€€€€€€€€€´ƒ¶ƒ¶Àè€‘íÍ½ÕÉ”¹Ñ½­•¹½Õ¹Ð€üüÐ ½µµ½¸¹Õ¹­¹½Ý¸œ¥õq¹€€¬4(€€€€€€€€€€€€´ƒ²3²*ƒ²^ÃªÊÀè€‘í…ÑÑÉ¥‰ÕÑ¥½¹¥ÍÁ±…å1…‰•°¡Í½ÕÉ”¹…ÑÑÉ¥‰ÕÑ¥½¸¥õq¹q¹€€¬4(€€€€€€€€€€€qqqÑ•áÑq¸‘íÍ½ÕÉ”¹½¹Ñ•¹Ð¹É•Á±…•±° €œ°€qq€œ¥õq¹qqq€4(€€€€€€€€¤¤ì4(€€€€€€€É•ÑÕÉ¸€ŒMP•ÙQ½½±Ìƒ²*“®²Ýq¹q¸‘í¡•…‘•È¹µ…À ¡±¥¹”¤€ôø€´€‘í±¥¹•õ€¤¹©½¥¸ q¸œ¥õq¹q¸‘íÍ•Ñ¥½¹Ì¹©½¥¸ q¹q¸œ¥õ€ì4(€€€ô4(4(€€€½¹ÍÐÍ•Ñ¥½¹Ì€ôÍ¹…ÁÍ¡½Ð¹Í½ÕÉ•Ì¹µ…À ¡Í½ÕÉ”¤€ôø€ 4(€€€€€€€q¹q¸ôôôôô€‘íÍ½ÕÉ•¥ÍÁ±…å1…‰•°¡Í½ÕÉ”¥ôl‘íÍ½ÕÉ”¹ÑåÁ•õt€ôôôôõq¸‘íÍ½ÕÉ”¹½¹Ñ•¹Ñõ€4(€€€€¤¤ì4(€€€É•ÑÕÉ¸€‘í¡•…‘•È¹©½¥¸ q¸œ¥ô‘íÍ•Ñ¥½¹Ì¹©½¥¸ œœ¥õ€ì4)ô4(
