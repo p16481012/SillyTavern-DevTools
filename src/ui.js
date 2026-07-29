@@ -46,6 +46,7 @@ const TABS = [
     ['rules', 'tab.rules'],
     ['search', 'tab.search'],
 ];
+let tooltipSequence = 0;
 
 function element(tag, options = {}) {
     const node = document.createElement(tag);
@@ -54,6 +55,73 @@ function element(tag, options = {}) {
     if (options.title) node.title = options.title;
     if (options.type) node.type = options.type;
     return node;
+}
+
+function setHelpTooltipOpen(wrapper, open) {
+    wrapper.classList.toggle('is-open', open);
+    wrapper.querySelector('.st-devtools-help-trigger')
+        ?.setAttribute('aria-expanded', String(open));
+}
+
+function closeHelpTooltips(root = document, except = null) {
+    for (const wrapper of root.querySelectorAll('.st-devtools-help-tooltip.is-open')) {
+        if (wrapper !== except) setHelpTooltipOpen(wrapper, false);
+    }
+}
+
+function helpTooltip(text, title) {
+    const wrapper = element('span', { className: 'st-devtools-help-tooltip' });
+    const trigger = element('button', {
+        className: 'st-devtools-help-trigger',
+        text: '?',
+        type: 'button',
+    });
+    const tooltip = element('span', {
+        className: 'st-devtools-help-bubble',
+        text,
+    });
+    const tooltipId = `st-devtools-tooltip-${++tooltipSequence}`;
+    tooltip.id = tooltipId;
+    tooltip.setAttribute('role', 'tooltip');
+    trigger.setAttribute('aria-label', t('common.showDescription', { title }));
+    trigger.setAttribute('aria-controls', tooltipId);
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextOpen = !wrapper.classList.contains('is-open');
+        closeHelpTooltips(document, wrapper);
+        setHelpTooltipOpen(wrapper, nextOpen);
+        if (!nextOpen) trigger.blur();
+    });
+    trigger.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        setHelpTooltipOpen(wrapper, false);
+        trigger.focus();
+    });
+    wrapper.addEventListener('focusout', (event) => {
+        if (!wrapper.contains(event.relatedTarget)) {
+            setHelpTooltipOpen(wrapper, false);
+        }
+    });
+    wrapper.append(trigger, tooltip);
+    return wrapper;
+}
+
+function explainedTitle(title, description, {
+    tag = 'span',
+    titleTag = 'strong',
+    className = '',
+} = {}) {
+    const wrapper = element(tag, {
+        className: `st-devtools-explained-title ${className}`.trim(),
+    });
+    wrapper.append(
+        element(titleTag, { text: title }),
+        helpTooltip(description, title),
+    );
+    return wrapper;
 }
 
 function formatTimestamp(timestamp) {
@@ -275,6 +343,11 @@ export class DevToolsWindow {
         this.ruleSettingsOpen = false;
         this.comparisonPolicySettings = this.loadComparisonPolicySettings();
         this.comparisonPolicyOpen = false;
+        this.comparisonPolicySectionOpen = {
+            rules: false,
+            manual: false,
+            preview: false,
+        };
         this.previouslyFocused = null;
         this.storageErrors = [];
         this.importedDiagnostics = null;
@@ -389,6 +462,9 @@ export class DevToolsWindow {
 
         this.root.addEventListener('pointerdown', (event) => {
             if (event.target === this.root) this.close();
+            if (!event.target.closest('.st-devtools-help-tooltip')) {
+                closeHelpTooltips(this.root);
+            }
         });
         document.addEventListener('keydown', (event) => this.handleDialogKeydown(event));
         this.enableDragging(header);
@@ -747,15 +823,7 @@ export class DevToolsWindow {
         const sourceGroups = explorerSourceGroups(snapshot.sources);
         const configuredGroup = sourceGroups.find((group) => group.key === 'configured');
         const promptManagerOrder = configuredGroup?.promptManagerOrder ?? false;
-        page.append(
-            this.renderSnapshotPicker(),
-            element('p', {
-                className: 'st-devtools-section-intro',
-                text: t(promptManagerOrder
-                    ? 'explorer.intro'
-                    : 'explorer.introFallback'),
-            }),
-        );
+        page.append(this.renderSnapshotPicker());
         const guide = element('details', {
             className: 'st-devtools-disclosure st-devtools-explorer-guide',
         });
@@ -784,16 +852,15 @@ export class DevToolsWindow {
             group.open = groupData.open;
             const groupSummary = element('summary');
             const groupHeading = element('span', { className: 'st-devtools-source-group-heading' });
-            groupHeading.append(
-                element('strong', { text: t(`explorer.group.${groupData.key}`) }),
-                element('small', {
-                    text: t(
-                        groupData.key === 'configured' && !groupData.promptManagerOrder
-                            ? 'explorer.group.configuredFallbackDescription'
-                            : `explorer.group.${groupData.key}Description`,
-                    ),
-                }),
+            const groupTitle = t(`explorer.group.${groupData.key}`);
+            const groupDescription = t(
+                groupData.key === 'configured' && !groupData.promptManagerOrder
+                    ? 'explorer.introFallback'
+                    : groupData.key === 'configured'
+                        ? 'explorer.intro'
+                        : `explorer.group.${groupData.key}Description`,
             );
+            groupHeading.append(explainedTitle(groupTitle, groupDescription));
             groupSummary.append(
                 groupHeading,
                 element('span', {
@@ -1162,10 +1229,10 @@ export class DevToolsWindow {
         });
         const toolboxSummary = element('summary');
         const toolboxHeading = element('span', { className: 'st-devtools-toolbox-heading' });
-        toolboxHeading.append(
-            element('strong', { text: t('timeline.toolsTitle') }),
-            element('small', { text: t('timeline.toolsDescription') }),
-        );
+        toolboxHeading.append(explainedTitle(
+            t('timeline.toolsTitle'),
+            t('timeline.toolsDescription'),
+        ));
         toolboxSummary.appendChild(toolboxHeading);
         const toolboxContent = element('div', { className: 'st-devtools-toolbox-content' });
         const toolRow = (titleKey, descriptionKey, buttons, className = '') => {
@@ -1173,10 +1240,7 @@ export class DevToolsWindow {
                 className: `st-devtools-tool-row ${className}`.trim(),
             });
             const description = element('span', { className: 'st-devtools-tool-description' });
-            description.append(
-                element('strong', { text: t(titleKey) }),
-                element('small', { text: t(descriptionKey) }),
-            );
+            description.append(explainedTitle(t(titleKey), t(descriptionKey)));
             const actions = element('span', { className: 'st-devtools-tool-row-actions' });
             actions.append(...buttons);
             row.append(description, actions);
@@ -1244,23 +1308,7 @@ export class DevToolsWindow {
             return page;
         }
 
-        const growthDetails = element('details', {
-            className: 'st-devtools-disclosure st-devtools-growth-disclosure',
-        });
-        const growthSummary = element('summary');
-        growthSummary.append(
-            element('strong', { text: t('timeline.growthToggle') }),
-            element('small', {
-                text: t('timeline.maximumTokens', {
-                    count: Math.max(
-                        0,
-                        ...analyses.map(({ snapshot }) => Number(snapshot.stats?.totalTokens) || 0),
-                    ),
-                }),
-            }),
-        );
-        growthDetails.append(growthSummary, this.renderGrowthChart(analyses));
-        page.appendChild(growthDetails);
+        page.appendChild(this.renderGrowthChart(analyses));
         const list = element('div', { className: 'st-devtools-timeline' });
         for (const analysis of [...analyses].reverse()) {
             const { snapshot, previous, tokenDelta, lore } = analysis;
@@ -1328,7 +1376,19 @@ export class DevToolsWindow {
             }
             list.appendChild(entry);
         }
-        page.appendChild(list);
+        const snapshots = element('details', {
+            className: 'st-devtools-disclosure st-devtools-timeline-snapshots',
+        });
+        const snapshotsSummary = element('summary');
+        snapshotsSummary.append(
+            element('strong', { text: t('timeline.snapshotsTitle') }),
+            element('span', {
+                className: 'st-devtools-disclosure-count',
+                text: t('timeline.snapshotCount', { count: analyses.length }),
+            }),
+        );
+        snapshots.append(snapshotsSummary, list);
+        page.appendChild(snapshots);
         return page;
     }
 
@@ -1518,12 +1578,10 @@ export class DevToolsWindow {
 
         const caption = element('figcaption');
         const captionText = element('span');
-        captionText.append(
-            element('strong', { text: t('timeline.growthTitle') }),
-            element('small', {
-                text: t('timeline.growthDescription', { count: analyses.length }),
-            }),
-        );
+        captionText.append(explainedTitle(
+            t('timeline.growthTitle'),
+            t('timeline.growthDescription', { count: analyses.length }),
+        ));
         caption.append(
             captionText,
             element('span', {
@@ -1619,20 +1677,16 @@ export class DevToolsWindow {
         const baseSelect = this.createTimelineSelect(this.timeline.at(-2).id, t('diff.base'));
         const compareSelect = this.createTimelineSelect(this.selectedSnapshot()?.id ?? this.timeline.at(-1).id, t('diff.compare'));
         selectors.append(baseSelect.wrapper, compareSelect.wrapper);
-        const description = element('p', {
-            className: 'st-devtools-section-intro',
-            text: t('diff.description'),
-        });
         const diffOutput = element('pre', { className: 'st-devtools-diff-output' });
         const fullDiff = element('details', {
             className: 'st-devtools-disclosure st-devtools-full-diff',
         });
         const fullDiffSummary = element('summary');
         const fullDiffHeading = element('span', { className: 'st-devtools-toolbox-heading' });
-        fullDiffHeading.append(
-            element('strong', { text: t('diff.fullPromptChanges') }),
-            element('small', { text: t('diff.fullPromptDescription') }),
-        );
+        fullDiffHeading.append(explainedTitle(
+            t('diff.fullPromptChanges'),
+            t('diff.fullPromptDescription'),
+        ));
         fullDiffSummary.appendChild(fullDiffHeading);
         fullDiff.append(fullDiffSummary, diffOutput);
         const sourceSection = element('section', { className: 'st-devtools-diff-section' });
@@ -1651,7 +1705,7 @@ export class DevToolsWindow {
         };
         baseSelect.select.addEventListener('change', renderDiff);
         compareSelect.select.addEventListener('change', renderDiff);
-        page.append(selectors, description, sourceSection, loreSection, fullDiff);
+        page.append(selectors, sourceSection, loreSection, fullDiff);
         renderDiff();
         return page;
     }
@@ -1674,7 +1728,11 @@ export class DevToolsWindow {
     }
 
     renderSourceChanges(section, base, compare) {
-        section.appendChild(element('h3', { text: t('diff.sourceChanges') }));
+        section.appendChild(explainedTitle(
+            t('diff.sourceChanges'),
+            t('diff.description'),
+            { tag: 'h3', titleTag: 'span' },
+        ));
         const changes = compareSnapshotSources(base, compare);
         if (!changes.length) {
             section.appendChild(element('p', { text: t('diff.noSourceChanges') }));
@@ -1861,10 +1919,10 @@ export class DevToolsWindow {
         });
         const exportSummary = element('summary');
         const exportHeading = element('span', { className: 'st-devtools-toolbox-heading' });
-        exportHeading.append(
-            element('strong', { text: t('context.exportTitle') }),
-            element('small', { text: t('context.exportDescription') }),
-        );
+        exportHeading.append(explainedTitle(
+            t('context.exportTitle'),
+            t('context.exportDescription'),
+        ));
         exportSummary.appendChild(exportHeading);
         const exportActions = element('div', { className: 'st-devtools-tool-row-actions' });
         const copy = element('button', { className: 'menu_button', text: t('action.copy'), type: 'button' });
@@ -1941,10 +1999,12 @@ export class DevToolsWindow {
         details.addEventListener('toggle', () => {
             this.ruleSettingsOpen = details.open;
         });
-        details.append(
-            element('summary', { text: t('rules.settingsTitle') }),
-            element('p', { text: t('rules.settingsDescription') }),
-        );
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('rules.settingsTitle'),
+            t('rules.settingsDescription'),
+        ));
+        details.append(summary);
 
         const form = element('form');
         const toggles = element('div', { className: 'st-devtools-rule-setting-toggles' });
@@ -2311,11 +2371,7 @@ export class DevToolsWindow {
         };
         const sourceSelect = element('select');
         for (const source of configuredSources) {
-            const identifier = source.metadata?.identifier;
-            const label = identifier
-                ? `${policySourceLabel(source)} · ${identifier}`
-                : policySourceLabel(source);
-            const option = element('option', { text: label });
+            const option = element('option', { text: policySourceLabel(source) });
             option.value = source.id;
             sourceSelect.appendChild(option);
         }
@@ -2383,11 +2439,27 @@ export class DevToolsWindow {
         return form;
     }
 
+    createComparisonPolicySection(key, title, description) {
+        const details = element('details', {
+            className: 'st-devtools-disclosure st-devtools-policy-section',
+        });
+        details.dataset.policySection = key;
+        details.open = this.comparisonPolicySectionOpen[key] ?? false;
+        details.addEventListener('toggle', () => {
+            this.comparisonPolicySectionOpen[key] = details.open;
+        });
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(title, description));
+        const content = element('div', { className: 'st-devtools-policy-section-content' });
+        details.append(summary, content);
+        return { details, content };
+    }
+
     renderComparisonPreview(snapshot) {
-        const section = element('section', { className: 'st-devtools-policy-section' });
-        section.append(
-            element('h4', { text: t('comparison.previewTitle') }),
-            element('p', { text: t('comparison.previewDescription') }),
+        const { details: section, content } = this.createComparisonPolicySection(
+            'preview',
+            t('comparison.previewTitle'),
+            t('comparison.previewDescription'),
         );
         try {
             const annotated = annotateSourcesWithPolicies(
@@ -2411,7 +2483,7 @@ export class DevToolsWindow {
                     && source?.content?.trim()
                 ));
             if (rows.length === 0) {
-                section.appendChild(element('p', { text: t('comparison.previewEmpty') }));
+                content.appendChild(element('p', { text: t('comparison.previewEmpty') }));
                 return section;
             }
 
@@ -2486,7 +2558,7 @@ export class DevToolsWindow {
             }
             table.append(head, body);
             tableWrapper.appendChild(table);
-            section.appendChild(tableWrapper);
+            content.appendChild(tableWrapper);
         } catch (error) {
             const message = element('p', {
                 className: 'st-devtools-policy-invalid',
@@ -2495,7 +2567,7 @@ export class DevToolsWindow {
                 }),
             });
             message.setAttribute('role', 'alert');
-            section.appendChild(message);
+            content.appendChild(message);
         }
         return section;
     }
@@ -2508,22 +2580,25 @@ export class DevToolsWindow {
         details.addEventListener('toggle', () => {
             this.comparisonPolicyOpen = details.open;
         });
-        details.append(
-            element('summary', { text: t('comparison.title') }),
-            element('p', { text: t('comparison.description') }),
-            element('p', { text: t('comparison.behaviorDescription') }),
-            element('p', {
-                className: 'st-devtools-policy-precedence',
-                text: t('comparison.precedence'),
-            }),
-        );
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('comparison.title'),
+            [
+                t('comparison.description'),
+                t('comparison.behaviorDescription'),
+                t('comparison.precedence'),
+            ].join(' '),
+        ));
+        details.append(summary);
 
         const content = element('div', { className: 'st-devtools-policy-content' });
-        const ruleSection = element('section', { className: 'st-devtools-policy-section' });
-        ruleSection.append(
-            element('h4', { text: t('comparison.rulesTitle') }),
-            element('p', { text: t('comparison.rulesDescription') }),
-            element('p', { text: t('comparison.regexDescription') }),
+        const {
+            details: ruleSection,
+            content: ruleContent,
+        } = this.createComparisonPolicySection(
+            'rules',
+            t('comparison.rulesTitle'),
+            `${t('comparison.rulesDescription')} ${t('comparison.regexDescription')}`,
         );
         const rules = this.comparisonNameRules();
         const ruleList = element('div', { className: 'st-devtools-policy-rule-list' });
@@ -2534,18 +2609,21 @@ export class DevToolsWindow {
                 ruleList.appendChild(this.renderComparisonRuleCard(rule, index));
             });
         }
-        ruleSection.append(ruleList, this.renderComparisonRuleCreator());
+        ruleContent.append(ruleList, this.renderComparisonRuleCreator());
 
-        const manualSection = element('section', { className: 'st-devtools-policy-section' });
-        manualSection.append(
-            element('h4', { text: t('comparison.manualTitle') }),
-            element('p', { text: t('comparison.manualDescription') }),
+        const {
+            details: manualSection,
+            content: manualContent,
+        } = this.createComparisonPolicySection(
+            'manual',
+            t('comparison.manualTitle'),
+            t('comparison.manualDescription'),
         );
         const assignmentList = element('div', { className: 'st-devtools-policy-assignment-list' });
         this.comparisonManualAssignments().forEach((assignment, index) => {
             assignmentList.appendChild(this.renderManualAssignmentCard(assignment, index));
         });
-        manualSection.append(assignmentList, this.renderManualAssignmentCreator(snapshot));
+        manualContent.append(assignmentList, this.renderManualAssignmentCreator(snapshot));
 
         const actions = element('div', {
             className: 'st-devtools-rule-setting-actions st-devtools-policy-actions',

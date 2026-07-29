@@ -184,12 +184,105 @@
     line-height: 1.5;
 }
 
+.st-devtools-explained-title {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.st-devtools-help-tooltip {
+    position: static;
+    display: inline-flex;
+    flex: none;
+}
+
+.st-devtools-window .st-devtools-help-trigger {
+    display: inline-grid;
+    width: 1.25rem;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    margin: 0;
+    padding: 0;
+    place-items: center;
+    appearance: none;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 50%;
+    background: var(--st-devtools-surface-muted);
+    box-shadow: none;
+    color: var(--st-devtools-text);
+    cursor: help;
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.st-devtools-window .st-devtools-help-trigger:hover,
+.st-devtools-window .st-devtools-help-trigger:focus {
+    border-color: var(--SmartThemeQuoteColor, #60a5fa);
+    background: var(--st-devtools-hover);
+    box-shadow: none;
+}
+
+.st-devtools-window .st-devtools-help-trigger:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, #60a5fa);
+    outline-offset: 2px;
+}
+
+.st-devtools-help-bubble {
+    position: absolute;
+    z-index: 60;
+    top: calc(100% + 0.45rem);
+    left: 0;
+    visibility: hidden;
+    width: max-content;
+    max-width: min(20rem, calc(100vw - 2rem));
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 6px;
+    background: var(--st-devtools-surface-muted);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+    color: var(--st-devtools-text);
+    font-size: 0.82rem;
+    font-weight: 400;
+    line-height: 1.45;
+    opacity: 0;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    text-align: left;
+    transform: translateY(-0.2rem);
+    transition: opacity 120ms ease, transform 120ms ease, visibility 120ms;
+    white-space: normal;
+}
+
+.st-devtools-help-tooltip.is-open .st-devtools-help-bubble,
+.st-devtools-help-trigger:focus-visible + .st-devtools-help-bubble {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .st-devtools-help-tooltip:hover .st-devtools-help-bubble {
+        visibility: visible;
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 .st-devtools-disclosure,
 .st-devtools-toolbox {
-    overflow: hidden;
+    overflow: visible;
     border: 1px solid var(--st-devtools-border);
     border-radius: 6px;
     background: var(--st-devtools-surface);
+}
+
+.st-devtools-window details:not([open]) > :not(summary) {
+    display: none !important;
 }
 
 .st-devtools-disclosure > summary,
@@ -201,6 +294,11 @@
     padding: 0.65rem 0.75rem;
     cursor: pointer;
     font-weight: 700;
+}
+
+.st-devtools-disclosure > summary > .st-devtools-explained-title,
+.st-devtools-toolbox > summary > .st-devtools-explained-title {
+    flex: 1;
 }
 
 .st-devtools-disclosure > summary,
@@ -331,7 +429,7 @@
 }
 
 .st-devtools-source-group {
-    overflow: hidden;
+    overflow: visible;
     border: 1px solid var(--st-devtools-border);
     border-radius: 7px;
     background: var(--st-devtools-panel-bg);
@@ -351,12 +449,7 @@
     display: flex;
     min-width: 0;
     flex: 1;
-    flex-direction: column;
-    gap: 0.1rem;
-}
-
-.st-devtools-source-group-heading small {
-    opacity: 0.68;
+    align-items: center;
 }
 
 .st-devtools-source-group-count {
@@ -656,6 +749,18 @@
     flex-wrap: wrap;
     gap: 0.35rem;
     margin-top: 0.3rem;
+}
+
+.st-devtools-disclosure-count {
+    margin-left: auto;
+    font-size: 0.8rem;
+    font-weight: 400;
+    opacity: 0.72;
+}
+
+.st-devtools-timeline-snapshots > .st-devtools-timeline {
+    padding: 0.65rem;
+    background: var(--st-devtools-panel-bg);
 }
 
 .st-devtools-change-pill,
@@ -1095,21 +1200,19 @@
 }
 
 .st-devtools-policy-section {
+    display: block;
+}
+
+.st-devtools-policy-section-content {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
     padding: 0.75rem;
-    border: 1px solid var(--st-devtools-border);
-    border-radius: 6px;
     background: var(--st-devtools-surface);
 }
 
-.st-devtools-policy-section > h4,
-.st-devtools-policy-section > p {
+.st-devtools-policy-section-content > p {
     margin: 0;
-}
-
-.st-devtools-policy-section > p {
     opacity: 0.74;
 }
 

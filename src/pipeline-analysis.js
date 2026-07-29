@@ -46,7 +46,7 @@ function sourceBaseKey(source) {
 function indexSources(sources = []) {
     const counts = new Map();
     const indexed = new Map();
-    for (const source of sources.filter((item) => item?.type !== 'final')) {
+    for (const source of sources.filter(sourceIsIncludedInRequest)) {
         const base = sourceBaseKey(source);
         const occurrence = counts.get(base) ?? 0;
         counts.set(base, occurrence + 1);

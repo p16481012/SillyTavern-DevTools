@@ -84,6 +84,102 @@ test('compareSnapshotSources uses stable metadata identities across captures', (
     ]);
 });
 
+test('compareSnapshotSources ignores disabled and request-omitted prompt changes', () => {
+    const base = snapshot({
+        id: 'base',
+        timestamp: 1,
+        totalTokens: 10,
+        sources: [
+            source({ id: 'included-a', field: 'main', content: 'old', tokenCount: 3 }),
+            {
+                ...source({
+                    id: 'omitted-a',
+                    field: 'optional',
+                    content: 'omitted old',
+                    tokenCount: 20,
+                }),
+                included: false,
+                configuredEnabled: true,
+            },
+            {
+                ...source({
+                    id: 'disabled-a',
+                    field: 'disabled',
+                    content: 'disabled old',
+                    tokenCount: 30,
+                }),
+                included: false,
+                configuredEnabled: false,
+            },
+        ],
+    });
+    const compare = snapshot({
+        id: 'compare',
+        timestamp: 2,
+        totalTokens: 12,
+        sources: [
+            source({ id: 'included-b', field: 'main', content: 'new', tokenCount: 5 }),
+            {
+                ...source({
+                    id: 'omitted-b',
+                    field: 'optional',
+                    content: 'omitted new',
+                    tokenCount: 40,
+                }),
+                included: false,
+                configuredEnabled: true,
+            },
+            {
+                ...source({
+                    id: 'disabled-b',
+                    field: 'disabled',
+                    content: 'disabled new',
+                    tokenCount: 60,
+                }),
+                included: false,
+                configuredEnabled: false,
+            },
+            {
+                ...source({
+                    id: 'disabled-added',
+                    field: 'disabled-added',
+                    content: 'never sent',
+                    tokenCount: 70,
+                }),
+                included: false,
+                configuredEnabled: false,
+            },
+        ],
+    });
+
+    const changes = compareSnapshotSources(base, compare);
+    assert.deepEqual(changes.map(({ source: item, status }) => [item.metadata.field, status]), [
+        ['main', 'changed'],
+    ]);
+});
+
+test('compareSnapshotSources reports a prompt removed when it leaves the actual request', () => {
+    const baseSource = {
+        ...source({ id: 'active', field: 'optional', content: 'active', tokenCount: 4 }),
+        included: true,
+        configuredEnabled: true,
+    };
+    const omittedSource = {
+        ...source({ id: 'omitted', field: 'optional', content: 'active', tokenCount: 4 }),
+        included: false,
+        configuredEnabled: true,
+    };
+
+    const changes = compareSnapshotSources(
+        snapshot({ id: 'base', timestamp: 1, totalTokens: 4, sources: [baseSource] }),
+        snapshot({ id: 'compare', timestamp: 2, totalTokens: 0, sources: [omittedSource] }),
+    );
+
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].status, 'removed');
+    assert.equal(changes[0].source.metadata.field, 'optional');
+});
+
 test('buildTimelineAnalysis calculates chronological token and lore deltas', () => {
     const alpha = { world: 'world', uid: 1 };
     const beta = { world: 'world', uid: 2 };

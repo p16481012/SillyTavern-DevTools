@@ -90,3 +90,21 @@ test('tabs and Korean action controls keep distinct, horizontal states', async (
     assert.match(searchOptions, /display:\s*flex/);
     assert.match(ui, /className:\s*'st-devtools-search-options'/);
 });
+
+test('help tooltips and nested disclosures keep responsive interaction contracts', async () => {
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+
+    assert.match(
+        css,
+        /@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*?\.st-devtools-help-tooltip:hover/,
+    );
+    assert.match(css, /\.st-devtools-help-tooltip\.is-open\s+\.st-devtools-help-bubble/);
+    assert.match(
+        css,
+        /\.st-devtools-window\s+details:not\(\[open\]\)\s*>\s*:not\(summary\)[\s\S]*?display:\s*none\s*!important/,
+    );
+    assert.match(ui, /trigger\.setAttribute\('aria-expanded', 'false'\)/);
+    assert.match(ui, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
+    assert.match(ui, /details\.dataset\.policySection/);
+});

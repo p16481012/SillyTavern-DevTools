@@ -6,6 +6,10 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     const japaneseInstruction = 'Always respond in Japanese.';
     const englishInstruction = 'Always respond in English.';
     const addedInstruction = additions.addedInstruction ?? null;
+    const omittedInstruction = additions.omittedInstruction
+        ?? '노출 수위와 묘사 강도를 조절합니다.';
+    const disabledInstruction = additions.disabledInstruction
+        ?? '비활성 상태라 이번 요청에는 포함되지 않습니다.';
     const finalText = [
         '# 1 SYSTEM',
         koreanInstruction,
@@ -21,7 +25,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 4,
-        extensionVersion: '0.8.2',
+        extensionVersion: '0.8.3',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -262,7 +266,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 id: 'utility:unmatched',
                 type: 'utility',
                 label: 'Sub | NSFW (묘사 중심)',
-                content: '노출 수위와 묘사 강도를 조절합니다.',
+                content: omittedInstruction,
                 color: '#b45309',
                 attribution: 'unmatched',
                 included: false,
@@ -308,7 +312,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 id: 'utility:disabled-large',
                 type: 'utility',
                 label: '비활성 대형 프롬프트',
-                content: '비활성 상태라 이번 요청에는 포함되지 않습니다.',
+                content: disabledInstruction,
                 color: '#64748b',
                 attribution: 'unmatched',
                 included: false,
@@ -372,6 +376,8 @@ let timeline = [
         correlationId: 'sandbox-request',
         koreanInstruction: '반드시 자연스러운 한국어로 답변하세요.',
         addedInstruction: '답변은 300자 이내로 작성하세요.',
+        omittedInstruction: '이 미포함 프롬프트 변경은 소스 비교에 나오면 안 됩니다.',
+        disabledInstruction: '이 비활성 프롬프트 변경도 소스 비교에 나오면 안 됩니다.',
     }),
 ];
 const otherTimeline = [
@@ -410,7 +416,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.2',
+    version: '0.8.3',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
