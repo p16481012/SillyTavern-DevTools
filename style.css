@@ -69,6 +69,11 @@
     gap: 0.5rem;
 }
 
+.st-devtools-badges {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .st-devtools-title small {
     opacity: 0.65;
 }
@@ -277,12 +282,58 @@
     color: #67e8f9;
 }
 
+.attribution-template {
+    color: #fcd34d;
+}
+
 .attribution-derived {
     color: #93c5fd;
 }
 
 .attribution-unmatched {
     color: #fbbf24;
+}
+
+.st-devtools-multimodal-method,
+.st-devtools-provenance-confidence {
+    opacity: 0.82;
+}
+
+.st-devtools-storage-errors {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin: 0.8rem 0.8rem 0;
+    padding: 0.75rem;
+    border: 1px solid #ef4444;
+    border-left-width: 4px;
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-storage-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+}
+
+.st-devtools-storage-error-actions {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.st-devtools-toolbar-actions {
+    display: flex;
+    flex: 1 1 32rem;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+    gap: 0.4rem;
 }
 
 .st-devtools-timeline-entry {
@@ -453,6 +504,30 @@
 
 .st-devtools-timeline-diagnostic-note {
     opacity: 0.72;
+}
+
+.st-devtools-diagnostic-import {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem 0.7rem;
+    padding: 0.7rem;
+    border: 1px solid #22c55e;
+    border-left-width: 4px;
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-diagnostic-import.error {
+    border-color: #ef4444;
+}
+
+.st-devtools-diagnostic-import > small {
+    opacity: 0.72;
+}
+
+.st-devtools-diagnostic-import > button {
+    margin-left: auto;
 }
 
 .st-devtools-diff-selectors {
@@ -869,6 +944,16 @@
     .st-devtools-source summary {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .st-devtools-storage-error {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .st-devtools-toolbar-actions {
+        flex-basis: 100%;
+        justify-content: flex-start;
     }
 
 }

@@ -332,3 +332,44 @@ test('explicit request identifiers pair out-of-order settings with the matching 
     assert.equal(byId['request-a'].capture.correlationMethod, 'explicit-id');
     assert.equal(byId['request-b'].capture.correlationMethod, 'explicit-id');
 });
+
+test('storage failures expose the same snapshot for an idempotent retry', async () => {
+    let attempts = 0;
+    const saved = [];
+    const controller = new CaptureController({
+        getContext: () => ({}),
+        store: {
+            async addSnapshot(snapshot) {
+                attempts += 1;
+                if (attempts === 1) throw new Error('IndexedDB unavailable');
+                saved.push(snapshot);
+            },
+        },
+        version: 'test',
+    });
+    const snapshot = {
+        schemaVersion: 4,
+        id: 'retry-me',
+        timestamp: 1,
+        chatId: 'chat',
+    };
+    let failure = null;
+    let success = null;
+    controller.addEventListener('capture-error', (event) => {
+        failure = event.detail;
+    });
+    controller.addEventListener('snapshot', (event) => {
+        success = event.detail;
+    });
+
+    await assert.rejects(() => controller.storeSnapshot(snapshot), /IndexedDB unavailable/);
+    assert.equal(failure.snapshot, snapshot);
+    assert.equal(failure.operation, 'addSnapshot');
+
+    const retried = await controller.retrySnapshot(failure.snapshot);
+    assert.equal(attempts, 2);
+    assert.equal(saved.length, 1);
+    assert.equal(retried.id, snapshot.id);
+    assert.equal(success.id, snapshot.id);
+    assert.notEqual(retried, snapshot);
+});

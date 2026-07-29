@@ -1,16 +1,17 @@
 import { DevToolsWindow } from '../src/ui.js';
+import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
-    const finalText = '# 1 SYSTEM\n항상 한국어로 답하세요.\n\n# 2 USER\n[이미지 입력 2]\n이 이미지를 설명해줘';
+    const finalText = '# 1 SYSTEM\n항상 한국어로 답하세요.\n사용자 민수에게 친절하게 답하세요.\n\n# 2 USER\n[이미지 입력 1]\n이 이미지를 설명해줘';
     return {
-        schemaVersion: 3,
-        extensionVersion: '0.6.0',
+        schemaVersion: 4,
+        extensionVersion: '0.7.0',
         id,
         timestamp,
-        chatId: 'sandbox',
+        chatId: additions.chatId ?? 'sandbox',
         messageCount: 2,
         api: 'openai',
-        model: 'sandbox-model',
+        model: 'gpt-4o',
         preset: 'sandbox',
         promptType: 'chat-completion',
         generationType: 'normal',
@@ -19,7 +20,13 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
             {
                 role: 'user',
                 content: [
-                    { type: 'image_url', image_url: { url: '[미디어 데이터 생략됨]' } },
+                    {
+                        type: 'image_url',
+                        image_url: { url: '[미디어 데이터 생략됨]' },
+                        width: 1024,
+                        height: 1024,
+                        detail: 'high',
+                    },
                     { type: 'text', text: '이 이미지를 설명해줘' },
                 ],
             },
@@ -33,8 +40,17 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
             correlationId: additions.correlationId ?? null,
         },
         request: {
-            body: { model: 'sandbox-model', messages: [], tools: [] },
-            settings: { model: 'sandbox-model', temperature: 0.7 },
+            body: {
+                model: 'gpt-4o',
+                chat_completion_source: 'openai',
+                messages: [],
+                tools: [],
+            },
+            settings: {
+                model: 'gpt-4o',
+                chat_completion_source: 'openai',
+                temperature: 0.7,
+            },
             bodyKeys: ['model', 'messages', 'tools'],
             redactedPaths: ['api_key'],
             omittedMediaPaths: ['messages[1].content[0].image_url.url'],
@@ -50,10 +66,31 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 included: true,
                 tokenCount: 7,
                 metadata: {},
-                ranges: [{ start: 11, end: 24 }],
+                ranges: [{
+                    start: finalText.indexOf('항상 한국어로 답하세요.'),
+                    end: finalText.indexOf('항상 한국어로 답하세요.') + '항상 한국어로 답하세요.'.length,
+                }],
+                provenance: { method: 'exact', confidence: 1 },
             },
             {
-                id: 'tool_schema:1',
+                id: 'extension:1',
+                type: 'extension',
+                label: '사용자 응답 템플릿',
+                content: '사용자 {{name}}에게 친절하게 답하세요.',
+                color: '#14b8a6',
+                attribution: 'template',
+                included: true,
+                tokenCount: 10,
+                metadata: {},
+                ranges: [{
+                    start: finalText.indexOf('사용자 민수에게 친절하게 답하세요.'),
+                    end: finalText.indexOf('사용자 민수에게 친절하게 답하세요.')
+                        + '사용자 민수에게 친절하게 답하세요.'.length,
+                }],
+                provenance: { method: 'macro-template', confidence: 0.84 },
+            },
+            {
+                id: 'tool_schema:2',
                 type: 'tool_schema',
                 label: 'Tool schema weather',
                 labelKey: 'source.toolSchema',
@@ -64,9 +101,10 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 tokenCount: 12,
                 metadata: { name: 'weather' },
                 ranges: [],
+                provenance: { method: 'derived', confidence: null },
             },
             {
-                id: 'multimodal:2',
+                id: 'multimodal:3',
                 type: 'multimodal',
                 label: 'Multimodal image',
                 labelKey: 'source.multimodal.image',
@@ -75,11 +113,24 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 attribution: 'normalized',
                 included: true,
                 tokenCount: 5,
-                metadata: { type: 'image' },
-                ranges: [{ start: 36, end: 46 }],
+                metadata: {
+                    type: 'image',
+                    tokenEstimate: {
+                        provider: 'openai',
+                        type: 'image',
+                        tokens: 765,
+                        kind: 'estimate',
+                        method: 'openai-tile-512',
+                    },
+                },
+                ranges: [{
+                    start: finalText.indexOf('[이미지 입력 1]'),
+                    end: finalText.indexOf('[이미지 입력 1]') + '[이미지 입력 1]'.length,
+                }],
+                provenance: { method: 'normalized', confidence: 0.95 },
             },
             {
-                id: 'final:3',
+                id: 'final:4',
                 type: 'final',
                 label: 'Final Prompt',
                 labelKey: 'source.finalPrompt',
@@ -90,6 +141,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 tokenCount: totalTokens,
                 metadata: {},
                 ranges: [{ start: 0, end: finalText.length }],
+                provenance: { method: 'exact', confidence: 1 },
             },
         ],
         lorebookEntries: additions.lorebookEntries ?? [],
@@ -105,6 +157,8 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 toolCalls: 0,
                 toolResults: 0,
                 multimodalParts: 1,
+                multimodalEstimatedTokens: 765,
+                multimodalEstimateCoverage: 1,
             },
         },
     };
@@ -120,8 +174,15 @@ let timeline = [
         correlationId: 'sandbox-request',
     }),
 ];
+const otherTimeline = [
+    createSnapshot('other-1', Date.now() - 30000, 96, { chatId: 'other-private-chat' }),
+];
 
 const capture = new EventTarget();
+capture.retrySnapshot = async (snapshot) => {
+    capture.dispatchEvent(new CustomEvent('snapshot', { detail: structuredClone(snapshot) }));
+    return snapshot;
+};
 const store = {
     async getTimeline() {
         return timeline;
@@ -134,6 +195,12 @@ const store = {
     async clearTimeline() {
         timeline = [];
     },
+    async getAllTimelines() {
+        return [
+            { chatId: 'sandbox', timeline },
+            { chatId: 'other-private-chat', timeline: otherTimeline },
+        ];
+    },
 };
 const context = {
     getCurrentChatId: () => 'sandbox',
@@ -143,8 +210,35 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.6.0',
+    version: '0.7.0',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
+document.getElementById('sandbox-storage-error').addEventListener('click', () => {
+    capture.dispatchEvent(new CustomEvent('capture-error', {
+        detail: {
+            operation: 'addSnapshot',
+            snapshot: timeline.at(-1),
+            error: new Error('샌드박스 IndexedDB 쓰기 실패'),
+        },
+    }));
+});
+document.getElementById('sandbox-import-valid').addEventListener('click', async () => {
+    const file = new File(
+        [serializeTimelineDiagnostics(timeline, 'json')],
+        'sandbox-diagnostics.json',
+        { type: 'application/json' },
+    );
+    await devTools.importDiagnosticFile(file);
+});
+document.getElementById('sandbox-import-invalid').addEventListener('click', async () => {
+    const report = JSON.parse(serializeTimelineDiagnostics(timeline, 'json'));
+    report.snapshots[0].content = '가져오면 안 되는 프롬프트';
+    const file = new File(
+        [JSON.stringify(report)],
+        'unsafe-diagnostics.json',
+        { type: 'application/json' },
+    );
+    await devTools.importDiagnosticFile(file);
+});
 globalThis.devToolsSandbox = devTools;

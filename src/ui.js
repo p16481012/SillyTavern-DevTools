@@ -5,7 +5,11 @@ import {
     sourceDisplayLabel,
     t,
 } from './i18n.js';
-import { serializeTimelineDiagnostics } from './diagnostics.js';
+import {
+    parseTimelineDiagnostics,
+    serializeAllTimelineDiagnostics,
+    serializeTimelineDiagnostics,
+} from './diagnostics.js';
 import { searchSnapshot, serializeSnapshot } from './model.js';
 import {
     buildRangeSegments,
@@ -52,6 +56,37 @@ function formatTimestamp(timestamp) {
 function formatDelta(value) {
     const number = Number(value) || 0;
     return `${number > 0 ? '+' : ''}${number}`;
+}
+
+function translatedValue(key, fallback) {
+    const translated = t(key);
+    return translated === key ? fallback : translated;
+}
+
+function multimodalEstimateLabels(source) {
+    const estimate = source?.metadata?.tokenEstimate;
+    if (!estimate) {
+        return {
+            estimate: t('multimodal.estimate.unavailable'),
+            method: t('multimodal.methodLabel', {
+                provider: t('multimodal.provider.unknown'),
+                method: t('multimodal.method.provider-unsupported'),
+            }),
+        };
+    }
+    const estimateKey = `multimodal.estimate.${estimate.kind ?? 'unavailable'}`;
+    const provider = translatedValue(
+        `multimodal.provider.${estimate.provider ?? 'unknown'}`,
+        estimate.provider ?? t('multimodal.provider.unknown'),
+    );
+    const method = translatedValue(
+        `multimodal.method.${estimate.method ?? 'provider-unsupported'}`,
+        estimate.method ?? t('multimodal.method.provider-unsupported'),
+    );
+    return {
+        estimate: t(estimateKey, { count: estimate.tokens ?? '' }),
+        method: t('multimodal.methodLabel', { provider, method }),
+    };
 }
 
 function svgElement(tag, attributes = {}) {
@@ -102,7 +137,11 @@ export class DevToolsWindow {
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
         this.previouslyFocused = null;
+        this.storageErrors = [];
+        this.importedDiagnostics = null;
+        this.diagnosticImportError = null;
         this.capture.addEventListener('snapshot', (event) => this.onSnapshot(event.detail));
+        this.capture.addEventListener('capture-error', (event) => this.onCaptureError(event.detail));
     }
 
     currentChatId() {
@@ -286,6 +325,7 @@ export class DevToolsWindow {
     }
 
     async onSnapshot(snapshot) {
+        this.storageErrors = this.storageErrors.filter((item) => item.snapshotId !== snapshot.id);
         if (snapshot.chatId !== this.currentChatId()) return;
         this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
             .sort((left, right) => left.timestamp - right.timestamp);
@@ -293,10 +333,64 @@ export class DevToolsWindow {
         if (this.root && !this.root.hidden) this.render();
     }
 
-    async refresh() {
-        this.timeline = await this.store.getTimeline(this.currentChatId());
-        if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
-            this.selectedId = this.timeline.at(-1)?.id ?? null;
+    onCaptureError(detail) {
+        const snapshot = detail?.snapshot;
+        const snapshotId = snapshot?.id ?? null;
+        this.addStorageError({
+            id: `capture:${snapshotId ?? Date.now()}`,
+            snapshotId,
+            error: detail?.error,
+            retry: snapshot ? () => this.capture.retrySnapshot(snapshot) : null,
+        });
+        globalThis.toastr?.error?.(t('storage.captureFailed'), 'ST DevTools');
+    }
+
+    addStorageError({ id, snapshotId = null, error, retry = null }) {
+        const item = {
+            id,
+            snapshotId,
+            message: error?.message || t('storage.unknownError'),
+            retry,
+            pending: false,
+        };
+        this.storageErrors = [
+            ...this.storageErrors.filter((existing) => existing.id !== id),
+            item,
+        ].slice(-5);
+        if (this.root && !this.root.hidden) this.render();
+        return item;
+    }
+
+    async retryStorageError(item) {
+        if (!item?.retry || item.pending) return;
+        item.pending = true;
+        this.render();
+        try {
+            await item.retry();
+            this.storageErrors = this.storageErrors.filter((existing) => existing.id !== item.id);
+            globalThis.toastr?.success?.(t('storage.retrySucceeded'), 'ST DevTools');
+        } catch (error) {
+            item.message = error?.message || t('storage.unknownError');
+            item.pending = false;
+            globalThis.toastr?.error?.(t('storage.retryFailed'), 'ST DevTools');
+        }
+        this.render();
+    }
+
+    async refresh({ throwOnError = false } = {}) {
+        try {
+            this.timeline = await this.store.getTimeline(this.currentChatId());
+            if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
+                this.selectedId = this.timeline.at(-1)?.id ?? null;
+            }
+            this.storageErrors = this.storageErrors.filter((item) => item.id !== 'refresh');
+        } catch (error) {
+            if (throwOnError) throw error;
+            this.addStorageError({
+                id: 'refresh',
+                error,
+                retry: () => this.refresh({ throwOnError: true }),
+            });
         }
         this.render();
     }
@@ -392,6 +486,9 @@ export class DevToolsWindow {
         this.content.id = this.panelElementId(this.activeTab);
         this.content.setAttribute('aria-labelledby', this.tabElementId(this.activeTab));
         this.content.replaceChildren();
+        if (this.storageErrors.length > 0) {
+            this.content.appendChild(this.renderStorageErrors());
+        }
 
         const snapshot = this.selectedSnapshot();
         if (!snapshot && this.activeTab !== 'timeline') {
@@ -408,6 +505,43 @@ export class DevToolsWindow {
             search: () => this.renderSearch(snapshot),
         };
         this.content.appendChild(renderers[this.activeTab]());
+    }
+
+    renderStorageErrors() {
+        const region = element('section', { className: 'st-devtools-storage-errors' });
+        region.setAttribute('role', 'alert');
+        region.setAttribute('aria-live', 'assertive');
+        region.appendChild(element('strong', { text: t('storage.errorTitle') }));
+        for (const item of this.storageErrors) {
+            const row = element('div', { className: 'st-devtools-storage-error' });
+            row.appendChild(element('span', {
+                text: t('storage.errorMessage', { message: item.message }),
+            }));
+            const actions = element('span', { className: 'st-devtools-storage-error-actions' });
+            if (item.retry) {
+                const retry = element('button', {
+                    className: 'menu_button',
+                    text: item.pending ? t('storage.retrying') : t('action.retry'),
+                    type: 'button',
+                });
+                retry.disabled = item.pending;
+                retry.addEventListener('click', () => this.retryStorageError(item));
+                actions.appendChild(retry);
+            }
+            const dismiss = element('button', {
+                className: 'menu_button',
+                text: t('action.dismiss'),
+                type: 'button',
+            });
+            dismiss.addEventListener('click', () => {
+                this.storageErrors = this.storageErrors.filter((existing) => existing.id !== item.id);
+                this.render();
+            });
+            actions.appendChild(dismiss);
+            row.appendChild(actions);
+            region.appendChild(row);
+        }
+        return region;
     }
 
     renderEmpty() {
@@ -455,21 +589,38 @@ export class DevToolsWindow {
             const summary = element('summary');
             const name = element('span', { className: 'st-devtools-source-name', text: sourceDisplayLabel(source) });
             const badges = element('span', { className: 'st-devtools-badges' });
+            const multimodalLabels = source.type === 'multimodal'
+                ? multimodalEstimateLabels(source)
+                : null;
             badges.append(
                 element('span', {
                     className: 'st-devtools-badge',
-                    text: t(
-                        source.type === 'multimodal'
-                            ? 'snapshot.placeholderTokens'
-                            : 'snapshot.tokens',
-                        { count: source.tokenCount },
-                    ),
+                    text: multimodalLabels?.estimate
+                        ?? t('snapshot.tokens', { count: source.tokenCount }),
                 }),
                 element('span', {
                     className: `st-devtools-badge attribution-${source.attribution}`,
                     text: attributionDisplayLabel(source.attribution),
                 }),
             );
+            if (multimodalLabels) {
+                badges.appendChild(element('span', {
+                    className: 'st-devtools-badge st-devtools-multimodal-method',
+                    text: multimodalLabels.method,
+                }));
+            }
+            if (
+                source.attribution === 'template'
+                && Number.isFinite(source.provenance?.confidence)
+            ) {
+                badges.appendChild(element('span', {
+                    className: 'st-devtools-badge st-devtools-provenance-confidence',
+                    text: t('provenance.confidence', {
+                        count: Math.round(source.provenance.confidence * 100),
+                    }),
+                    title: source.provenance.method ?? 'macro-template',
+                }));
+            }
             if (source.ranges?.length) {
                 badges.appendChild(element('span', {
                     className: 'st-devtools-badge',
@@ -734,25 +885,49 @@ export class DevToolsWindow {
         toolbar.appendChild(element('span', {
             text: t('snapshot.retained', { count: this.timeline.length }),
         }));
-        toolbar.append(
+        const actions = element('span', { className: 'st-devtools-toolbar-actions' });
+        actions.append(
             this.renderTimelineDiagnosticButton('json'),
             this.renderTimelineDiagnosticButton('markdown'),
+            this.renderAllTimelineDiagnosticButton('json'),
+            this.renderAllTimelineDiagnosticButton('markdown'),
         );
+        const importInput = element('input', { className: 'st-devtools-file-input' });
+        importInput.type = 'file';
+        importInput.accept = '.json,application/json';
+        importInput.hidden = true;
+        importInput.addEventListener('change', async () => {
+            const file = importInput.files?.[0];
+            importInput.value = '';
+            if (file) await this.importDiagnosticFile(file);
+        });
+        const importButton = element('button', {
+            className: 'menu_button',
+            text: t('action.importDiagnostics'),
+            type: 'button',
+        });
+        importButton.addEventListener('click', () => importInput.click());
+        actions.append(importButton, importInput);
         const clear = element('button', { className: 'menu_button', text: t('action.clearTimeline'), type: 'button' });
         clear.disabled = this.timeline.length === 0;
         clear.addEventListener('click', async () => {
             if (!confirm(t('timeline.deleteConfirm'))) return;
-            await this.store.clearTimeline(this.currentChatId());
-            this.timeline = [];
-            this.selectedId = null;
-            this.render();
+            await this.clearCurrentTimeline();
         });
-        toolbar.appendChild(clear);
+        actions.appendChild(clear);
+        toolbar.appendChild(actions);
         page.appendChild(toolbar);
-        page.appendChild(element('small', {
+        const diagnosticNote = element('small', {
             className: 'st-devtools-timeline-diagnostic-note',
             text: t('timeline.diagnosticDescription'),
-        }));
+        });
+        diagnosticNote.append(
+            document.createElement('br'),
+            document.createTextNode(t('timeline.allDiagnosticDescription')),
+        );
+        page.appendChild(diagnosticNote);
+        const diagnosticStatus = this.renderDiagnosticImportStatus();
+        if (diagnosticStatus) page.appendChild(diagnosticStatus);
 
         if (this.timeline.length === 0) {
             page.appendChild(this.renderEmpty());
@@ -815,13 +990,7 @@ export class DevToolsWindow {
             remove.appendChild(element('i', { className: 'fa-solid fa-trash' }));
             remove.addEventListener('click', async () => {
                 if (!confirm(t('timeline.deleteSnapshotConfirm'))) return;
-                const deleted = await this.store.deleteSnapshot(this.currentChatId(), snapshot.id);
-                if (!deleted) return;
-                this.timeline = this.timeline.filter((item) => item.id !== snapshot.id);
-                if (this.selectedId === snapshot.id) {
-                    this.selectedId = this.timeline.at(-1)?.id ?? null;
-                }
-                this.render();
+                await this.deleteTimelineSnapshot(snapshot);
             });
             entry.append(button, remove);
 
@@ -856,6 +1025,151 @@ export class DevToolsWindow {
             );
         });
         return button;
+    }
+
+    renderAllTimelineDiagnosticButton(format) {
+        const label = format === 'markdown' ? 'Markdown' : format.toUpperCase();
+        const button = element('button', {
+            className: 'menu_button',
+            text: t('action.exportAllDiagnostics', { format: label }),
+            type: 'button',
+        });
+        button.addEventListener('click', () => this.exportAllTimelineDiagnostics(format));
+        return button;
+    }
+
+    async exportAllTimelineDiagnostics(format, { throwOnError = false } = {}) {
+        try {
+            const chatTimelines = await this.store.getAllTimelines();
+            const extension = format === 'markdown' ? 'md' : format;
+            const mime = format === 'json' ? 'application/json' : 'text/markdown';
+            const date = new Date().toISOString().replaceAll(':', '-');
+            downloadText(
+                `st-devtools-all-chat-diagnostics-${date}.${extension}`,
+                serializeAllTimelineDiagnostics(chatTimelines, format),
+                mime,
+            );
+            this.storageErrors = this.storageErrors.filter(
+                (item) => item.id !== `export-all:${format}`,
+            );
+        } catch (error) {
+            if (throwOnError) throw error;
+            this.addStorageError({
+                id: `export-all:${format}`,
+                error,
+                retry: () => this.exportAllTimelineDiagnostics(format, { throwOnError: true }),
+            });
+            globalThis.toastr?.error?.(t('storage.exportAllFailed'), 'ST DevTools');
+        }
+    }
+
+    async importDiagnosticFile(file) {
+        try {
+            const report = parseTimelineDiagnostics(await file.text());
+            this.importedDiagnostics = {
+                fileName: file.name,
+                report,
+            };
+            this.diagnosticImportError = null;
+            globalThis.toastr?.success?.(t('diagnostic.importSucceeded'), 'ST DevTools');
+        } catch (error) {
+            this.diagnosticImportError = error?.message ?? t('common.unknown');
+            globalThis.toastr?.error?.(
+                t('diagnostic.importFailed', { message: this.diagnosticImportError }),
+                'ST DevTools',
+            );
+        }
+        this.render();
+    }
+
+    renderDiagnosticImportStatus() {
+        if (!this.importedDiagnostics && !this.diagnosticImportError) return null;
+        const status = element('section', {
+            className: `st-devtools-diagnostic-import${this.diagnosticImportError ? ' error' : ''}`,
+        });
+        status.setAttribute('role', this.diagnosticImportError ? 'alert' : 'status');
+        if (this.diagnosticImportError) {
+            status.append(
+                element('strong', {
+                    text: t('diagnostic.importFailed', {
+                        message: this.diagnosticImportError,
+                    }),
+                }),
+            );
+        } else {
+            const { fileName, report } = this.importedDiagnostics;
+            status.append(
+                element('strong', { text: t('diagnostic.importTitle') }),
+                element('small', { text: fileName }),
+                element('span', {
+                    text: t('diagnostic.importedSummary', {
+                        scope: t(`diagnostic.scope.${report.scope}`),
+                        snapshots: report.summary.snapshotCount,
+                        chats: report.summary.chatCount ?? (report.summary.snapshotCount ? 1 : 0),
+                    }),
+                }),
+                element('small', {
+                    text: `${formatTimestamp(report.generatedAt)} · ${t('diagnostic.importReviewOnly')}`,
+                }),
+            );
+        }
+        const dismiss = element('button', {
+            className: 'menu_button',
+            text: this.diagnosticImportError
+                ? t('action.dismiss')
+                : t('action.removeImportedDiagnostics'),
+            type: 'button',
+        });
+        dismiss.addEventListener('click', () => {
+            this.importedDiagnostics = null;
+            this.diagnosticImportError = null;
+            this.render();
+        });
+        status.appendChild(dismiss);
+        return status;
+    }
+
+    async clearCurrentTimeline({ throwOnError = false } = {}) {
+        try {
+            await this.store.clearTimeline(this.currentChatId());
+            this.timeline = [];
+            this.selectedId = null;
+            this.storageErrors = this.storageErrors.filter((item) => item.id !== 'clear-timeline');
+            this.render();
+        } catch (error) {
+            if (throwOnError) throw error;
+            this.addStorageError({
+                id: 'clear-timeline',
+                error,
+                retry: () => this.clearCurrentTimeline({ throwOnError: true }),
+            });
+            globalThis.toastr?.error?.(t('storage.clearFailed'), 'ST DevTools');
+        }
+    }
+
+    async deleteTimelineSnapshot(snapshot, { throwOnError = false } = {}) {
+        const errorId = `delete:${snapshot.id}`;
+        try {
+            const deleted = await this.store.deleteSnapshot(this.currentChatId(), snapshot.id);
+            if (!deleted) {
+                await this.refresh({ throwOnError: true });
+                return;
+            }
+            this.timeline = this.timeline.filter((item) => item.id !== snapshot.id);
+            if (this.selectedId === snapshot.id) {
+                this.selectedId = this.timeline.at(-1)?.id ?? null;
+            }
+            this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
+            this.render();
+        } catch (error) {
+            if (throwOnError) throw error;
+            this.addStorageError({
+                id: errorId,
+                error,
+                retry: () => this.deleteTimelineSnapshot(snapshot, { throwOnError: true }),
+            });
+            globalThis.toastr?.error?.(t('storage.deleteFailed'), 'ST DevTools');
+        }
     }
 
     renderGrowthChart(analyses) {
@@ -1158,6 +1472,18 @@ export class DevToolsWindow {
             [t('stat.toolCalls'), structured.toolCalls ?? 0],
             [t('stat.toolResults'), structured.toolResults ?? 0],
             [t('stat.multimodalParts'), structured.multimodalParts ?? 0],
+            [
+                t('stat.multimodalEstimatedTokens'),
+                structured.multimodalParts
+                    ? structured.multimodalEstimatedTokens ?? t('common.unknown')
+                    : 0,
+            ],
+            [
+                t('stat.multimodalEstimateCoverage'),
+                structured.multimodalEstimateCoverage == null
+                    ? t('common.unknown')
+                    : `${(structured.multimodalEstimateCoverage * 100).toFixed(1)}%`,
+            ],
         ];
         for (const [label, value] of statValues) {
             const card = element('div', { className: 'st-devtools-stat' });

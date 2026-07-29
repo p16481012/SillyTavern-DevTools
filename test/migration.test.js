@@ -21,22 +21,28 @@ function legacySnapshot() {
     };
 }
 
-test('v1 snapshots migrate to schema v3 without changing captured text', () => {
+test('v1 snapshots migrate to schema v4 without changing captured text', () => {
     const original = legacySnapshot();
     const migrated = migrateSnapshot(original);
 
     assert.equal(original.schemaVersion, 1);
-    assert.equal(migrated.schemaVersion, 3);
+    assert.equal(migrated.schemaVersion, 4);
     assert.equal(migrated.finalText, original.finalText);
     assert.deepEqual(migrated.sources[0].ranges, [{ start: 0, end: 13 }]);
     assert.equal(migrated.capture.fallback, true);
     assert.equal(migrated.capture.migratedFrom, 1);
     assert.equal(migrated.request.body, null);
+    assert.deepEqual(migrated.sources[0].provenance, {
+        method: 'exact',
+        confidence: 1,
+    });
     assert.deepEqual(migrated.stats.structured, {
         toolSchemas: 0,
         toolCalls: 0,
         toolResults: 0,
         multimodalParts: 0,
+        multimodalEstimatedTokens: 0,
+        multimodalEstimateCoverage: null,
     });
 });
 
@@ -45,8 +51,8 @@ test('timeline reads persist one-time schema migration', async () => {
     store.memory.set(store.timelineKey('chat'), [legacySnapshot()]);
 
     const timeline = await store.getTimeline('chat');
-    assert.equal(timeline[0].schemaVersion, 3);
-    assert.equal(store.memory.get(store.timelineKey('chat'))[0].schemaVersion, 3);
+    assert.equal(timeline[0].schemaVersion, 4);
+    assert.equal(store.memory.get(store.timelineKey('chat'))[0].schemaVersion, 4);
 });
 
 test('deleteSnapshot removes only the selected snapshot and cleans up an empty timeline', async () => {

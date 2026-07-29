@@ -5,6 +5,7 @@ import {
     createSnapshotId,
     findExactRanges,
     findNormalizedRanges,
+    findTemplateRanges,
     flattenPrompt,
     searchSnapshot,
     serializeSnapshot,
@@ -59,6 +60,33 @@ test('normalized provenance maps conservative whitespace and case transformation
     assert.deepEqual(findNormalizedRanges('short', 'SHORT'), []);
 });
 
+test('macro template provenance maps substituted candidates with bounded confidence', () => {
+    const template = '이름: {{user}}, 오늘의 임무: {{mission}}. 끝까지 수행하세요.';
+    const finalText = '앞부분\n이름: 민수, 오늘의 임무: 문을 열기. 끝까지 수행하세요.\n뒷부분';
+    const match = findTemplateRanges(finalText, template);
+    assert.equal(match.method, 'macro-template');
+    assert.equal(match.ranges.length, 1);
+    assert.ok(match.confidence >= 0.55 && match.confidence <= 0.92);
+    assert.equal(
+        finalText.slice(match.ranges[0].start, match.ranges[0].end),
+        '이름: 민수, 오늘의 임무: 문을 열기. 끝까지 수행하세요.',
+    );
+
+    const sources = buildSources({
+        character: { data: { description: template } },
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [],
+    }, [{ role: 'system', content: finalText }], []);
+    const description = sources.find(
+        (source) => source.labelKey === 'source.characterDescription',
+    );
+    assert.equal(description.attribution, 'template');
+    assert.equal(description.provenance.method, 'macro-template');
+    assert.equal(description.included, true);
+});
+
 test('buildSources separates tool calls, results, schemas, and multimodal parts', () => {
     const payload = [
         {
@@ -98,6 +126,32 @@ test('buildSources separates tool calls, results, schemas, and multimodal parts'
     assert.equal(sources.filter((source) => source.type === 'multimodal').length, 1);
     assert.match(sources.at(-1).content, /TOOL CALLS/);
     assert.match(sources.at(-1).content, /\[이미지 입력 2\]/);
+});
+
+test('buildSources attaches provider-specific multimodal token estimates', () => {
+    const payload = [{
+        role: 'user',
+        content: [{
+            type: 'image_url',
+            image_url: { url: '[미디어 데이터 생략됨]' },
+            width: 1024,
+            height: 1024,
+            detail: 'high',
+        }],
+    }];
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [],
+    }, payload, [], {
+        settings: { provider: 'openai', model: 'gpt-4o' },
+        body: { model: 'gpt-4o' },
+    });
+    const image = sources.find((source) => source.type === 'multimodal');
+    assert.equal(image.metadata.tokenEstimate.tokens, 765);
+    assert.equal(image.metadata.tokenEstimate.method, 'openai-tile-512');
 });
 
 test('buildSources includes processed character prompt fields', () => {

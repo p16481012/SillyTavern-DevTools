@@ -3,9 +3,13 @@ import {
     sourceDisplayLabel,
     t,
 } from './i18n.js';
+import {
+    detectMultimodalProvider,
+    estimateMultimodalTokens,
+} from './multimodal.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
 
-export const SNAPSHOT_SCHEMA_VERSION = 3;
+export const SNAPSHOT_SCHEMA_VERSION = 4;
 
 const SOURCE_COLORS = {
     system: '#8b5cf6',
@@ -181,6 +185,70 @@ export function findNormalizedRanges(finalText, content, limit = 50) {
     return ranges;
 }
 
+function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function literalTemplatePattern(value) {
+    return escapeRegex(value.normalize('NFKC')).replace(/\s+/g, '\\s+');
+}
+
+export function findTemplateRanges(finalText, content, limit = 20) {
+    const template = contentToText(content).trim();
+    if (template.length > 50_000) {
+        return { ranges: [], confidence: null, method: null };
+    }
+    const macroPattern = /\{\{[^{}\r\n]{1,100}\}\}|\$\{[^{}\r\n]{1,100}\}|<%[^%\r\n]{1,100}%>|<<[^<>\r\n]{1,100}>>/gu;
+    const macros = [...template.matchAll(macroPattern)];
+    if (macros.length === 0 || macros.length > 20) {
+        return { ranges: [], confidence: null, method: null };
+    }
+
+    const literals = [];
+    let cursor = 0;
+    for (const macro of macros) {
+        literals.push(template.slice(cursor, macro.index));
+        cursor = macro.index + macro[0].length;
+    }
+    literals.push(template.slice(cursor));
+    const literalLength = literals.join('').replace(/\s+/g, '').length;
+    const meaningfulLiterals = literals.filter((value) => value.trim());
+    if (literalLength < 12 || meaningfulLiterals.length < 2) {
+        return { ranges: [], confidence: null, method: null };
+    }
+
+    const pattern = meaningfulLiterals
+        .map((literal) => literalTemplatePattern(literal))
+        .join('[\\s\\S]{0,500}?');
+    let expression;
+    try {
+        expression = new RegExp(pattern, 'giu');
+    } catch {
+        return { ranges: [], confidence: null, method: null };
+    }
+
+    const ranges = [];
+    for (const match of String(finalText ?? '').matchAll(expression)) {
+        if (!match[0] || match.index == null) continue;
+        ranges.push({ start: match.index, end: match.index + match[0].length });
+        if (ranges.length >= limit) break;
+    }
+    if (ranges.length === 0) {
+        return { ranges: [], confidence: null, method: null };
+    }
+
+    const literalShare = literalLength / Math.max(1, template.replace(/\s+/g, '').length);
+    const confidence = Math.max(
+        0.55,
+        Math.min(0.92, 0.62 + (literalShare * 0.3) - ((macros.length - 1) * 0.03)),
+    );
+    return {
+        ranges,
+        confidence: Number(confidence.toFixed(2)),
+        method: 'macro-template',
+    };
+}
+
 function getCharacterData(contextState) {
     const character = contextState.character;
     return character?.data ?? character ?? {};
@@ -226,13 +294,29 @@ function addSource(sources, {
 
     const exactRanges = findExactRanges(finalText, text);
     const normalizedRanges = exactRanges.length ? [] : findNormalizedRanges(finalText, text);
-    const ranges = exactRanges.length ? exactRanges : normalizedRanges;
+    const templateMatch = exactRanges.length || normalizedRanges.length
+        ? { ranges: [], confidence: null, method: null }
+        : findTemplateRanges(finalText, text);
+    const ranges = exactRanges.length
+        ? exactRanges
+        : normalizedRanges.length
+            ? normalizedRanges
+            : templateMatch.ranges;
     const exactMatch = ranges.length > 0;
     const inferredAttribution = exactRanges.length
         ? 'exact'
         : normalizedRanges.length
             ? 'normalized'
-            : 'unmatched';
+            : templateMatch.ranges.length
+                ? 'template'
+                : 'unmatched';
+    const inferredProvenance = exactRanges.length
+        ? { method: 'exact', confidence: 1 }
+        : normalizedRanges.length
+            ? { method: 'normalized', confidence: 0.95 }
+            : templateMatch.ranges.length
+                ? { method: templateMatch.method, confidence: templateMatch.confidence }
+                : { method: 'unmatched', confidence: 0 };
     sources.push({
         id: `${type}:${sources.length}`,
         type,
@@ -245,6 +329,9 @@ function addSource(sources, {
         tokenCount: null,
         metadata,
         ranges,
+        provenance: attribution
+            ? { method: attribution, confidence: attribution === 'exact' ? 1 : null }
+            : inferredProvenance,
     });
 }
 
@@ -259,7 +346,10 @@ function classifyConfiguredPrompt(prompt) {
     return 'utility';
 }
 
-function addStructuredSources(sources, payload, requestBody, finalText) {
+function addStructuredSources(sources, payload, request, finalText, contextState) {
+    const requestBody = request?.body ?? request ?? {};
+    const provider = detectMultimodalProvider(contextState, request);
+    const model = request?.settings?.model ?? requestBody?.model ?? contextState?.model ?? '';
     const toolSchemas = [
         ...(Array.isArray(requestBody?.tools)
             ? requestBody.tools.map((schema) => ({ schema, legacy: false }))
@@ -332,13 +422,23 @@ function addStructuredSources(sources, payload, requestBody, finalText) {
                 labelKey: `source.multimodal.${type}`,
                 content: contentPartToText(part, partIndex),
                 finalText,
-                metadata: { type, messageIndex, partIndex },
+                metadata: {
+                    type,
+                    messageIndex,
+                    partIndex,
+                    tokenEstimate: estimateMultimodalTokens({
+                        part,
+                        type,
+                        provider,
+                        model,
+                    }),
+                },
             });
         });
     });
 }
 
-export function buildSources(contextState, payload, activatedLore = [], requestBody = null) {
+export function buildSources(contextState, payload, activatedLore = [], request = null) {
     const finalText = flattenPrompt(payload);
     const sources = [];
     const character = getCharacterFields(contextState);
@@ -468,7 +568,7 @@ export function buildSources(contextState, payload, activatedLore = [], requestB
         });
     }
 
-    addStructuredSources(sources, payload, requestBody, finalText);
+    addStructuredSources(sources, payload, request, finalText, contextState);
 
     if (Array.isArray(payload)) {
         const historyMessages = payload.filter((message) => ['user', 'assistant', 'tool'].includes(message?.role));
@@ -510,6 +610,7 @@ export function buildSources(contextState, payload, activatedLore = [], requestB
         tokenCount: null,
         metadata: {},
         ranges: finalText ? [{ start: 0, end: finalText.length }] : [],
+        provenance: { method: 'exact', confidence: 1 },
     });
 
     return sources;
@@ -539,7 +640,7 @@ export async function finalizeSnapshot({
     const timestamp = Date.now();
     const finalText = flattenPrompt(payload);
     const normalizedRequest = request ?? createRequestRecord(null);
-    const sources = buildSources(contextState, payload, activatedLore, normalizedRequest.body);
+    const sources = buildSources(contextState, payload, activatedLore, normalizedRequest);
     const normalizedCapture = capture ?? createCaptureBoundary({
         eventName: promptType === 'chat-completion'
             ? 'CHAT_COMPLETION_PROMPT_READY'
@@ -568,6 +669,11 @@ export async function finalizeSnapshot({
         ?? normalizedRequest.settings?.max_length;
     const maxOutput = Number(requestMaxOutput ?? contextState.maxOutput) || null;
     const usableContext = maxContext && maxOutput ? Math.max(0, maxContext - maxOutput) : maxContext;
+    const multimodalEstimates = sources
+        .filter((source) => source.type === 'multimodal')
+        .map((source) => source.metadata?.tokenEstimate)
+        .filter(Boolean);
+    const estimatedMultimodal = multimodalEstimates.filter((estimate) => Number.isFinite(estimate.tokens));
 
     return {
         schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -599,6 +705,11 @@ export async function finalizeSnapshot({
                 toolCalls: sources.filter((source) => source.type === 'tool_call').length,
                 toolResults: sources.filter((source) => source.type === 'tool_result').length,
                 multimodalParts: sources.filter((source) => source.type === 'multimodal').length,
+                multimodalEstimatedTokens: estimatedMultimodal
+                    .reduce((sum, estimate) => sum + estimate.tokens, 0),
+                multimodalEstimateCoverage: multimodalEstimates.length
+                    ? estimatedMultimodal.length / multimodalEstimates.length
+                    : null,
             },
         },
     };

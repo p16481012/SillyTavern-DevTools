@@ -366,7 +366,28 @@ export class CaptureController extends EventTarget {
             capture,
             request,
         });
-        await this.store.addSnapshot(snapshot);
+        await this.storeSnapshot(snapshot);
+        return snapshot;
+    }
+
+    async retrySnapshot(snapshot) {
+        return this.storeSnapshot(deepClone(snapshot));
+    }
+
+    async storeSnapshot(snapshot) {
+        try {
+            await this.store.addSnapshot(snapshot);
+        } catch (error) {
+            this.dispatchEvent(new CustomEvent('capture-error', {
+                detail: {
+                    operation: 'addSnapshot',
+                    snapshot,
+                    error,
+                },
+            }));
+            throw error;
+        }
         this.dispatchEvent(new CustomEvent('snapshot', { detail: snapshot }));
+        return snapshot;
     }
 }

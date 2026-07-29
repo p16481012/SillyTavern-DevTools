@@ -1,6 +1,7 @@
 import {
     findExactRanges,
     findNormalizedRanges,
+    findTemplateRanges,
     SNAPSHOT_SCHEMA_VERSION,
 } from './model.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
@@ -34,14 +35,47 @@ export function migrateSnapshot(snapshot) {
         const normalizedRanges = exactRanges.length
             ? []
             : findNormalizedRanges(finalText, source.content);
+        const templateMatch = exactRanges.length || normalizedRanges.length
+            ? { ranges: [], confidence: null, method: null }
+            : findTemplateRanges(finalText, source.content);
+        const ranges = exactRanges.length
+            ? exactRanges
+            : normalizedRanges.length
+                ? normalizedRanges
+                : templateMatch.ranges;
+        const attribution = source.attribution === 'unmatched'
+            ? normalizedRanges.length
+                ? 'normalized'
+                : templateMatch.ranges.length
+                    ? 'template'
+                    : source.attribution
+            : source.attribution;
+        const provenance = source.provenance ?? (
+            attribution === 'exact'
+                ? { method: 'exact', confidence: 1 }
+                : attribution === 'normalized'
+                    ? { method: 'normalized', confidence: 0.95 }
+                    : attribution === 'template'
+                        ? {
+                            method: templateMatch.method ?? 'macro-template',
+                            confidence: templateMatch.confidence ?? 0.55,
+                        }
+                        : attribution === 'unmatched'
+                            ? { method: 'unmatched', confidence: 0 }
+                            : { method: attribution ?? 'unknown', confidence: null }
+        );
         return {
             ...source,
-            attribution: source.attribution === 'unmatched' && normalizedRanges.length
-                ? 'normalized'
-                : source.attribution,
-            ranges: exactRanges.length ? exactRanges : normalizedRanges,
+            attribution,
+            ranges,
+            provenance,
         };
     });
+    const structured = snapshot.stats?.structured ?? {};
+    const multimodalSources = sources.filter((source) => source.type === 'multimodal');
+    const multimodalEstimates = multimodalSources
+        .map((source) => source.metadata?.tokenEstimate)
+        .filter((estimate) => Number.isFinite(estimate?.tokens));
     return {
         ...snapshot,
         schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -59,11 +93,20 @@ export function migrateSnapshot(snapshot) {
         sources,
         stats: {
             ...snapshot.stats,
-            structured: snapshot.stats?.structured ?? {
-                toolSchemas: sources.filter((source) => source.type === 'tool_schema').length,
-                toolCalls: sources.filter((source) => source.type === 'tool_call').length,
-                toolResults: sources.filter((source) => source.type === 'tool_result').length,
-                multimodalParts: sources.filter((source) => source.type === 'multimodal').length,
+            structured: {
+                toolSchemas: structured.toolSchemas
+                    ?? sources.filter((source) => source.type === 'tool_schema').length,
+                toolCalls: structured.toolCalls
+                    ?? sources.filter((source) => source.type === 'tool_call').length,
+                toolResults: structured.toolResults
+                    ?? sources.filter((source) => source.type === 'tool_result').length,
+                multimodalParts: structured.multimodalParts ?? multimodalSources.length,
+                multimodalEstimatedTokens: structured.multimodalEstimatedTokens
+                    ?? multimodalEstimates.reduce((sum, estimate) => sum + estimate.tokens, 0),
+                multimodalEstimateCoverage: structured.multimodalEstimateCoverage
+                    ?? (multimodalSources.length
+                        ? multimodalEstimates.length / multimodalSources.length
+                        : null),
             },
         },
     };
