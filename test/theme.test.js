@@ -99,6 +99,7 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
 test('help tooltips and nested disclosures keep responsive interaction contracts', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+    const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
     const textFormat = await readFile(new URL('../src/text-format.js', import.meta.url), 'utf8');
 
     assert.match(
@@ -107,6 +108,8 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     );
     assert.match(css, /\.st-devtools-help-tooltip\.is-open\s+\.st-devtools-help-bubble/);
     assert.match(cssBlock(css, '.st-devtools-help-bubble'), /box-sizing:\s*border-box/);
+    assert.match(cssBlock(css, '.st-devtools-window .st-devtools-help-trigger'), /width:\s*1\.5rem/);
+    assert.match(cssBlock(css, '.st-devtools-window .st-devtools-help-trigger::before'), /width:\s*1\.1rem/);
     assert.match(
         css,
         /\.st-devtools-window\s+details:not\(\[open\]\)\s*>\s*:not\(summary\)[\s\S]*?display:\s*none\s*!important/,
@@ -123,7 +126,40 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(css, /\.st-devtools-prose-paragraph \+ \.st-devtools-prose-paragraph[\s\S]*?margin-top:\s*1em/);
     assert.match(ui, /GROWTH_CHART_POINT_LIMIT = 10/);
     assert.match(ui, /analyses\.slice\(-GROWTH_CHART_POINT_LIMIT\)/);
-    assert.match(ui, /class:\s*'st-devtools-growth-hit'/);
+    assert.match(ui, /st-devtools-growth-hit/);
     assert.match(ui, /r:\s*28/);
     assert.match(ui, /detailText\.setAttribute\('role', 'status'\)/);
+    assert.match(ui, /isLatest \? 'is-latest' : ''/);
+    assert.match(ui, /r:\s*isLatest \? 6 : 4/);
+    assert.match(css, /\.st-devtools-growth-hit\.is-latest \+ \.st-devtools-growth-point/);
+    assert.match(css, /\.st-devtools-growth-hit\.is-inspected \+ \.st-devtools-growth-point/);
+    assert.match(
+        css,
+        /\.st-devtools-growth-hit\.is-latest\.is-inspected \+ \.st-devtools-growth-point/,
+    );
+    assert.match(ui, /renderTimelineSelectionToolbar\(\)/);
+    assert.match(ui, /deleteSelectedTimelineSnapshots/);
+    assert.match(ui, /updateTimelineSelectionControls\(\)/);
+    assert.match(ui, /select\.dataset\.snapshotId = snapshot\.id/);
+    assert.match(ui, /this\.timelineSnapshotsOpen = snapshots\.open/);
+    assert.match(ui, /this\.timelineSelectionChatId !== chatId/);
+    assert.doesNotMatch(ui, /t\('snapshot\.description'\)/);
+    assert.doesNotMatch(
+        ui,
+        /t\('comparison\.description'\),\s*t\('comparison\.behaviorDescription'\)/,
+    );
+    const comparisonDescription = i18n.match(
+        /'comparison\.description':\s*'([^']+)'/,
+    )?.[1] ?? '';
+    assert.doesNotMatch(comparisonDescription, /대안 그룹|내부 무시/);
+    assert.match(
+        ui,
+        /field\('comparison\.mode', mode, 'comparison\.behaviorDescription'\)/,
+    );
+    assert.match(ui, /function describedControlField\(labelText, control, description\)/);
+    assert.match(
+        ui,
+        /className:\s*'st-devtools-explained-title st-devtools-policy-field-heading'/,
+    );
+    assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });

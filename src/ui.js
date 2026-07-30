@@ -54,6 +54,7 @@ const TABS = [
     ['search', 'tab.search'],
 ];
 let tooltipSequence = 0;
+let fieldSequence = 0;
 
 function element(tag, options = {}) {
     const node = document.createElement(tag);
@@ -223,6 +224,23 @@ function explainedTitle(title, description, {
         element(titleTag, { text: title }),
         helpTooltip(description, title),
     );
+    return wrapper;
+}
+
+function describedControlField(labelText, control, description) {
+    const wrapper = element('div', { className: 'st-devtools-policy-field' });
+    const heading = element('div', {
+        className: 'st-devtools-explained-title st-devtools-policy-field-heading',
+    });
+    const label = element('label', { text: labelText });
+    const controlId = control.id || `st-devtools-policy-field-${++fieldSequence}`;
+    const help = helpTooltip(description, labelText);
+    const tooltipId = help.querySelector('.st-devtools-help-bubble')?.id;
+    control.id = controlId;
+    label.htmlFor = controlId;
+    if (tooltipId) control.setAttribute('aria-describedby', tooltipId);
+    heading.append(label, help);
+    wrapper.append(heading, control);
     return wrapper;
 }
 
@@ -440,6 +458,9 @@ export class DevToolsWindow {
         this.content = null;
         this.timeline = [];
         this.selectedId = null;
+        this.selectedTimelineIds = new Set();
+        this.timelineSelectionChatId = null;
+        this.refreshRequestId = 0;
         this.activeTab = localStorage.getItem(`${STORAGE_PREFIX}last-tab`) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
@@ -450,6 +471,7 @@ export class DevToolsWindow {
             manual: false,
             preview: false,
         };
+        this.timelineSnapshotsOpen = false;
         this.previouslyFocused = null;
         this.storageErrors = [];
         this.importedDiagnostics = null;
@@ -646,6 +668,7 @@ export class DevToolsWindow {
         if (snapshot.chatId !== this.currentChatId()) return;
         this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
             .sort((left, right) => left.timestamp - right.timestamp);
+        this.pruneTimelineSelection();
         this.selectedId = snapshot.id;
         if (this.root && !this.root.hidden) this.render();
     }
@@ -694,22 +717,37 @@ export class DevToolsWindow {
         this.render();
     }
 
-    async refresh({ throwOnError = false } = {}) {
+    async refresh({
+        throwOnError = false,
+        chatId = this.currentChatId(),
+    } = {}) {
+        const requestId = ++this.refreshRequestId;
         try {
-            this.timeline = await this.store.getTimeline(this.currentChatId());
+            const timeline = await this.store.getTimeline(chatId);
+            if (requestId !== this.refreshRequestId || chatId !== this.currentChatId()) {
+                return false;
+            }
+            this.timeline = timeline;
+            this.pruneTimelineSelection();
             if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
                 this.selectedId = this.timeline.at(-1)?.id ?? null;
             }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== 'refresh');
+            this.render();
+            return true;
         } catch (error) {
             if (throwOnError) throw error;
+            if (requestId !== this.refreshRequestId || chatId !== this.currentChatId()) {
+                return false;
+            }
             this.addStorageError({
                 id: 'refresh',
                 error,
-                retry: () => this.refresh({ throwOnError: true }),
+                retry: () => this.refresh({ throwOnError: true, chatId }),
             });
+            this.render();
+            return false;
         }
-        this.render();
     }
 
     tabElementId(id) {
@@ -900,13 +938,11 @@ export class DevToolsWindow {
         return empty;
     }
 
-    renderSnapshotPicker(
-        labelText = t('snapshot.label'),
-        description = t('snapshot.description'),
-    ) {
+    renderSnapshotPicker(labelText = t('snapshot.label')) {
         const wrapper = element('div', { className: 'st-devtools-picker' });
-        wrapper.appendChild(explainedTitle(labelText, description, {
-            titleTag: 'span',
+        wrapper.appendChild(element('span', {
+            className: 'st-devtools-picker-label',
+            text: labelText,
         }));
         const select = element('select');
         select.setAttribute('aria-label', labelText);
@@ -1331,6 +1367,7 @@ export class DevToolsWindow {
     renderTimeline() {
         const page = element('div', { className: 'st-devtools-page' });
         const analyses = buildTimelineAnalysis(this.timeline, { includeSourceChanges: false });
+        this.pruneTimelineSelection();
         page.appendChild(element('p', {
             className: 'st-devtools-section-intro',
             text: t('snapshot.retained', { count: this.timeline.length }),
@@ -1426,6 +1463,27 @@ export class DevToolsWindow {
             const { snapshot, previous, tokenDelta, lore } = analysis;
             const entry = element('article', { className: 'st-devtools-timeline-entry' });
             entry.classList.toggle('active', snapshot.id === this.selectedId);
+            entry.classList.toggle('is-selected', this.selectedTimelineIds.has(snapshot.id));
+            const selectWrapper = element('label', {
+                className: 'st-devtools-timeline-select',
+            });
+            const select = element('input');
+            select.type = 'checkbox';
+            select.checked = this.selectedTimelineIds.has(snapshot.id);
+            select.dataset.snapshotId = snapshot.id;
+            select.setAttribute(
+                'aria-label',
+                t('timeline.selectSnapshot', { time: formatTimestamp(snapshot.timestamp) }),
+            );
+            select.addEventListener('change', () => {
+                if (select.checked) {
+                    this.selectedTimelineIds.add(snapshot.id);
+                } else {
+                    this.selectedTimelineIds.delete(snapshot.id);
+                }
+                this.updateTimelineSelectionControls();
+            });
+            selectWrapper.appendChild(select);
             const button = element('button', { className: 'st-devtools-timeline-item', type: 'button' });
             const heading = element('strong', { text: formatTimestamp(snapshot.timestamp) });
             const metadata = element('span', {
@@ -1478,7 +1536,7 @@ export class DevToolsWindow {
                 if (!confirm(t('timeline.deleteSnapshotConfirm'))) return;
                 await this.deleteTimelineSnapshot(snapshot);
             });
-            entry.append(button, remove);
+            entry.append(selectWrapper, button, remove);
 
             if (
                 snapshot.id === this.selectedId
@@ -1491,20 +1549,117 @@ export class DevToolsWindow {
         const snapshots = element('details', {
             className: 'st-devtools-disclosure st-devtools-timeline-snapshots',
         });
+        snapshots.open = this.timelineSnapshotsOpen;
+        snapshots.addEventListener('toggle', () => {
+            this.timelineSnapshotsOpen = snapshots.open;
+        });
         const snapshotsSummary = element('summary');
         snapshotsSummary.append(
-            explainedTitle(
-                t('timeline.snapshotsTitle'),
-                t('timeline.snapshotsDescription'),
-            ),
+            element('strong', { text: t('timeline.snapshotsTitle') }),
             element('span', {
                 className: 'st-devtools-disclosure-count',
                 text: t('timeline.snapshotCount', { count: analyses.length }),
             }),
         );
-        snapshots.append(snapshotsSummary, list);
+        const selectionToolbar = this.renderTimelineSelectionToolbar();
+        snapshots.append(snapshotsSummary, selectionToolbar, list);
         page.appendChild(snapshots);
         return page;
+    }
+
+    pruneTimelineSelection() {
+        const chatId = this.currentChatId();
+        if (this.timelineSelectionChatId !== chatId) {
+            this.selectedTimelineIds.clear();
+            this.timelineSelectionChatId = chatId;
+        }
+        const timelineIds = new Set(this.timeline.map(({ id }) => id));
+        this.selectedTimelineIds = new Set(
+            [...this.selectedTimelineIds].filter((id) => timelineIds.has(id)),
+        );
+    }
+
+    renderTimelineSelectionToolbar() {
+        const toolbar = element('div', { className: 'st-devtools-timeline-selection-toolbar' });
+        const selectAllLabel = element('label', {
+            className: 'st-devtools-timeline-select-all',
+        });
+        const selectAll = element('input');
+        selectAll.type = 'checkbox';
+        selectAll.checked = (
+            this.timeline.length > 0
+            && this.selectedTimelineIds.size === this.timeline.length
+        );
+        selectAll.indeterminate = (
+            this.selectedTimelineIds.size > 0
+            && this.selectedTimelineIds.size < this.timeline.length
+        );
+        selectAll.addEventListener('change', () => {
+            this.selectedTimelineIds = selectAll.checked
+                ? new Set(this.timeline.map(({ id }) => id))
+                : new Set();
+            this.updateTimelineSelectionControls();
+        });
+        selectAllLabel.append(
+            selectAll,
+            element('span', { text: t('timeline.selectAll') }),
+        );
+
+        const count = element('span', {
+            className: 'st-devtools-timeline-selected-count',
+            text: t('timeline.selectedCount', { count: this.selectedTimelineIds.size }),
+        });
+        count.setAttribute('role', 'status');
+        count.setAttribute('aria-live', 'polite');
+
+        const removeSelected = element('button', {
+            className: 'menu_button st-devtools-timeline-delete-selected',
+            text: t('timeline.deleteSelected'),
+            type: 'button',
+        });
+        removeSelected.disabled = this.selectedTimelineIds.size === 0;
+        removeSelected.addEventListener('click', async () => {
+            const countToDelete = this.selectedTimelineIds.size;
+            if (!confirm(t('timeline.deleteSelectedConfirm', { count: countToDelete }))) return;
+            await this.deleteSelectedTimelineSnapshots();
+        });
+        toolbar.append(selectAllLabel, count, removeSelected);
+        return toolbar;
+    }
+
+    updateTimelineSelectionControls() {
+        const checkboxes = this.content?.querySelectorAll(
+            '.st-devtools-timeline-select input[data-snapshot-id]',
+        ) ?? [];
+        for (const checkbox of checkboxes) {
+            const selected = this.selectedTimelineIds.has(checkbox.dataset.snapshotId);
+            checkbox.checked = selected;
+            checkbox.closest('.st-devtools-timeline-entry')
+                ?.classList.toggle('is-selected', selected);
+        }
+        const selectAll = this.content?.querySelector(
+            '.st-devtools-timeline-select-all input',
+        );
+        if (selectAll) {
+            selectAll.checked = (
+                this.timeline.length > 0
+                && this.selectedTimelineIds.size === this.timeline.length
+            );
+            selectAll.indeterminate = (
+                this.selectedTimelineIds.size > 0
+                && this.selectedTimelineIds.size < this.timeline.length
+            );
+        }
+        const count = this.content?.querySelector('.st-devtools-timeline-selected-count');
+        if (count) {
+            count.textContent = t('timeline.selectedCount', {
+                count: this.selectedTimelineIds.size,
+            });
+        }
+        const removeSelected = this.content?.querySelector(
+            '.st-devtools-timeline-delete-selected',
+        );
+        if (removeSelected) removeSelected.disabled = this.selectedTimelineIds.size === 0;
     }
 
     renderTimelineDiagnosticButton(format) {
@@ -1631,46 +1786,133 @@ export class DevToolsWindow {
         return status;
     }
 
-    async clearCurrentTimeline({ throwOnError = false } = {}) {
+    async clearCurrentTimeline({
+        throwOnError = false,
+        chatId = this.timelineSelectionChatId ?? this.currentChatId(),
+    } = {}) {
+        if (chatId !== this.currentChatId() && !throwOnError) {
+            this.selectedTimelineIds.clear();
+            await this.refresh({ chatId: this.currentChatId() });
+            return false;
+        }
         try {
-            await this.store.clearTimeline(this.currentChatId());
-            this.timeline = [];
-            this.selectedId = null;
+            await this.store.clearTimeline(chatId);
+            if (chatId === this.currentChatId()) {
+                this.timeline = [];
+                this.selectedId = null;
+                this.selectedTimelineIds.clear();
+            }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== 'clear-timeline');
             this.render();
+            return true;
         } catch (error) {
             if (throwOnError) throw error;
             this.addStorageError({
                 id: 'clear-timeline',
                 error,
-                retry: () => this.clearCurrentTimeline({ throwOnError: true }),
+                retry: () => this.clearCurrentTimeline({ throwOnError: true, chatId }),
             });
             globalThis.toastr?.error?.(t('storage.clearFailed'), 'ST DevTools');
+            return false;
         }
     }
 
-    async deleteTimelineSnapshot(snapshot, { throwOnError = false } = {}) {
+    async deleteTimelineSnapshot(snapshot, {
+        throwOnError = false,
+        chatId = snapshot.chatId || this.currentChatId(),
+    } = {}) {
         const errorId = `delete:${snapshot.id}`;
         try {
-            const deleted = await this.store.deleteSnapshot(this.currentChatId(), snapshot.id);
+            const deleted = await this.store.deleteSnapshot(chatId, snapshot.id);
             if (!deleted) {
-                await this.refresh({ throwOnError: true });
-                return;
+                if (chatId === this.currentChatId()) {
+                    await this.refresh({ throwOnError: true, chatId });
+                }
+                return false;
             }
-            this.timeline = this.timeline.filter((item) => item.id !== snapshot.id);
-            if (this.selectedId === snapshot.id) {
-                this.selectedId = this.timeline.at(-1)?.id ?? null;
+            if (chatId === this.currentChatId()) {
+                this.timeline = this.timeline.filter((item) => item.id !== snapshot.id);
+                this.selectedTimelineIds.delete(snapshot.id);
+                if (this.selectedId === snapshot.id) {
+                    this.selectedId = this.timeline.at(-1)?.id ?? null;
+                }
             }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             this.render();
+            return true;
         } catch (error) {
             if (throwOnError) throw error;
             this.addStorageError({
                 id: errorId,
                 error,
-                retry: () => this.deleteTimelineSnapshot(snapshot, { throwOnError: true }),
+                retry: () => this.deleteTimelineSnapshot(
+                    snapshot,
+                    { throwOnError: true, chatId },
+                ),
             });
             globalThis.toastr?.error?.(t('storage.deleteFailed'), 'ST DevTools');
+            return false;
+        }
+    }
+
+    async deleteSelectedTimelineSnapshots(
+        snapshotIds = [...this.selectedTimelineIds],
+        {
+            throwOnError = false,
+            chatId = this.timelineSelectionChatId ?? this.currentChatId(),
+        } = {},
+    ) {
+        const isActiveChat = chatId === this.currentChatId();
+        if (!isActiveChat && !throwOnError) {
+            this.selectedTimelineIds.clear();
+            this.timelineSelectionChatId = this.currentChatId();
+            this.render();
+            return false;
+        }
+        const timelineIds = new Set(this.timeline.map(({ id }) => id));
+        const ids = [...new Set(snapshotIds)].filter((id) => (
+            typeof id === 'string'
+            && id
+            && (!isActiveChat || timelineIds.has(id))
+        ));
+        if (ids.length === 0) return false;
+        const idSet = new Set(ids);
+        const errorId = 'delete:selected';
+        try {
+            const deletedCount = await this.store.deleteSnapshots(chatId, ids);
+            const timelineAfterDelete = await this.store.getTimeline(chatId);
+            const remainingCount = timelineAfterDelete.filter(({ id }) => idSet.has(id)).length;
+            if (remainingCount > 0) {
+                throw new Error(t('storage.deleteIncomplete', { count: remainingCount }));
+            }
+            if (chatId === this.currentChatId()) {
+                this.timeline = timelineAfterDelete;
+                this.selectedTimelineIds = new Set(
+                    [...this.selectedTimelineIds].filter((id) => !idSet.has(id)),
+                );
+                if (this.selectedId && idSet.has(this.selectedId)) {
+                    this.selectedId = this.timeline.at(-1)?.id ?? null;
+                }
+            }
+            this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
+            globalThis.toastr?.success?.(
+                t('timeline.deletedSelected', { count: deletedCount }),
+                'ST DevTools',
+            );
+            this.render();
+            return true;
+        } catch (error) {
+            if (throwOnError) throw error;
+            this.addStorageError({
+                id: errorId,
+                error,
+                retry: () => this.deleteSelectedTimelineSnapshots(
+                    ids,
+                    { throwOnError: true, chatId },
+                ),
+            });
+            globalThis.toastr?.error?.(t('storage.deleteFailed'), 'ST DevTools');
+            return false;
         }
     }
 
@@ -1785,26 +2027,36 @@ export class DevToolsWindow {
         });
         points.forEach(({ x, y }, index) => {
             const snapshot = visibleAnalyses[index].snapshot;
-            const label = `${formatTimestamp(snapshot.timestamp)} · ${t('snapshot.tokens', { count: values[index] })}`;
+            const isLatest = index === visibleAnalyses.length - 1;
+            const isSelected = snapshot.id === this.selectedId;
+            const label = [
+                formatTimestamp(snapshot.timestamp),
+                t('snapshot.tokens', { count: values[index] }),
+                ...(isLatest ? [t('timeline.latestSnapshot')] : []),
+            ].join(' · ');
             const point = svgElement('circle', {
-                class: 'st-devtools-growth-hit',
+                class: [
+                    'st-devtools-growth-hit',
+                    isLatest ? 'is-latest' : '',
+                    isSelected ? 'is-selected' : '',
+                ].filter(Boolean).join(' '),
                 cx: x,
                 cy: y,
                 r: 28,
                 tabindex: index === pinnedIndex ? 0 : -1,
                 role: 'button',
                 'aria-label': label,
-                'aria-current': snapshot.id === this.selectedId ? 'true' : 'false',
+                'aria-current': isSelected ? 'true' : 'false',
                 'aria-pressed': 'false',
                 'data-point-index': index,
             });
             point.appendChild(svgElement('title'));
             point.firstChild.textContent = label;
             const visualPoint = svgElement('circle', {
-                class: 'st-devtools-growth-point',
+                class: `st-devtools-growth-point${isLatest ? ' is-latest' : ''}`,
                 cx: x,
                 cy: y,
-                r: 4,
+                r: isLatest ? 6 : 4,
                 'aria-hidden': 'true',
             });
             point.addEventListener('mouseenter', () => showPointDetail(index));
@@ -2476,7 +2728,14 @@ export class DevToolsWindow {
 
     renderComparisonRuleCreator() {
         const form = element('form', { className: 'st-devtools-policy-creator' });
-        const field = (labelKey, control) => {
+        const field = (labelKey, control, descriptionKey = null) => {
+            if (descriptionKey) {
+                return describedControlField(
+                    t(labelKey),
+                    control,
+                    t(descriptionKey),
+                );
+            }
             const label = element('label');
             label.append(element('span', { text: t(labelKey) }), control);
             return label;
@@ -2527,7 +2786,7 @@ export class DevToolsWindow {
             field('comparison.ruleKind', kind),
             field('comparison.pattern', pattern),
             field('comparison.fixedGroup', fixedGroup),
-            field('comparison.mode', mode),
+            field('comparison.mode', mode, 'comparison.behaviorDescription'),
             field('comparison.categories', categories),
             field('comparison.target', target),
             proseElement('small', t('comparison.categoriesHint')),
@@ -2596,7 +2855,14 @@ export class DevToolsWindow {
         }
 
         const form = element('form', { className: 'st-devtools-policy-manual-form' });
-        const field = (labelKey, control) => {
+        const field = (labelKey, control, descriptionKey = null) => {
+            if (descriptionKey) {
+                return describedControlField(
+                    t(labelKey),
+                    control,
+                    t(descriptionKey),
+                );
+            }
             const label = element('label');
             label.append(element('span', { text: t(labelKey) }), control);
             return label;
@@ -2631,7 +2897,7 @@ export class DevToolsWindow {
             field('comparison.manualSource', sourceSelect),
             field('comparison.group', group),
             field('comparison.option', optionName),
-            field('comparison.mode', mode),
+            field('comparison.mode', mode, 'comparison.behaviorDescription'),
             field('comparison.categories', categories),
             proseElement('small', t('comparison.categoriesHint')),
             submit,
@@ -2817,7 +3083,6 @@ export class DevToolsWindow {
             t('comparison.title'),
             [
                 t('comparison.description'),
-                t('comparison.behaviorDescription'),
                 t('comparison.precedence'),
             ].join(' '),
         ));

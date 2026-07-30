@@ -122,13 +122,24 @@ export class SnapshotStore {
     }
 
     async deleteSnapshot(chatId, snapshotId) {
+        return (await this.deleteSnapshots(chatId, [snapshotId])) > 0;
+    }
+
+    async deleteSnapshots(chatId, snapshotIds) {
+        const ids = new Set(
+            [...(snapshotIds ?? [])].filter((snapshotId) => (
+                typeof snapshotId === 'string' && snapshotId
+            )),
+        );
+        if (ids.size === 0) return 0;
         const key = this.timelineKey(chatId);
         return this.withLock(key, async () => {
             const timeline = await this.readTimelineUnlocked(chatId);
-            const next = timeline.filter((snapshot) => snapshot.id !== snapshotId);
+            const next = timeline.filter((snapshot) => !ids.has(snapshot.id));
+            const deletedCount = timeline.length - next.length;
             if (next.length === timeline.length) {
                 if (timeline.length === 0) await this.removeChatFromIndex(chatId);
-                return false;
+                return 0;
             }
             if (next.length > 0) {
                 await this.write(key, next);
@@ -136,7 +147,7 @@ export class SnapshotStore {
                 await this.remove(key);
                 await this.removeChatFromIndex(chatId);
             }
-            return true;
+            return deletedCount;
         });
     }
 

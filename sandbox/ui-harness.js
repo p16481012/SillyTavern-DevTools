@@ -27,7 +27,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 4,
-        extensionVersion: '0.8.5',
+        extensionVersion: '0.8.6',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -430,6 +430,12 @@ const store = {
         timeline = timeline.filter((snapshot) => snapshot.id !== snapshotId);
         return timeline.length !== previousLength;
     },
+    async deleteSnapshots(_chatId, snapshotIds) {
+        const ids = new Set(snapshotIds);
+        const previousLength = timeline.length;
+        timeline = timeline.filter((snapshot) => !ids.has(snapshot.id));
+        return previousLength - timeline.length;
+    },
     async clearTimeline() {
         timeline = [];
     },
@@ -448,7 +454,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.5',
+    version: '0.8.6',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

@@ -39,10 +39,10 @@ test('examples stay intact and always begin an independent paragraph', () => {
 test('version numbers, decimals, and URL dots are not treated as sentence endings', () => {
     assert.deepEqual(
         descriptionParagraphs(
-            'v0.8.5에서 임계값 1.5를 사용합니다. https://example.com/v1.2/docs와 config.json, foo@example.com도 유지합니다.',
+            'v0.8.6에서 임계값 1.5를 사용합니다. https://example.com/v1.2/docs와 config.json, foo@example.com도 유지합니다.',
         ),
         [
-            'v0.8.5에서 임계값 1.5를 사용합니다.',
+            'v0.8.6에서 임계값 1.5를 사용합니다.',
             'https://example.com/v1.2/docs와 config.json, foo@example.com도 유지합니다.',
         ],
     );

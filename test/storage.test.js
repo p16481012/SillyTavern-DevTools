@@ -66,6 +66,27 @@ test('deleting from a missing timeline also cleans a stale chat index', async ()
     assert.deepEqual(await store.getChatIds(), []);
 });
 
+test('bulk deletion removes selected snapshots in one locked batch and keeps the rest ordered', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await Promise.all([
+        store.addSnapshot(snapshot('a', 'chat', 1)),
+        store.addSnapshot(snapshot('b', 'chat', 2)),
+        store.addSnapshot(snapshot('c', 'chat', 3)),
+        store.addSnapshot(snapshot('d', 'chat', 4)),
+    ]);
+
+    assert.equal(await store.deleteSnapshots('chat', ['b', 'd', 'missing', 'b']), 2);
+    assert.deepEqual(
+        (await store.getTimeline('chat')).map(({ id }) => id),
+        ['a', 'c'],
+    );
+    assert.deepEqual(await store.getChatIds(), ['chat']);
+
+    assert.equal(await store.deleteSnapshots('chat', ['a', 'c']), 2);
+    assert.deepEqual(await store.getTimeline('chat'), []);
+    assert.deepEqual(await store.getChatIds(), []);
+});
+
 test('a simultaneous final delete and add keeps the surviving chat indexed', async () => {
     const store = new SnapshotStore({ namespace: 'test' });
     yieldStorageOperations(store);
