@@ -4,7 +4,7 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 
 ## 현재 버전
 
-`v0.8.4`
+`v0.8.5`
 
 주요 기능:
 
@@ -51,7 +51,7 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 - 같은 대안 그룹의 내부 비교 제외, 그룹 밖 프롬프트와의 비교 유지
 - 실제 요청 포함 상태, 제외된 비교, 그룹 적용 결과와 다중 활성 경고 표시
 - 제목 옆 도움말 아이콘의 PC hover·키보드 focus·모바일 click 설명
-- 패널 경계를 벗어나지 않는 도움말과 설명·예시 문단 분리
+- 패널 경계를 벗어나지 않는 도움말과 마침표별 화면 설명·예시 문단 분리
 - API 전송 계열과 실제 Chat Completion·Text Completion 생성 제공자를 구분한 화면·내보내기·진단 표시
 - 공백·문장 경계를 우선하고 한글 단어를 임의로 자르지 않는 공통 줄바꿈
 - 모달 포커스 트랩, 탭 좌우/Home/End 이동, 성장 그래프 포인트 키보드 탐색
@@ -170,7 +170,7 @@ npm test
 
 UI 접근성을 수동 검토할 때는 `npm run sandbox`를 실행하고 출력된 로컬 주소를 엽니다.
 
-구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.4 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요.
+구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.5 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요.
 
 ## v0.9.0 예정 방향
 

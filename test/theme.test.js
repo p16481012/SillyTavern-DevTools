@@ -99,6 +99,7 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
 test('help tooltips and nested disclosures keep responsive interaction contracts', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+    const textFormat = await readFile(new URL('../src/text-format.js', import.meta.url), 'utf8');
 
     assert.match(
         css,
@@ -116,7 +117,10 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(ui, /details\.dataset\.policySection/);
     assert.match(ui, /function positionHelpTooltip\(wrapper\)/);
     assert.match(ui, /boundaryRect\.right - measured\.width/);
-    assert.match(ui, /function descriptionParagraphs\(text\)/);
+    assert.match(ui, /import \{ descriptionParagraphs \} from '\.\/text-format\.js'/);
+    assert.match(textFormat, /export function descriptionParagraphs\(text\)/);
+    assert.match(ui, /function proseElement\(tag, text, options = \{\}\)/);
+    assert.match(css, /\.st-devtools-prose-paragraph \+ \.st-devtools-prose-paragraph[\s\S]*?margin-top:\s*1em/);
     assert.match(ui, /GROWTH_CHART_POINT_LIMIT = 10/);
     assert.match(ui, /analyses\.slice\(-GROWTH_CHART_POINT_LIMIT\)/);
     assert.match(ui, /class:\s*'st-devtools-growth-hit'/);

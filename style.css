@@ -276,6 +276,14 @@
     margin-top: 1em;
 }
 
+.st-devtools-prose-paragraph {
+    display: block;
+}
+
+.st-devtools-prose-paragraph + .st-devtools-prose-paragraph {
+    margin-top: 1em;
+}
+
 .st-devtools-help-tooltip.is-positioning .st-devtools-help-bubble {
     display: block;
     visibility: hidden;

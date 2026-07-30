@@ -36,6 +36,7 @@ import {
     normalizeComparisonPolicySettings,
 } from './comparison-policy.js';
 import { inferPanelThemeFromTextColor } from './theme.js';
+import { descriptionParagraphs } from './text-format.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -63,12 +64,15 @@ function element(tag, options = {}) {
     return node;
 }
 
-function descriptionParagraphs(text) {
-    return String(text ?? '')
-        .trim()
-        .split(/\n\s*\n|\s+(?=(?:예(?:시)?\s*:|ex\.\s|e\.g\.\s))/giu)
-        .map((paragraph) => paragraph.trim())
-        .filter(Boolean);
+function proseElement(tag, text, options = {}) {
+    const node = element(tag, options);
+    for (const paragraph of descriptionParagraphs(text)) {
+        node.appendChild(element('span', {
+            className: 'st-devtools-prose-paragraph',
+            text: paragraph,
+        }));
+    }
+    return node;
 }
 
 function tooltipClippingRect(wrapper) {
@@ -891,7 +895,7 @@ export class DevToolsWindow {
         empty.append(
             element('i', { className: 'fa-solid fa-wave-square' }),
             element('h3', { text: t('empty.title') }),
-            element('p', { text: t('empty.description') }),
+            proseElement('p', t('empty.description')),
         );
         return empty;
     }
@@ -933,13 +937,14 @@ export class DevToolsWindow {
         });
         const guideList = element('ul');
         guideList.append(
-            element('li', {
-                text: t(promptManagerOrder
+            proseElement(
+                'li',
+                t(promptManagerOrder
                     ? 'explorer.guideOrder'
                     : 'explorer.guideOrderFallback'),
-            }),
-            element('li', { text: t('explorer.guideColor') }),
-            element('li', { text: t('explorer.guideStatus') }),
+            ),
+            proseElement('li', t('explorer.guideColor')),
+            proseElement('li', t('explorer.guideStatus')),
         );
         const guideSummary = element('summary');
         guideSummary.appendChild(explainedTitle(
@@ -1025,9 +1030,10 @@ export class DevToolsWindow {
                         element('strong', {
                             text: `${t('explorer.attributionLabel')}: ${attributionDisplayLabel(source.attribution)}`,
                         }),
-                        element('small', {
-                            text: t(`explorer.attribution.${source.attribution}`),
-                        }),
+                        proseElement(
+                            'small',
+                            t(`explorer.attribution.${source.attribution}`),
+                        ),
                     );
                     metadata.appendChild(attribution);
                     if (
@@ -1603,9 +1609,10 @@ export class DevToolsWindow {
                         chats: report.summary.chatCount ?? (report.summary.snapshotCount ? 1 : 0),
                     }),
                 }),
-                element('small', {
-                    text: `${formatTimestamp(report.generatedAt)} · ${t('diagnostic.importReviewOnly')}`,
-                }),
+                proseElement(
+                    'small',
+                    `${formatTimestamp(report.generatedAt)} · ${t('diagnostic.importReviewOnly')}`,
+                ),
             );
         }
         const dismiss = element('button', {
@@ -1852,7 +1859,7 @@ export class DevToolsWindow {
     renderDiff() {
         const page = element('div', { className: 'st-devtools-page' });
         if (this.timeline.length < 2) {
-            page.appendChild(element('p', { text: t('diff.minimum') }));
+            page.appendChild(proseElement('p', t('diff.minimum')));
             return page;
         }
 
@@ -1926,7 +1933,7 @@ export class DevToolsWindow {
         ));
         const changes = compareSnapshotSources(base, compare);
         if (!changes.length) {
-            section.appendChild(element('p', { text: t('diff.noSourceChanges') }));
+            section.appendChild(proseElement('p', t('diff.noSourceChanges')));
             return;
         }
 
@@ -1982,7 +1989,7 @@ export class DevToolsWindow {
             compare.lorebookEntries ?? [],
         );
         if (!changes.activated.length && !changes.removed.length) {
-            section.appendChild(element('p', { text: t('diff.noLoreChanges') }));
+            section.appendChild(proseElement('p', t('diff.noLoreChanges')));
             return;
         }
         section.appendChild(this.renderLoreChangeList(changes));
@@ -2034,7 +2041,7 @@ export class DevToolsWindow {
         const captureContent = element('div', { className: 'st-devtools-capture-content' });
         captureContent.append(
             element('strong', { text: t('capture.title') }),
-            element('p', { text: captureDescription }),
+            proseElement('p', captureDescription),
             element('small', {
                 text: t('capture.event', { event: capture.eventName ?? t('common.unknown') }),
             }),
@@ -2172,7 +2179,7 @@ export class DevToolsWindow {
             requestSummary,
             snapshot.request?.body
                 ? element('pre', { text: JSON.stringify(snapshot.request.body, null, 2) })
-                : element('p', { text: t('context.notCaptured') }),
+                : proseElement('p', t('context.notCaptured')),
         );
         const payloadDetails = element('details', {
             className: 'st-devtools-context-details st-devtools-disclosure',
@@ -2523,7 +2530,7 @@ export class DevToolsWindow {
             field('comparison.mode', mode),
             field('comparison.categories', categories),
             field('comparison.target', target),
-            element('small', { text: t('comparison.categoriesHint') }),
+            proseElement('small', t('comparison.categoriesHint')),
             submit,
             status,
         );
@@ -2585,7 +2592,7 @@ export class DevToolsWindow {
     renderManualAssignmentCreator(snapshot) {
         const configuredSources = (snapshot?.sources ?? []).filter(isConfiguredPromptSource);
         if (configuredSources.length === 0) {
-            return element('p', { text: t('comparison.manualNoSources') });
+            return proseElement('p', t('comparison.manualNoSources'));
         }
 
         const form = element('form', { className: 'st-devtools-policy-manual-form' });
@@ -2626,7 +2633,7 @@ export class DevToolsWindow {
             field('comparison.option', optionName),
             field('comparison.mode', mode),
             field('comparison.categories', categories),
-            element('small', { text: t('comparison.categoriesHint') }),
+            proseElement('small', t('comparison.categoriesHint')),
             submit,
         );
         form.addEventListener('submit', (event) => {
@@ -2708,7 +2715,7 @@ export class DevToolsWindow {
                     && source?.content?.trim()
                 ));
             if (rows.length === 0) {
-                content.appendChild(element('p', { text: t('comparison.previewEmpty') }));
+                content.appendChild(proseElement('p', t('comparison.previewEmpty')));
                 return section;
             }
 
@@ -2828,7 +2835,7 @@ export class DevToolsWindow {
         const rules = this.comparisonNameRules();
         const ruleList = element('div', { className: 'st-devtools-policy-rule-list' });
         if (rules.length === 0) {
-            ruleList.appendChild(element('p', { text: t('comparison.noRules') }));
+            ruleList.appendChild(proseElement('p', t('comparison.noRules')));
         } else {
             rules.forEach((rule, index) => {
                 ruleList.appendChild(this.renderComparisonRuleCard(rule, index));
@@ -2985,7 +2992,7 @@ export class DevToolsWindow {
             && groups.length === 0
             && warnings.length === 0
         ) {
-            content.appendChild(element('p', { text: t('comparison.noPolicyEffects') }));
+            content.appendChild(proseElement('p', t('comparison.noPolicyEffects')));
         }
         details.appendChild(content);
         return details;
@@ -3041,9 +3048,10 @@ export class DevToolsWindow {
                 element('strong', {
                     text: t(anyEnabled ? 'rules.cleanTitle' : 'rules.disabledTitle'),
                 }),
-                element('p', {
-                    text: t(anyEnabled ? 'rules.cleanDescription' : 'rules.disabledDescription'),
-                }),
+                proseElement(
+                    'p',
+                    t(anyEnabled ? 'rules.cleanDescription' : 'rules.disabledDescription'),
+                ),
             );
             page.appendChild(empty);
             return page;
@@ -3064,7 +3072,7 @@ export class DevToolsWindow {
                 }),
                 element('strong', { text: item.title }),
             );
-            card.append(header, element('p', { text: item.message }));
+            card.append(header, proseElement('p', item.message));
             if (item.evidence) {
                 const evidence = element('details', { className: 'st-devtools-rule-evidence' });
                 const evidenceTitle = t(item.ruleId === 'unmatched'
