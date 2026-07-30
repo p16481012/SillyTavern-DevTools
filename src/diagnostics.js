@@ -53,6 +53,9 @@ function snapshotDiagnostic(snapshot) {
             fallback: Boolean(snapshot.capture?.fallback),
             correlationMethod: snapshot.capture?.correlationMethod ?? null,
             hasCorrelationId: Boolean(snapshot.capture?.correlationId),
+            requestStatus: snapshot.capture?.requestStatus ?? null,
+            generationStatus: snapshot.capture?.generationStatus ?? null,
+            statusEvent: snapshot.capture?.statusEvent ?? null,
         },
         request: {
             bodyKeys: snapshot.request?.bodyKeys ?? [],

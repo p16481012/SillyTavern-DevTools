@@ -21,12 +21,14 @@ function legacySnapshot() {
     };
 }
 
-test('v1 snapshots migrate to schema v4 without changing captured text', () => {
+test('v1 snapshots migrate to schema v5 without changing captured text', () => {
     const original = legacySnapshot();
     const migrated = migrateSnapshot(original);
 
     assert.equal(original.schemaVersion, 1);
-    assert.equal(migrated.schemaVersion, 4);
+    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.capture.requestStatus, 'prompt-only-timeout');
+    assert.equal(migrated.capture.generationStatus, 'unknown');
     assert.equal(migrated.finalText, original.finalText);
     assert.deepEqual(migrated.sources[0].ranges, [{ start: 0, end: 13 }]);
     assert.equal(migrated.capture.fallback, true);
@@ -51,8 +53,32 @@ test('timeline reads persist one-time schema migration', async () => {
     store.memory.set(store.timelineKey('chat'), [legacySnapshot()]);
 
     const timeline = await store.getTimeline('chat');
-    assert.equal(timeline[0].schemaVersion, 4);
-    assert.equal(store.memory.get(store.timelineKey('chat'))[0].schemaVersion, 4);
+    assert.equal(timeline[0].schemaVersion, 5);
+    assert.equal(store.memory.get(store.timelineKey('chat'))[0].schemaVersion, 5);
+});
+
+test('v4 request captures gain lifecycle defaults without losing request data', () => {
+    const migrated = migrateSnapshot({
+        ...legacySnapshot(),
+        schemaVersion: 4,
+        capture: {
+            eventName: 'CHAT_COMPLETION_SETTINGS_READY',
+            stage: 'backend-request-ready',
+            fallback: false,
+        },
+        request: {
+            body: { model: 'test-model' },
+            settings: { model: 'test-model' },
+            bodyKeys: ['model'],
+            redactedPaths: [],
+            omittedMediaPaths: [],
+        },
+    });
+
+    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.request.body.model, 'test-model');
+    assert.equal(migrated.capture.requestStatus, 'captured');
+    assert.equal(migrated.capture.generationStatus, 'unknown');
 });
 
 test('deleteSnapshot removes only the selected snapshot and cleans up an empty timeline', async () => {

@@ -323,3 +323,13 @@ test('invalid and damaged settings normalize safely without matching', () => {
     const [source] = annotateSourcesWithPolicies([configured('x', 'anything')], normalized);
     assert.equal(source.comparisonPolicy, null);
 });
+
+test('high-risk regular expressions are ignored instead of running against source names', () => {
+    const [source] = annotateSourcesWithPolicies([configured('x', `${'a'.repeat(5000)}!`)], {
+        nameRules: [{
+            kind: 'regex',
+            pattern: '(a+)+$',
+        }],
+    });
+    assert.equal(source.comparisonPolicy, null);
+});

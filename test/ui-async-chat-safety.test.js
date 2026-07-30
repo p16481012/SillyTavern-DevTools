@@ -29,6 +29,12 @@ function deferred() {
 function memoryLocalStorage() {
     const values = new Map();
     return {
+        get length() {
+            return values.size;
+        },
+        key(index) {
+            return [...values.keys()][index] ?? null;
+        },
         getItem(key) {
             return values.has(key) ? values.get(key) : null;
         },
@@ -236,4 +242,141 @@ test('clear from a stale chat A view refreshes chat B without deleting either ch
     assert.deepEqual(calls, [['read', 'chat-b']]);
     assert.deepEqual(devTools.timeline.map(({ id }) => id), ['b']);
     assert.equal(devTools.selectedId, 'b');
+});
+
+test('a lifecycle update replaces its snapshot without stealing the current selection', async () => {
+    const current = { chatId: 'chat-a' };
+    const devTools = createWindow({
+        current,
+        store: {
+            async getTimeline() {
+                return [];
+            },
+        },
+    });
+    devTools.timeline = [
+        snapshot('older', 'chat-a', 1),
+        snapshot('selected', 'chat-a', 2),
+    ];
+    devTools.selectedId = 'selected';
+
+    await devTools.onSnapshot({
+        ...snapshot('older', 'chat-a', 1),
+        capture: { generationStatus: 'ended' },
+    });
+
+    assert.equal(devTools.selectedId, 'selected');
+    assert.equal(
+        devTools.timeline.find(({ id }) => id === 'older').capture.generationStatus,
+        'ended',
+    );
+});
+
+test('hidden panels defer the all-chat storage scan until the next refresh', async () => {
+    const current = { chatId: 'chat-a' };
+    let summaryReads = 0;
+    const devTools = createWindow({
+        current,
+        store: {
+            async getStorageSummary() {
+                summaryReads += 1;
+                return {};
+            },
+        },
+    });
+
+    await devTools.onSnapshot(snapshot('new', 'chat-a'));
+
+    assert.equal(summaryReads, 0);
+    assert.deepEqual(devTools.timeline.map(({ id }) => id), ['new']);
+});
+
+test('clear-all resets current UI only after every stored timeline is removed', async () => {
+    const current = { chatId: 'chat-a' };
+    let cleared = false;
+    const devTools = createWindow({
+        current,
+        store: {
+            async clearAll() {
+                cleared = true;
+                return { chatCount: 2, snapshotCount: 3 };
+            },
+            async getStorageSummary() {
+                return {
+                    type: 'memory',
+                    persistent: false,
+                    chatCount: cleared ? 0 : 2,
+                    snapshotCount: cleared ? 0 : 3,
+                    approximateBytes: cleared ? 0 : 1024,
+                };
+            },
+        },
+    });
+    devTools.timeline = [snapshot('selected', 'chat-a')];
+    devTools.selectedId = 'selected';
+    devTools.selectedTimelineIds = new Set(['selected']);
+    localStorage.setItem('st-devtools:rule-settings:v1', '{"private":"setting"}');
+    localStorage.setItem('st-devtools:comparison-policy:v1', '{"nameRules":[{"pattern":"private"}]}');
+    localStorage.setItem('st-devtools:future-setting', 'remove');
+    localStorage.setItem('unrelated-setting', 'keep');
+
+    assert.equal(await devTools.clearAllSnapshots(), true);
+    assert.deepEqual(devTools.timeline, []);
+    assert.equal(devTools.selectedId, null);
+    assert.deepEqual([...devTools.selectedTimelineIds], []);
+    assert.equal(devTools.storageSummary.snapshotCount, 0);
+    assert.equal(devTools.storageSummary.localSettingCount, 0);
+    assert.equal(localStorage.getItem('st-devtools:rule-settings:v1'), null);
+    assert.equal(localStorage.getItem('st-devtools:comparison-policy:v1'), null);
+    assert.equal(localStorage.getItem('st-devtools:future-setting'), null);
+    assert.equal(localStorage.getItem('unrelated-setting'), 'keep');
+    assert.deepEqual(devTools.comparisonPolicySettings.nameRules, []);
+});
+
+test('storage summary includes ST DevTools local settings but excludes unrelated keys', async () => {
+    const current = { chatId: 'chat-a' };
+    const devTools = createWindow({
+        current,
+        store: {
+            async getStorageSummary() {
+                return {
+                    type: 'indexeddb',
+                    persistent: true,
+                    chatCount: 1,
+                    snapshotCount: 1,
+                    approximateBytes: 100,
+                };
+            },
+        },
+    });
+    localStorage.setItem('st-devtools:rule-settings:v1', '{"enabled":true}');
+    localStorage.setItem('unrelated-setting', 'not-counted');
+
+    const summary = await devTools.readStorageSummary();
+
+    assert.equal(summary.localSettingCount, 1);
+    assert.equal(summary.snapshotApproximateBytes, 100);
+    assert.equal(summary.approximateBytes > 100, true);
+});
+
+test('failed clear-all keeps the current timeline available for retry', async () => {
+    const current = { chatId: 'chat-a' };
+    const devTools = createWindow({
+        current,
+        store: {
+            async clearAll() {
+                throw new Error('temporary failure');
+            },
+        },
+    });
+    devTools.timeline = [snapshot('keep', 'chat-a')];
+    devTools.selectedId = 'keep';
+
+    assert.equal(await devTools.clearAllSnapshots(), false);
+    assert.deepEqual(devTools.timeline.map(({ id }) => id), ['keep']);
+    assert.equal(devTools.selectedId, 'keep');
+    assert.equal(
+        typeof devTools.storageErrors.find(({ id }) => id === 'clear-all')?.retry,
+        'function',
+    );
 });

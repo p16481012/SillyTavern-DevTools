@@ -26,8 +26,8 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         '이 이미지를 설명해줘',
     ].join('\n');
     return {
-        schemaVersion: 4,
-        extensionVersion: '0.8.6',
+        schemaVersion: 5,
+        extensionVersion: '0.8.7',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -69,6 +69,10 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
             fallback: false,
             correlationMethod: additions.correlationMethod ?? 'fifo',
             correlationId: additions.correlationId ?? null,
+            requestStatus: additions.requestStatus ?? 'captured',
+            generationStatus: additions.generationStatus ?? 'ended',
+            statusEvent: additions.statusEvent ?? 'GENERATION_ENDED',
+            statusUpdatedAt: timestamp + 1500,
         },
         request: {
             body: {
@@ -412,9 +416,11 @@ timeline.push(
         disabledInstruction: '이 비활성 프롬프트 변경도 소스 비교에 나오면 안 됩니다.',
     }),
 );
-const otherTimeline = [
+let otherTimeline = [
     createSnapshot('other-1', Date.now() - 30000, 96, { chatId: 'other-private-chat' }),
 ];
+let temporaryStorage = false;
+let darkTheme = false;
 
 const capture = new EventTarget();
 capture.retrySnapshot = async (snapshot) => {
@@ -422,6 +428,20 @@ capture.retrySnapshot = async (snapshot) => {
     return snapshot;
 };
 const store = {
+    getStatus() {
+        return temporaryStorage
+            ? {
+                type: 'memory',
+                persistent: false,
+                fallbackReason: 'sandbox-toggle',
+            }
+            : {
+                type: 'indexeddb',
+                persistent: true,
+                driver: 'asyncStorage',
+                fallbackReason: null,
+            };
+    },
     async getTimeline() {
         return timeline;
     },
@@ -439,11 +459,30 @@ const store = {
     async clearTimeline() {
         timeline = [];
     },
+    async clearAll() {
+        const result = {
+            chatCount: Number(timeline.length > 0) + Number(otherTimeline.length > 0),
+            snapshotCount: timeline.length + otherTimeline.length,
+        };
+        timeline = [];
+        otherTimeline = [];
+        return result;
+    },
     async getAllTimelines() {
         return [
             { chatId: 'sandbox', timeline },
             { chatId: 'other-private-chat', timeline: otherTimeline },
-        ];
+        ].filter(({ timeline: items }) => items.length > 0);
+    },
+    async getStorageSummary() {
+        const timelines = await this.getAllTimelines();
+        return {
+            ...this.getStatus(),
+            chatCount: timelines.length,
+            snapshotCount: timelines.reduce((count, item) => count + item.timeline.length, 0),
+            approximateBytes: new TextEncoder().encode(JSON.stringify(timelines)).length,
+            maxSnapshotsPerChat: 100,
+        };
     },
 };
 const context = {
@@ -454,7 +493,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.6',
+    version: '0.8.7',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
@@ -466,6 +505,20 @@ document.getElementById('sandbox-storage-error').addEventListener('click', () =>
             error: new Error('샌드박스 IndexedDB 쓰기 실패'),
         },
     }));
+});
+document.getElementById('sandbox-storage-mode').addEventListener('click', async () => {
+    temporaryStorage = !temporaryStorage;
+    await devTools.refresh();
+});
+document.getElementById('sandbox-theme').addEventListener('click', () => {
+    darkTheme = !darkTheme;
+    document.body.style.setProperty(
+        '--SmartThemeBodyColor',
+        darkTheme ? '#eef2f7' : '#172033',
+    );
+    document.body.style.background = darkTheme ? '#10151f' : '#eef2f7';
+    document.body.style.color = darkTheme ? '#eef2f7' : '#172033';
+    devTools.syncOpaqueTheme();
 });
 document.getElementById('sandbox-import-valid').addEventListener('click', async () => {
     const file = new File(

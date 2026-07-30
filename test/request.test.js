@@ -46,6 +46,8 @@ test('capture boundary never claims provider server transformations', () => {
     });
     assert.equal(capture.clientBackendRequestCaptured, true);
     assert.equal(capture.serverTransformationsIncluded, false);
+    assert.equal(capture.requestStatus, 'captured');
+    assert.equal(capture.generationStatus, 'unknown');
 });
 
 test('sanitizer handles circular request metadata safely', () => {
@@ -79,4 +81,72 @@ test('multimodal data URLs are omitted without removing their part type', () => 
         '[미디어 데이터 생략됨]',
     );
     assert.equal(JSON.stringify(sanitizePromptPayload(payload)).includes('private-bytes'), false);
+});
+
+test('sanitizer redacts token-shaped values and sensitive URL query values', () => {
+    const tokenExample = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-');
+    const input = {
+        endpoint: 'https://example.test/v1?model=safe&api_key=visible-secret&mode=chat',
+        note: 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456',
+        tokenExample,
+        ordinary: 'Basic instructions and Bearer vocabulary are ordinary words',
+    };
+    const sanitized = sanitizeRequestBody(input);
+
+    assert.equal(sanitized.body.endpoint.includes('visible-secret'), false);
+    assert.equal(sanitized.body.endpoint.includes('model=safe'), true);
+    assert.equal(sanitized.body.note.includes('abcdefghijklmnopqrstuvwxyz'), false);
+    assert.equal(sanitized.body.tokenExample, '[민감 정보 제거됨]');
+    assert.equal(sanitized.body.ordinary, input.ordinary);
+    assert.deepEqual(
+        sanitized.redactedPaths.sort(),
+        ['endpoint', 'note', 'tokenExample'],
+    );
+});
+
+test('sanitizer redacts service-account private keys by key and embedded PEM block', () => {
+    const pem = [
+        '-----BEGIN PRIVATE KEY-----',
+        'very-private-material',
+        '-----END PRIVATE KEY-----',
+    ].join('\n');
+    const sanitized = sanitizeRequestBody({
+        private_key: pem,
+        document: `before\n${pem}\nafter`,
+    });
+
+    assert.equal(sanitized.body.private_key, '[민감 정보 제거됨]');
+    assert.equal(sanitized.body.document.includes('very-private-material'), false);
+    assert.equal(sanitized.body.document, 'before\n[민감 정보 제거됨]\nafter');
+    assert.deepEqual(sanitized.redactedPaths, ['private_key', 'document']);
+});
+
+test('sanitizer handles large non-secret text without changing it', () => {
+    const content = `${'일반 프롬프트 문장. '.repeat(10000)}끝`;
+    const sanitized = sanitizeRequestBody({ content });
+    assert.equal(sanitized.body.content, content);
+    assert.deepEqual(sanitized.redactedPaths, []);
+});
+
+test('sanitizer fuzz preserves shape and never leaks seeded secret values', () => {
+    const secrets = [
+        ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-'),
+        ['ghp', 'abcdefghijklmnopqrstuvwxyz123456'].join('_'),
+        ['xoxb', '1234567890', 'abcdefghijklmnop'].join('-'),
+        ['AKIA', 'ABCDEFGHIJKLMNOP'].join(''),
+    ];
+    const input = Array.from({ length: 200 }, (_, index) => ({
+        label: `ordinary-${index}`,
+        text: `prefix ${secrets[index % secrets.length]} suffix`,
+        nested: {
+            endpoint: `https://example.test/path?token=${secrets[(index + 1) % secrets.length]}`,
+        },
+    }));
+    const sanitized = sanitizeRequestBody(input);
+    const serialized = JSON.stringify(sanitized.body);
+
+    assert.equal(Array.isArray(sanitized.body), true);
+    assert.equal(sanitized.body.length, input.length);
+    for (const secret of secrets) assert.equal(serialized.includes(secret), false);
+    assert.equal(sanitized.redactedPaths.length, input.length * 2);
 });

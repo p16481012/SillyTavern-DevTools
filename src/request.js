@@ -22,6 +22,18 @@ const CORRELATION_KEYS = [
     'responseId',
 ];
 const CORRELATION_CONTAINERS = ['metadata', 'meta', '_meta', 'request_metadata'];
+const URL_SECRET_QUERY = /([?&](?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer|client[_-]?secret|password|secret|signature|sig|token)=)([^&#\s]+)/giu;
+const AUTHORIZATION_VALUE = /\bAuthorization\s*:\s*(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/giu;
+const TOKEN_VALUE_PATTERNS = [
+    /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/gu,
+    /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gu,
+    /\bxox[baprs]-[A-Za-z0-9-]{16,}\b/gu,
+    /\bAIza[0-9A-Za-z_-]{20,}\b/gu,
+    /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu,
+    /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/gu,
+];
+const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----/gu;
+const PRIVATE_KEY_END = /-----END [A-Z0-9 ]{0,64}PRIVATE KEY-----/gu;
 
 function isSensitiveKey(key) {
     const normalized = String(key).replace(/[^a-z0-9]/giu, '').toLocaleLowerCase();
@@ -36,11 +48,52 @@ function isSensitiveKey(key) {
         'authtoken',
         'password',
         'proxypassword',
+        'privatekey',
+        'clientsecret',
         'secret',
         'cookie',
         'session',
         'sessionid',
     ].some((candidate) => normalized.includes(candidate));
+}
+
+function redactPrivateKeys(value) {
+    let output = '';
+    let cursor = 0;
+    let changed = false;
+    PRIVATE_KEY_BEGIN.lastIndex = 0;
+    let begin;
+    while ((begin = PRIVATE_KEY_BEGIN.exec(value)) !== null) {
+        output += value.slice(cursor, begin.index);
+        PRIVATE_KEY_END.lastIndex = PRIVATE_KEY_BEGIN.lastIndex;
+        const end = PRIVATE_KEY_END.exec(value);
+        const endIndex = end
+            ? PRIVATE_KEY_END.lastIndex
+            : value.length;
+        output += REDACTED_VALUE;
+        cursor = endIndex;
+        changed = true;
+        PRIVATE_KEY_BEGIN.lastIndex = endIndex;
+        if (!end) break;
+    }
+    return {
+        value: changed ? `${output}${value.slice(cursor)}` : value,
+        changed,
+    };
+}
+
+function redactSensitiveString(value) {
+    let result = redactPrivateKeys(value);
+    let output = result.value
+        .replace(URL_SECRET_QUERY, `$1${REDACTED_VALUE}`)
+        .replace(AUTHORIZATION_VALUE, REDACTED_VALUE);
+    for (const pattern of TOKEN_VALUE_PATTERNS) {
+        output = output.replace(pattern, REDACTED_VALUE);
+    }
+    return {
+        value: output,
+        changed: result.changed || output !== value,
+    };
 }
 
 export function sanitizeRequestBody(value) {
@@ -49,9 +102,14 @@ export function sanitizeRequestBody(value) {
     const seen = new WeakSet();
 
     const visit = (current, path) => {
-        if (typeof current === 'string' && /^data:(?:image|audio|video)\//iu.test(current)) {
-            omittedMediaPaths.push(path);
-            return OMITTED_MEDIA_VALUE;
+        if (typeof current === 'string') {
+            if (/^data:(?:image|audio|video)\//iu.test(current)) {
+                omittedMediaPaths.push(path);
+                return OMITTED_MEDIA_VALUE;
+            }
+            const sanitized = redactSensitiveString(current);
+            if (sanitized.changed) redactedPaths.push(path);
+            return sanitized.value;
         }
         if (current == null || typeof current !== 'object') {
             return current;
@@ -171,6 +229,10 @@ export function createCaptureBoundary({
     migratedFrom = null,
     correlationId = null,
     correlationMethod = null,
+    requestStatus = null,
+    generationStatus = 'unknown',
+    statusEvent = null,
+    statusUpdatedAt = null,
 }) {
     return {
         eventName,
@@ -182,5 +244,15 @@ export function createCaptureBoundary({
         migratedFrom,
         correlationId,
         correlationMethod: correlationMethod ?? (fallback ? 'prompt-only' : 'fifo'),
+        requestStatus: requestStatus ?? (
+            requestBodyAvailable
+                ? 'captured'
+                : fallback
+                    ? 'prompt-only-timeout'
+                    : 'not-captured'
+        ),
+        generationStatus,
+        statusEvent,
+        statusUpdatedAt,
     };
 }

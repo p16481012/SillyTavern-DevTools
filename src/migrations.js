@@ -84,6 +84,16 @@ export function migrateSnapshot(snapshot) {
             correlationId: legacyCapture.correlationId ?? null,
             correlationMethod: legacyCapture.correlationMethod
                 ?? (legacyCapture.fallback ? 'prompt-only' : 'fifo'),
+            requestStatus: legacyCapture.requestStatus ?? (
+                legacyRequest.body
+                    ? 'captured'
+                    : legacyCapture.fallback
+                        ? 'prompt-only-timeout'
+                        : 'not-captured'
+            ),
+            generationStatus: legacyCapture.generationStatus ?? 'unknown',
+            statusEvent: legacyCapture.statusEvent ?? null,
+            statusUpdatedAt: legacyCapture.statusUpdatedAt ?? null,
         },
         request: {
             ...legacyRequest,

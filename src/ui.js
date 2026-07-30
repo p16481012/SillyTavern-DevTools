@@ -12,7 +12,7 @@ import {
     serializeTimelineDiagnostics,
 } from './diagnostics.js';
 import {
-    searchSnapshot,
+    SEARCH_QUERY_MAX_LENGTH,
     serializeSnapshot,
     snapshotProvider,
 } from './model.js';
@@ -37,10 +37,27 @@ import {
 } from './comparison-policy.js';
 import { inferPanelThemeFromTextColor } from './theme.js';
 import { descriptionParagraphs } from './text-format.js';
+import {
+    USER_REGEX_MAX_LENGTH,
+    validateUserRegex,
+} from './regex-safety.js';
+import {
+    SEARCH_DEBOUNCE_MS,
+    searchSnapshotSafely,
+} from './search-runtime.js';
+import { snapshotExportPreview } from './export-preview.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
 const COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-policy:v1`;
+const LAST_TAB_KEY = `${STORAGE_PREFIX}last-tab`;
+const GEOMETRY_KEY = `${STORAGE_PREFIX}geometry`;
+const KNOWN_LOCAL_DATA_KEYS = [
+    RULE_SETTINGS_KEY,
+    COMPARISON_POLICY_SETTINGS_KEY,
+    LAST_TAB_KEY,
+    GEOMETRY_KEY,
+];
 const COMPARISON_MODES = ['alternative', 'ignore', 'normal'];
 const COMPARISON_TARGETS = ['configured', 'all'];
 const COMPARISON_RULE_KINDS = ['template', 'regex'];
@@ -256,6 +273,13 @@ function formatDelta(value) {
     return `${number > 0 ? '+' : ''}${number}`;
 }
 
+function formatBytes(value) {
+    const bytes = Math.max(0, Number(value) || 0);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 ** 2)).toFixed(1)} MB`;
+}
+
 function policyId(prefix) {
     if (typeof globalThis.crypto?.randomUUID === 'function') {
         return `${prefix}:${globalThis.crypto.randomUUID()}`;
@@ -289,12 +313,14 @@ function comparisonRuleError(rule) {
     const pattern = String(rule?.pattern ?? '').trim();
     if (!pattern) return t('comparison.invalid.emptyPattern');
     if (rule?.kind === 'regex') {
-        try {
-            new RegExp(pattern, 'u');
-        } catch {
-            return t('comparison.invalid.regex');
-        }
-        return null;
+        const validation = validateUserRegex(pattern);
+        if (validation.ok) return null;
+        const key = validation.code === 'regex-too-long'
+            ? 'comparison.invalid.regexTooLong'
+            : validation.code === 'unsafe-regex'
+                ? 'comparison.invalid.regexUnsafe'
+                : 'comparison.invalid.regex';
+        return t(key);
     }
     const groupCount = pattern.split('{group}').length - 1;
     const optionCount = pattern.split('{option}').length - 1;
@@ -461,7 +487,19 @@ export class DevToolsWindow {
         this.selectedTimelineIds = new Set();
         this.timelineSelectionChatId = null;
         this.refreshRequestId = 0;
-        this.activeTab = localStorage.getItem(`${STORAGE_PREFIX}last-tab`) || 'explorer';
+        this.storageSummary = {
+            ...(this.store.getStatus?.() ?? {
+                type: 'memory',
+                persistent: false,
+                fallbackReason: 'status-unavailable',
+            }),
+            chatCount: null,
+            snapshotCount: null,
+            localSettingCount: null,
+            approximateBytes: null,
+            snapshotApproximateBytes: null,
+        };
+        this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
         this.comparisonPolicySettings = this.loadComparisonPolicySettings();
@@ -610,7 +648,7 @@ export class DevToolsWindow {
 
     restoreGeometry() {
         try {
-            const geometry = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}geometry`));
+            const geometry = JSON.parse(localStorage.getItem(GEOMETRY_KEY));
             if (!geometry) return;
             this.window.style.width = `${geometry.width}px`;
             this.window.style.height = `${geometry.height}px`;
@@ -625,7 +663,7 @@ export class DevToolsWindow {
     observeGeometry() {
         const save = () => {
             const rect = this.window.getBoundingClientRect();
-            localStorage.setItem(`${STORAGE_PREFIX}geometry`, JSON.stringify({
+            localStorage.setItem(GEOMETRY_KEY, JSON.stringify({
                 width: Math.round(rect.width),
                 height: Math.round(rect.height),
                 left: Math.max(0, Math.round(rect.left)),
@@ -665,12 +703,18 @@ export class DevToolsWindow {
 
     async onSnapshot(snapshot) {
         this.storageErrors = this.storageErrors.filter((item) => item.snapshotId !== snapshot.id);
-        if (snapshot.chatId !== this.currentChatId()) return;
-        this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
-            .sort((left, right) => left.timestamp - right.timestamp);
-        this.pruneTimelineSelection();
-        this.selectedId = snapshot.id;
-        if (this.root && !this.root.hidden) this.render();
+        const panelVisible = Boolean(this.root && !this.root.hidden);
+        if (panelVisible) {
+            this.storageSummary = await this.readStorageSummary();
+        }
+        if (snapshot.chatId === this.currentChatId()) {
+            const alreadyPresent = this.timeline.some((item) => item.id === snapshot.id);
+            this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
+                .sort((left, right) => left.timestamp - right.timestamp);
+            this.pruneTimelineSelection();
+            if (!alreadyPresent) this.selectedId = snapshot.id;
+        }
+        if (panelVisible) this.render();
     }
 
     onCaptureError(detail) {
@@ -723,11 +767,15 @@ export class DevToolsWindow {
     } = {}) {
         const requestId = ++this.refreshRequestId;
         try {
-            const timeline = await this.store.getTimeline(chatId);
+            const [timeline, storageSummary] = await Promise.all([
+                this.store.getTimeline(chatId),
+                this.readStorageSummary(),
+            ]);
             if (requestId !== this.refreshRequestId || chatId !== this.currentChatId()) {
                 return false;
             }
             this.timeline = timeline;
+            this.storageSummary = storageSummary;
             this.pruneTimelineSelection();
             if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
                 this.selectedId = this.timeline.at(-1)?.id ?? null;
@@ -748,6 +796,98 @@ export class DevToolsWindow {
             this.render();
             return false;
         }
+    }
+
+    async readStorageSummary() {
+        const localData = this.readLocalDataSummary();
+        try {
+            let summary;
+            if (typeof this.store.getStorageSummary === 'function') {
+                summary = await this.store.getStorageSummary();
+            } else {
+                summary = {
+                    ...this.storageSummary,
+                    ...(this.store.getStatus?.() ?? {}),
+                };
+            }
+            const snapshotApproximateBytes = Number.isFinite(summary.snapshotApproximateBytes)
+                ? summary.snapshotApproximateBytes
+                : Number.isFinite(summary.approximateBytes)
+                    ? summary.approximateBytes
+                    : null;
+            return {
+                ...summary,
+                localSettingCount: localData.count,
+                snapshotApproximateBytes,
+                approximateBytes: snapshotApproximateBytes == null
+                    ? null
+                    : snapshotApproximateBytes + localData.approximateBytes,
+            };
+        } catch {
+            const snapshotApproximateBytes = this.storageSummary.snapshotApproximateBytes ?? null;
+            return {
+                ...this.storageSummary,
+                ...(this.store.getStatus?.() ?? {}),
+                localSettingCount: localData.count,
+                approximateBytes: snapshotApproximateBytes == null
+                    ? null
+                    : snapshotApproximateBytes + localData.approximateBytes,
+                summaryError: true,
+            };
+        }
+    }
+
+    localDataKeys() {
+        const keys = new Set(KNOWN_LOCAL_DATA_KEYS);
+        try {
+            const length = Number(localStorage.length) || 0;
+            for (let index = 0; index < length; index += 1) {
+                const key = localStorage.key?.(index);
+                if (key?.startsWith(STORAGE_PREFIX)) keys.add(key);
+            }
+        } catch {
+            // Known keys remain available when enumeration is restricted.
+        }
+        return [...keys];
+    }
+
+    readLocalDataSummary() {
+        let count = 0;
+        let approximateBytes = 0;
+        for (const key of this.localDataKeys()) {
+            try {
+                const value = localStorage.getItem(key);
+                if (value == null) continue;
+                count += 1;
+                approximateBytes += new TextEncoder().encode(`${key}${value}`).length;
+            } catch {
+                // Keep the readable subset in the summary.
+            }
+        }
+        return { count, approximateBytes };
+    }
+
+    clearLocalData() {
+        let deletedCount = 0;
+        for (const key of this.localDataKeys()) {
+            const exists = localStorage.getItem(key) != null;
+            localStorage.removeItem(key);
+            if (exists) deletedCount += 1;
+        }
+        this.ruleSettings = normalizeRuleSettings(DEFAULT_RULE_SETTINGS);
+        this.ruleSettingsOpen = false;
+        this.comparisonPolicySettings = normalizeComparisonPolicySettings(
+            DEFAULT_COMPARISON_POLICY_SETTINGS,
+        );
+        this.comparisonPolicyOpen = false;
+        this.comparisonPolicySectionOpen = {
+            rules: false,
+            manual: false,
+            preview: false,
+        };
+        this.importedDiagnostics = null;
+        this.diagnosticImportError = null;
+        return deletedCount;
     }
 
     tabElementId(id) {
@@ -852,7 +992,7 @@ export class DevToolsWindow {
         const nextTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
         const changed = nextTab !== this.activeTab;
         this.activeTab = nextTab;
-        localStorage.setItem(`${STORAGE_PREFIX}last-tab`, this.activeTab);
+        localStorage.setItem(LAST_TAB_KEY, this.activeTab);
         this.render();
         if (changed && this.content) this.content.scrollTop = 0;
         if (focus) this.activeTabButton()?.focus();
@@ -1258,7 +1398,7 @@ export class DevToolsWindow {
     openExplorerForFinding(snapshot, finding, target) {
         this.selectedId = snapshot.id;
         this.activeTab = 'explorer';
-        localStorage.setItem(`${STORAGE_PREFIX}last-tab`, this.activeTab);
+        localStorage.setItem(LAST_TAB_KEY, this.activeTab);
         this.render();
         this.scheduleExplorerFocus(() => {
             if (target === 'sources') {
@@ -1372,6 +1512,7 @@ export class DevToolsWindow {
             className: 'st-devtools-section-intro',
             text: t('snapshot.retained', { count: this.timeline.length }),
         }));
+        page.appendChild(this.renderStorageOverview());
 
         const toolbox = element('details', {
             className: 'st-devtools-toolbox st-devtools-timeline-toolbox',
@@ -1434,6 +1575,21 @@ export class DevToolsWindow {
             if (!confirm(t('timeline.deleteConfirm'))) return;
             await this.clearCurrentTimeline();
         });
+        const clearAll = element('button', {
+            className: 'menu_button',
+            text: t('action.clearAllData'),
+            type: 'button',
+        });
+        clearAll.disabled = (
+            this.storageSummary.snapshotCount != null
+            && this.storageSummary.snapshotCount === 0
+        );
+        clearAll.addEventListener('click', async () => {
+            if (!confirm(t('storage.clearAllConfirm', {
+                count: this.storageSummary.snapshotCount ?? t('common.unknown'),
+            }))) return;
+            await this.clearAllSnapshots();
+        });
         toolboxContent.append(
             toolRow(
                 'timeline.importTitle',
@@ -1444,6 +1600,12 @@ export class DevToolsWindow {
                 'timeline.clearTitle',
                 'timeline.clearDescription',
                 [clear],
+                'is-danger',
+            ),
+            toolRow(
+                'storage.clearAllTitle',
+                'storage.clearAllDescription',
+                [clearAll],
                 'is-danger',
             ),
         );
@@ -1565,6 +1727,57 @@ export class DevToolsWindow {
         snapshots.append(snapshotsSummary, selectionToolbar, list);
         page.appendChild(snapshots);
         return page;
+    }
+
+    renderStorageOverview() {
+        const summary = this.storageSummary ?? {};
+        const status = element('section', {
+            className: `st-devtools-storage-overview${summary.persistent ? '' : ' is-temporary'}`,
+        });
+        const heading = element('div', { className: 'st-devtools-storage-overview-heading' });
+        heading.append(
+            element('strong', { text: t('storage.overviewTitle') }),
+            element('span', {
+                className: 'st-devtools-storage-backend',
+                text: t(`storage.backend.${summary.type ?? 'memory'}`),
+            }),
+        );
+        const metrics = element('div', { className: 'st-devtools-storage-metrics' });
+        metrics.append(
+            element('span', {
+                text: t('storage.chatCount', {
+                    count: summary.chatCount ?? t('common.unknown'),
+                }),
+            }),
+            element('span', {
+                text: t('storage.snapshotCount', {
+                    count: summary.snapshotCount ?? t('common.unknown'),
+                }),
+            }),
+            element('span', {
+                text: t('storage.localSettingCount', {
+                    count: summary.localSettingCount ?? t('common.unknown'),
+                }),
+            }),
+            element('span', {
+                text: t('storage.approximateSize', {
+                    size: summary.approximateBytes == null
+                        ? t('common.unknown')
+                        : formatBytes(summary.approximateBytes),
+                }),
+            }),
+        );
+        status.append(heading, metrics);
+        if (!summary.persistent) {
+            const warning = proseElement('p', t('storage.memoryWarning'), {
+                className: 'st-devtools-storage-warning',
+            });
+            warning.setAttribute('role', 'alert');
+            status.appendChild(warning);
+        } else if (summary.summaryError) {
+            status.appendChild(proseElement('p', t('storage.summaryUnavailable')));
+        }
+        return status;
     }
 
     pruneTimelineSelection() {
@@ -1786,6 +1999,40 @@ export class DevToolsWindow {
         return status;
     }
 
+    async clearAllSnapshots({ throwOnError = false } = {}) {
+        const errorId = 'clear-all';
+        try {
+            if (typeof this.store.clearAll !== 'function') {
+                throw new Error(t('storage.clearAllUnsupported'));
+            }
+            const result = await this.store.clearAll();
+            const localSettingCount = this.clearLocalData();
+            this.timeline = [];
+            this.selectedId = null;
+            this.selectedTimelineIds.clear();
+            this.storageSummary = await this.readStorageSummary();
+            this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
+            globalThis.toastr?.success?.(
+                t('storage.clearedAll', {
+                    count: result?.snapshotCount ?? 0,
+                    localCount: localSettingCount,
+                }),
+                'ST DevTools',
+            );
+            this.render();
+            return true;
+        } catch (error) {
+            if (throwOnError) throw error;
+            this.addStorageError({
+                id: errorId,
+                error,
+                retry: () => this.clearAllSnapshots({ throwOnError: true }),
+            });
+            globalThis.toastr?.error?.(t('storage.clearAllFailed'), 'ST DevTools');
+            return false;
+        }
+    }
+
     async clearCurrentTimeline({
         throwOnError = false,
         chatId = this.timelineSelectionChatId ?? this.currentChatId(),
@@ -1802,6 +2049,7 @@ export class DevToolsWindow {
                 this.selectedId = null;
                 this.selectedTimelineIds.clear();
             }
+            this.storageSummary = await this.readStorageSummary();
             this.storageErrors = this.storageErrors.filter((item) => item.id !== 'clear-timeline');
             this.render();
             return true;
@@ -1837,6 +2085,7 @@ export class DevToolsWindow {
                     this.selectedId = this.timeline.at(-1)?.id ?? null;
                 }
             }
+            this.storageSummary = await this.readStorageSummary();
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             this.render();
             return true;
@@ -1894,6 +2143,7 @@ export class DevToolsWindow {
                     this.selectedId = this.timeline.at(-1)?.id ?? null;
                 }
             }
+            this.storageSummary = await this.readStorageSummary();
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             globalThis.toastr?.success?.(
                 t('timeline.deletedSelected', { count: deletedCount }),
@@ -2271,6 +2521,10 @@ export class DevToolsWindow {
         const captureCard = element('details', {
             className: 'st-devtools-capture-boundary st-devtools-disclosure',
         });
+        const generationStatus = capture.generationStatus ?? 'unknown';
+        const requestStatus = capture.requestStatus ?? (
+            capture.fallback ? 'prompt-only-timeout' : 'unknown'
+        );
         const captureSummary = element('summary');
         captureSummary.append(
             explainedTitle(
@@ -2280,6 +2534,10 @@ export class DevToolsWindow {
             element('span', {
                 className: `st-devtools-capture-stage${capture.fallback ? ' fallback' : ''}`,
                 text: t(`capture.stage.${capture.stage ?? 'prompt-ready'}`),
+            }),
+            element('span', {
+                className: `st-devtools-capture-lifecycle ${generationStatus}`,
+                text: t(`capture.generationStatus.${generationStatus}`),
             }),
         );
         let captureDescription = capture.stage === 'backend-request-ready'
@@ -2300,6 +2558,16 @@ export class DevToolsWindow {
             element('small', {
                 text: t('capture.correlationDescription', {
                     method: t(`capture.correlation.${capture.correlationMethod ?? 'unknown'}`),
+                }),
+            }),
+            element('small', {
+                text: t('capture.requestStatusDescription', {
+                    status: t(`capture.requestStatus.${requestStatus}`),
+                }),
+            }),
+            element('small', {
+                text: t('capture.generationStatusDescription', {
+                    status: t(`capture.generationStatus.${generationStatus}`),
                 }),
             }),
         );
@@ -2392,6 +2660,7 @@ export class DevToolsWindow {
         const exportActions = element('div', { className: 'st-devtools-tool-row-actions' });
         const copy = element('button', { className: 'menu_button', text: t('action.copy'), type: 'button' });
         copy.addEventListener('click', async () => {
+            if (!confirm(t('export.copyConfirm'))) return;
             await copyText(snapshot.finalText);
             globalThis.toastr?.info?.(t('action.promptCopied'), 'ST DevTools');
         });
@@ -2402,7 +2671,10 @@ export class DevToolsWindow {
             this.renderExportButton(snapshot, 'markdown'),
         );
         const exportContent = element('div', { className: 'st-devtools-toolbox-content' });
-        exportContent.appendChild(exportActions);
+        exportContent.append(
+            this.renderExportPrivacyPreview(snapshot),
+            exportActions,
+        );
         exportTools.append(exportSummary, exportContent);
 
         const settingsDetails = element('details', {
@@ -2462,6 +2734,39 @@ export class DevToolsWindow {
         return page;
     }
 
+    renderExportPrivacyPreview(snapshot) {
+        const jsonPreview = snapshotExportPreview(snapshot, 'json');
+        const jsonFields = [
+            jsonPreview.includesRequestBody ? t('export.field.requestBody') : null,
+            jsonPreview.includesRequestSettings ? t('export.field.requestSettings') : null,
+            jsonPreview.includesRawPayload ? t('export.field.payload') : null,
+            jsonPreview.includesLorebookData ? t('export.field.lorebook') : null,
+        ].filter(Boolean);
+        const preview = element('section', { className: 'st-devtools-export-preview' });
+        preview.append(
+            element('strong', { text: t('export.previewTitle') }),
+            proseElement('p', t('export.previewWarning')),
+        );
+        const fields = element('ul');
+        fields.append(
+            element('li', {
+                text: t('export.previewSources', {
+                    count: snapshot.sources?.length ?? 0,
+                }),
+            }),
+            element('li', { text: t('export.previewTextFormats') }),
+            element('li', {
+                text: t('export.previewJson', {
+                    fields: jsonFields.length > 0
+                        ? jsonFields.join(' · ')
+                        : t('export.field.metadataOnly'),
+                }),
+            }),
+        );
+        preview.appendChild(fields);
+        return preview;
+    }
+
     renderExportButton(snapshot, format) {
         const label = format === 'markdown' ? 'Markdown' : format.toUpperCase();
         const button = element('button', {
@@ -2471,8 +2776,18 @@ export class DevToolsWindow {
         });
         button.addEventListener('click', () => {
             const extension = format === 'markdown' ? 'md' : format;
-            const mime = format === 'json' ? 'application/json' : 'text/plain';
-            downloadText(`st-devtools-${snapshot.id}.${extension}`, serializeSnapshot(snapshot, format), mime);
+            const mime = format === 'json'
+                ? 'application/json;charset=utf-8'
+                : format === 'markdown'
+                    ? 'text/markdown;charset=utf-8'
+                    : 'text/plain;charset=utf-8';
+            const serialized = serializeSnapshot(snapshot, format);
+            const preview = snapshotExportPreview(snapshot, format, serialized);
+            if (!confirm(t('export.confirm', {
+                format: label,
+                size: formatBytes(preview.approximateBytes),
+            }))) return;
+            downloadText(`st-devtools-${snapshot.id}.${extension}`, serialized, mime);
         });
         return button;
     }
@@ -2754,6 +3069,7 @@ export class DevToolsWindow {
         pattern.name = 'pattern';
         pattern.required = true;
         pattern.placeholder = t('comparison.patternPlaceholder');
+        pattern.maxLength = SEARCH_QUERY_MAX_LENGTH;
         const fixedGroup = element('input');
         fixedGroup.name = 'fixedGroup';
         fixedGroup.placeholder = t('comparison.fixedGroupPlaceholder');
@@ -2775,6 +3091,13 @@ export class DevToolsWindow {
             option.value = value;
             target.appendChild(option);
         }
+        const updatePatternLimit = () => {
+            pattern.maxLength = kind.value === 'regex'
+                ? USER_REGEX_MAX_LENGTH
+                : SEARCH_QUERY_MAX_LENGTH;
+        };
+        kind.addEventListener('change', updatePatternLimit);
+        updatePatternLimit();
         const submit = element('button', {
             className: 'menu_button',
             text: t('action.addPolicyRule'),
@@ -3392,6 +3715,7 @@ export class DevToolsWindow {
         const input = element('input');
         input.type = 'search';
         input.placeholder = t('search.placeholder');
+        input.maxLength = SEARCH_QUERY_MAX_LENGTH;
         const regexLabel = element('label');
         const regex = element('input');
         regex.type = 'checkbox';
@@ -3412,17 +3736,51 @@ export class DevToolsWindow {
         );
         controls.append(input, options);
         const status = element('p', { className: 'st-devtools-search-status' });
+        const statusId = `st-devtools-search-status-${++fieldSequence}`;
+        status.id = statusId;
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        input.setAttribute('aria-describedby', statusId);
         const results = element('div', { className: 'st-devtools-search-results' });
+        let debounceTimer = null;
+        let activeSearch = null;
+        let searchSequence = 0;
 
-        const run = () => {
+        const searchErrorText = (error) => {
+            const code = error?.code ?? error?.message;
+            const knownCodes = new Set([
+                'invalid-regex',
+                'unsafe-regex',
+                'regex-too-long',
+                'query-too-long',
+                'regex-timeout',
+                'regex-worker-unavailable',
+                'search-worker-failed',
+            ]);
+            return knownCodes.has(code)
+                ? t(`search.error.${code}`, {
+                    regexMax: USER_REGEX_MAX_LENGTH,
+                    queryMax: SEARCH_QUERY_MAX_LENGTH,
+                })
+                : t('search.error.unknown');
+        };
+        const run = async () => {
+            const sequence = ++searchSequence;
+            activeSearch?.abort();
+            activeSearch = new AbortController();
             results.replaceChildren();
             status.textContent = '';
-            if (!input.value) return;
+            const query = input.value;
+            if (!query) return;
+            status.textContent = t('search.searching');
             try {
-                const matches = searchSnapshot(snapshot, input.value, {
+                const matches = await searchSnapshotSafely(snapshot, query, {
                     regex: regex.checked,
                     caseSensitive: caseSensitive.checked,
+                }, {
+                    signal: activeSearch.signal,
                 });
+                if (sequence !== searchSequence || !page.isConnected) return;
                 status.textContent = matches.length === 200
                     ? t('search.matchesLimited', { count: matches.length })
                     : t('search.matches', { count: matches.length });
@@ -3434,7 +3792,7 @@ export class DevToolsWindow {
                     );
                     item.addEventListener('click', () => {
                         this.activeTab = 'explorer';
-                        localStorage.setItem(`${STORAGE_PREFIX}last-tab`, this.activeTab);
+                        localStorage.setItem(LAST_TAB_KEY, this.activeTab);
                         this.render();
                         const source = [...this.window.querySelectorAll('.st-devtools-source')]
                             .find((entry) => entry.dataset.sourceId === match.sourceId);
@@ -3448,12 +3806,30 @@ export class DevToolsWindow {
                     results.appendChild(item);
                 }
             } catch (error) {
-                status.textContent = t('search.invalidRegex', { message: error.message });
+                if (error?.code === 'search-cancelled' || sequence !== searchSequence) return;
+                status.textContent = searchErrorText(error);
             }
         };
-        input.addEventListener('input', run);
-        regex.addEventListener('change', run);
-        caseSensitive.addEventListener('change', run);
+        const schedule = (delay = SEARCH_DEBOUNCE_MS) => {
+            if (debounceTimer != null) clearTimeout(debounceTimer);
+            activeSearch?.abort();
+            searchSequence += 1;
+            results.replaceChildren();
+            if (!input.value) {
+                status.textContent = '';
+                return;
+            }
+            status.textContent = t('search.waiting');
+            debounceTimer = setTimeout(run, delay);
+        };
+        input.addEventListener('input', () => schedule());
+        regex.addEventListener('change', () => {
+            input.maxLength = regex.checked
+                ? USER_REGEX_MAX_LENGTH
+                : SEARCH_QUERY_MAX_LENGTH;
+            schedule(0);
+        });
+        caseSensitive.addEventListener('change', () => schedule(0));
         page.append(controls, status, results);
         return page;
     }

@@ -10,8 +10,8 @@ import {
 
 function snapshot(id, timestamp, totalTokens) {
     return {
-        schemaVersion: 4,
-        extensionVersion: '0.7.0',
+        schemaVersion: 5,
+        extensionVersion: '0.8.7',
         id,
         timestamp,
         api: 'openai',
@@ -27,6 +27,9 @@ function snapshot(id, timestamp, totalTokens) {
             fallback: false,
             correlationMethod: 'fifo',
             correlationId: `secret-request-${id}`,
+            requestStatus: 'captured',
+            generationStatus: 'ended',
+            statusEvent: 'GENERATION_ENDED',
         },
         request: {
             bodyKeys: ['messages', 'model'],
@@ -62,6 +65,8 @@ test('timeline diagnostics summarize every snapshot without prompt or request co
     assert.equal(report.summary.structuredTotals.toolSchemas, 2);
     assert.deepEqual(report.summary.providerCounts, { openrouter: 2 });
     assert.equal(report.snapshots[0].provider, 'openrouter');
+    assert.equal(report.snapshots[0].capture.requestStatus, 'captured');
+    assert.equal(report.snapshots[0].capture.generationStatus, 'ended');
     assert.equal(report.privacy.promptContentIncluded, false);
     assert.equal(report.privacy.chatIdValuesIncluded, false);
 

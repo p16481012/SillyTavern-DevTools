@@ -1,6 +1,9 @@
+import { compileUserRegex, validateUserRegex } from './regex-safety.js';
+
 const MODES = new Set(['alternative', 'ignore', 'normal']);
 const RULE_KINDS = new Set(['template', 'regex']);
 const TARGETS = new Set(['configured', 'all']);
+const RULE_SOURCE_NAME_MAX_LENGTH = 2048;
 
 export const DEFAULT_COMPARISON_POLICY_SETTINGS = Object.freeze({
     version: 1,
@@ -165,7 +168,11 @@ function compileRule(rule) {
     }
     try {
         if (rule.kind === 'regex') {
-            return { error: null, regex: new RegExp(rule.pattern, 'iu') };
+            const validation = validateUserRegex(rule.pattern);
+            if (!validation.ok) {
+                return { error: validation.code, regex: null };
+            }
+            return { error: null, regex: compileUserRegex(rule.pattern, 'iu') };
         }
         const regex = templateToRegex(rule.pattern, Boolean(rule.fixedGroup));
         return regex
@@ -182,7 +189,9 @@ function matchNameRule(rule, source, compiled = compileRule(rule)) {
     if (rule.target === 'configured' && !isConfiguredPromptSource(source)) return null;
 
     if (!compiled.regex) return null;
-    const match = compiled.regex.exec(sourceName(source));
+    const match = compiled.regex.exec(
+        sourceName(source).slice(0, RULE_SOURCE_NAME_MAX_LENGTH),
+    );
     if (!match) return null;
 
     const captures = match.groups ?? {};

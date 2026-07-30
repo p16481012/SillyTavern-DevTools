@@ -742,6 +742,46 @@
     gap: 0.4rem;
 }
 
+.st-devtools-storage-overview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-left: 4px solid var(--st-devtools-status-success);
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-storage-overview.is-temporary {
+    border-left-color: var(--st-devtools-status-warning);
+}
+
+.st-devtools-storage-overview-heading,
+.st-devtools-storage-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.7rem;
+}
+
+.st-devtools-storage-overview-heading {
+    justify-content: space-between;
+}
+
+.st-devtools-storage-backend,
+.st-devtools-storage-metrics > span {
+    padding: 0.18rem 0.5rem;
+    border-radius: 999px;
+    background: var(--st-devtools-surface-muted);
+    font-size: 0.78rem;
+}
+
+.st-devtools-storage-warning {
+    margin: 0;
+    color: var(--st-devtools-status-warning);
+}
+
 .st-devtools-toolbar-actions {
     display: flex;
     flex: 1 1 32rem;
@@ -1227,8 +1267,48 @@
     color: var(--st-devtools-status-warning);
 }
 
+.st-devtools-capture-lifecycle {
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 999px;
+    color: var(--st-devtools-text);
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.st-devtools-capture-lifecycle.started {
+    border-color: var(--st-devtools-status-info);
+    color: var(--st-devtools-status-info);
+}
+
+.st-devtools-capture-lifecycle.ended {
+    border-color: var(--st-devtools-status-success);
+    color: var(--st-devtools-status-success);
+}
+
+.st-devtools-capture-lifecycle.stopped {
+    border-color: var(--st-devtools-status-danger);
+    color: var(--st-devtools-status-danger);
+}
+
 .st-devtools-capture-redacted {
     color: var(--st-devtools-status-warning);
+}
+
+.st-devtools-export-preview {
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--st-devtools-status-warning);
+    border-radius: 5px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-export-preview > p {
+    margin: 0.4rem 0;
+}
+
+.st-devtools-export-preview > ul {
+    margin: 0.45rem 0 0;
+    padding-left: 1.25rem;
 }
 
 .st-devtools-context-details {

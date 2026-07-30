@@ -4,7 +4,7 @@ import {
     createRequestRecord,
     extractPromptPayload,
     extractRequestCorrelationId,
-    sanitizePromptPayload,
+    sanitizeRequestBody,
 } from './request.js';
 
 const DEFAULT_SETTINGS_WAIT_MS = 1500;
@@ -162,6 +162,21 @@ function pendingKey(promptType) {
     return promptType === 'chat-completion' ? 'chat-completion' : 'text-completion';
 }
 
+function sanitizeCaptureValue(value, pathPrefix) {
+    const sanitized = sanitizeRequestBody(value);
+    const prefix = (path) => {
+        if (!path) return pathPrefix;
+        return path.startsWith('[')
+            ? `${pathPrefix}${path}`
+            : `${pathPrefix}.${path}`;
+    };
+    return {
+        value: sanitized.body,
+        redactedPaths: sanitized.redactedPaths.map(prefix),
+        omittedMediaPaths: sanitized.omittedMediaPaths.map(prefix),
+    };
+}
+
 export class CaptureController extends EventTarget {
     constructor({
         getContext,
@@ -181,6 +196,8 @@ export class CaptureController extends EventTarget {
             'chat-completion': [],
             'text-completion': [],
         };
+        this.generationSequence = 0;
+        this.activeGeneration = null;
         this.attachedRequestBodies = new WeakSet();
         this.attachedCorrelationIds = new Set();
     }
@@ -194,11 +211,31 @@ export class CaptureController extends EventTarget {
         const events = getEventTypes(context);
 
         if (events.GENERATION_STARTED) {
-            context.eventSource.on(events.GENERATION_STARTED, (data) => {
+            context.eventSource.on(events.GENERATION_STARTED, (data, _options, dryRun) => {
+                if (dryRun) return;
                 this.generationType = typeof data === 'string'
                     ? data
                     : data?.type ?? data?.generationType ?? 'unknown';
                 this.pendingLore = [];
+                this.activeGeneration = {
+                    id: ++this.generationSequence,
+                    status: 'started',
+                    statusEvent: 'GENERATION_STARTED',
+                    statusUpdatedAt: Date.now(),
+                    snapshots: new Map(),
+                };
+            });
+        }
+
+        if (events.GENERATION_STOPPED) {
+            context.eventSource.on(events.GENERATION_STOPPED, () => {
+                this.markGenerationStatus('stopped', 'GENERATION_STOPPED');
+            });
+        }
+
+        if (events.GENERATION_ENDED) {
+            context.eventSource.on(events.GENERATION_ENDED, () => {
+                this.markGenerationStatus('ended', 'GENERATION_ENDED');
             });
         }
 
@@ -272,12 +309,35 @@ export class CaptureController extends EventTarget {
 
     enqueueCapture(promptType, mutablePayload, { correlationId = null } = {}) {
         const key = pendingKey(promptType);
+        const contextState = sanitizeCaptureValue(
+            snapshotContext(this.getContext()),
+            'contextState',
+        );
+        const promptReadyPayload = sanitizeCaptureValue(
+            mutablePayload,
+            'promptReadyPayload',
+        );
+        const activatedLore = sanitizeCaptureValue(
+            this.pendingLore,
+            'activatedLore',
+        );
         const pending = {
-            contextState: snapshotContext(this.getContext()),
+            contextState: contextState.value,
             promptType,
-            promptReadyPayload: sanitizePromptPayload(deepClone(mutablePayload)),
-            activatedLore: deepClone(this.pendingLore),
+            promptReadyPayload: promptReadyPayload.value,
+            activatedLore: activatedLore.value,
+            supplementalRedactedPaths: [
+                ...contextState.redactedPaths,
+                ...activatedLore.redactedPaths,
+            ],
+            supplementalOmittedMediaPaths: [
+                ...contextState.omittedMediaPaths,
+                ...activatedLore.omittedMediaPaths,
+            ],
+            fallbackRedactedPaths: promptReadyPayload.redactedPaths,
+            fallbackOmittedMediaPaths: promptReadyPayload.omittedMediaPaths,
             generationType: this.generationType,
+            generation: this.activeGeneration,
             correlationId,
             settled: false,
             reserved: false,
@@ -335,11 +395,11 @@ export class CaptureController extends EventTarget {
         setTimeout(() => {
             if (pending.settled || !this.pending[key].includes(pending)) return;
             const requestBody = deepClone(mutableRequestBody);
-            const payload = sanitizePromptPayload(deepClone(extractPromptPayload(
+            const payload = sanitizeRequestBody(extractPromptPayload(
                 requestBody,
                 promptType,
                 pending.promptReadyPayload,
-            )));
+            )).body;
             this.finishPending(pending, {
                 payload,
                 requestBody,
@@ -366,6 +426,16 @@ export class CaptureController extends EventTarget {
         this.pending[key] = this.pending[key].filter((item) => item !== pending);
 
         const request = createRequestRecord(requestBody);
+        request.redactedPaths = [...new Set([
+            ...request.redactedPaths,
+            ...pending.supplementalRedactedPaths,
+            ...(fallback ? pending.fallbackRedactedPaths : []),
+        ])];
+        request.omittedMediaPaths = [...new Set([
+            ...request.omittedMediaPaths,
+            ...pending.supplementalOmittedMediaPaths,
+            ...(fallback ? pending.fallbackOmittedMediaPaths : []),
+        ])];
         const capture = createCaptureBoundary({
             eventName,
             stage,
@@ -373,6 +443,9 @@ export class CaptureController extends EventTarget {
             fallback,
             correlationId: request.correlationId ?? pending.correlationId,
             correlationMethod,
+            generationStatus: pending.generation?.status ?? 'unknown',
+            statusEvent: pending.generation?.statusEvent ?? null,
+            statusUpdatedAt: pending.generation?.statusUpdatedAt ?? null,
         });
 
         setTimeout(() => {
@@ -384,6 +457,7 @@ export class CaptureController extends EventTarget {
                 activatedLore: pending.activatedLore,
                 capture,
                 request,
+                generation: pending.generation,
             }).catch((error) => {
                 console.error('[ST DevTools] Failed to persist prompt snapshot.', error);
             });
@@ -398,8 +472,14 @@ export class CaptureController extends EventTarget {
         activatedLore,
         capture,
         request,
+        generation = null,
     }) {
         const context = this.getContext();
+        if (generation) {
+            capture.generationStatus = generation.status;
+            capture.statusEvent = generation.statusEvent;
+            capture.statusUpdatedAt = generation.statusUpdatedAt;
+        }
         const tokenCounter = typeof context.getTokenCountAsync === 'function'
             ? (text) => context.getTokenCountAsync(text)
             : async (text) => Math.ceil(new TextEncoder().encode(text).length / 3.35);
@@ -415,7 +495,50 @@ export class CaptureController extends EventTarget {
             request,
         });
         await this.storeSnapshot(snapshot);
-        return snapshot;
+        return this.registerGenerationSnapshot(generation, snapshot);
+    }
+
+    async registerGenerationSnapshot(generation, snapshot) {
+        if (!generation) return snapshot;
+        generation.snapshots.set(snapshot.id, snapshot);
+        if (
+            snapshot.capture?.generationStatus === generation.status
+            && snapshot.capture?.statusEvent === generation.statusEvent
+        ) {
+            return snapshot;
+        }
+        const updated = {
+            ...snapshot,
+            capture: {
+                ...(snapshot.capture ?? {}),
+                generationStatus: generation.status,
+                statusEvent: generation.statusEvent,
+                statusUpdatedAt: generation.statusUpdatedAt,
+            },
+        };
+        generation.snapshots.set(updated.id, updated);
+        await this.storeSnapshot(updated);
+        return updated;
+    }
+
+    markGenerationStatus(status, statusEvent) {
+        const generation = this.activeGeneration;
+        if (!generation) return;
+        if (generation.status === 'stopped' && status === 'ended') {
+            this.activeGeneration = null;
+            return;
+        }
+        generation.status = status;
+        generation.statusEvent = statusEvent;
+        generation.statusUpdatedAt = Date.now();
+        if (status === 'stopped' || status === 'ended') {
+            this.activeGeneration = null;
+        }
+        for (const snapshot of generation.snapshots.values()) {
+            this.registerGenerationSnapshot(generation, snapshot).catch((error) => {
+                console.error('[ST DevTools] Failed to update capture lifecycle.', error);
+            });
+        }
     }
 
     async retrySnapshot(snapshot) {

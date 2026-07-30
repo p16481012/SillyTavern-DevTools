@@ -23,6 +23,8 @@ function createContext(eventSource) {
         eventSource,
         eventTypes: {
             GENERATION_STARTED: 'generation_started',
+            GENERATION_STOPPED: 'generation_stopped',
+            GENERATION_ENDED: 'generation_ended',
             WORLD_INFO_ACTIVATED: 'world_info_activated',
             CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
             GENERATE_AFTER_COMBINE_PROMPTS: 'generate_after_combine_prompts',
@@ -435,4 +437,124 @@ test('storage failures expose the same snapshot for an idempotent retry', async 
     assert.equal(retried.id, snapshot.id);
     assert.equal(success.id, snapshot.id);
     assert.notEqual(retried, snapshot);
+});
+
+test('generation stop updates an already stored snapshot without changing its id', async () => {
+    const eventSource = new FakeEventSource();
+    const stored = new Map();
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            async addSnapshot(snapshot) {
+                stored.set(snapshot.id, structuredClone(snapshot));
+            },
+        },
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Lifecycle prompt' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Lifecycle prompt' }],
+    });
+    await waitFor(() => stored.size === 1);
+    const snapshotId = [...stored.keys()][0];
+    assert.equal(stored.get(snapshotId).capture.requestStatus, 'captured');
+    assert.equal(stored.get(snapshotId).capture.generationStatus, 'started');
+
+    eventSource.emitSynchronously('generation_stopped');
+    await waitFor(() => stored.get(snapshotId)?.capture?.generationStatus === 'stopped');
+
+    assert.equal(stored.size, 1);
+    assert.equal(stored.get(snapshotId).capture.statusEvent, 'GENERATION_STOPPED');
+});
+
+test('generation ended and prompt-only timeout remain separate capture states', async () => {
+    const eventSource = new FakeEventSource();
+    const stored = new Map();
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            async addSnapshot(snapshot) {
+                stored.set(snapshot.id, structuredClone(snapshot));
+            },
+        },
+        version: 'test',
+        settingsWaitMs: 5,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Fallback lifecycle prompt' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('generation_ended');
+    await waitFor(() => stored.size === 1);
+
+    const captured = [...stored.values()][0];
+    assert.equal(captured.capture.requestStatus, 'prompt-only-timeout');
+    assert.equal(captured.capture.generationStatus, 'ended');
+    assert.equal(captured.capture.statusEvent, 'GENERATION_ENDED');
+});
+
+test('capture sanitizes secrets from context, lore, payload, and request structures', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    const secrets = {
+        persona: ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-'),
+        lore: ['ghp', 'abcdefghijklmnopqrstuvwxyz123456'].join('_'),
+        prompt: ['xoxb', '1234567890', 'abcdefghijklmnop'].join('-'),
+    };
+    context.powerUserSettings.persona_description = `Persona ${secrets.persona}`;
+    context.chatCompletionSettings.prompts = [{
+        identifier: 'sensitive-prompt',
+        name: 'Sensitive prompt',
+        content: `Configured ${secrets.prompt}`,
+        enabled: true,
+    }];
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(structuredClone(snapshot)) },
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('world_info_activated', [{
+        uid: 1,
+        world: 'Book',
+        content: `Lore ${secrets.lore}`,
+    }]);
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'system', content: `Prompt ${secrets.prompt}` }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'system', content: `Prompt ${secrets.prompt}` }],
+        note: `Persona ${secrets.persona}`,
+    });
+    await waitFor(() => saved.length === 1);
+
+    const serialized = JSON.stringify(saved[0]);
+    for (const secret of Object.values(secrets)) {
+        assert.equal(serialized.includes(secret), false);
+    }
+    assert.equal(
+        saved[0].request.redactedPaths.some((path) => path.startsWith('contextState.')),
+        true,
+    );
+    assert.equal(
+        saved[0].request.redactedPaths.some((path) => path.startsWith('activatedLore[')),
+        true,
+    );
 });

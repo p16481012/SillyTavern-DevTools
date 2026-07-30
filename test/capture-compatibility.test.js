@@ -5,6 +5,8 @@ import { CAPTURE_COMPATIBILITY_FIXTURES } from '../fixtures/capture-cases.js';
 
 const EVENT_TYPES = {
     GENERATION_STARTED: 'generation_started',
+    GENERATION_STOPPED: 'generation_stopped',
+    GENERATION_ENDED: 'generation_ended',
     WORLD_INFO_ACTIVATED: 'world_info_activated',
     CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
     GENERATE_AFTER_COMBINE_PROMPTS: 'generate_after_combine_prompts',

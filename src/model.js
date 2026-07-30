@@ -9,8 +9,10 @@ import {
     estimateMultimodalTokens,
 } from './multimodal.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
+import { compileUserRegex, UserRegexError } from './regex-safety.js';
 
-export const SNAPSHOT_SCHEMA_VERSION = 4;
+export const SNAPSHOT_SCHEMA_VERSION = 5;
+export const SEARCH_QUERY_MAX_LENGTH = 512;
 
 function nonEmptyString(value) {
     if (typeof value !== 'string') return null;
@@ -1056,10 +1058,13 @@ export function searchSnapshot(snapshot, query, options = {}) {
     if (!needle) {
         return [];
     }
+    if (needle.length > SEARCH_QUERY_MAX_LENGTH) {
+        throw new UserRegexError('query-too-long');
+    }
 
-    const flags = options.caseSensitive ? 'g' : 'gi';
+    const flags = options.caseSensitive ? 'gu' : 'giu';
     const expression = options.regex
-        ? new RegExp(needle, flags)
+        ? compileUserRegex(needle, flags)
         : new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
     const results = [];
 

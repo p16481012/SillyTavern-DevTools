@@ -163,3 +163,27 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     );
     assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });
+
+test('v0.8.7 safety controls remain visible, responsive, and confirm destructive output actions', async () => {
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+    const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
+
+    assert.match(ui, /renderStorageOverview\(\)/);
+    assert.match(ui, /clearAllSnapshots\(/);
+    assert.match(ui, /this\.store\.clearAll\(\)/);
+    assert.match(ui, /className:\s*'st-devtools-storage-warning'/);
+    assert.match(ui, /warning\.setAttribute\('role', 'alert'\)/);
+    assert.match(ui, /searchSnapshotSafely\(snapshot, query/);
+    assert.match(ui, /activeSearch\?\.abort\(\)/);
+    assert.match(ui, /renderExportPrivacyPreview\(snapshot\)/);
+    assert.match(ui, /confirm\(t\('export\.copyConfirm'\)\)/);
+    assert.match(ui, /confirm\(t\('export\.confirm'/);
+    assert.match(ui, /capture\.generationStatus/);
+    assert.match(cssBlock(css, '.st-devtools-storage-overview'), /display:\s*flex/);
+    assert.match(cssBlock(css, '.st-devtools-storage-metrics'), /flex-wrap:\s*wrap/);
+    assert.match(cssBlock(css, '.st-devtools-capture-lifecycle'), /border-radius:\s*999px/);
+    assert.match(i18n, /'storage\.memoryWarning':/);
+    assert.match(i18n, /'search\.error\.regex-timeout':/);
+    assert.match(i18n, /'export\.previewWarning':/);
+});
