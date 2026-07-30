@@ -4,7 +4,7 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 
 ## 현재 버전
 
-`v0.8.7`
+`v0.8.8`
 
 주요 기능:
 
@@ -28,10 +28,11 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 - NFKC·대소문자·공백 차이를 허용하는 보수적 정규화 연결
 - `{{...}}`·`${...}`·`<%...%>`·`<<...>>` 치환 템플릿 후보와 신뢰도
 - 원본 소스와 최종 프롬프트 문자 범위의 상호 강조·이동
-- v0.1~v0.8.6 스냅샷을 스키마 v5로 자동 변환
+- v0.1~v0.8.7 스냅샷을 스키마 v5로 자동 변환
 - 활성화된 로어북 항목 캡처
 - 채팅별 로컬 타임라인과 최근 100개 보관
 - IndexedDB·브라우저 영구 저장·임시 메모리 상태, 전체 채팅 수·스냅샷 수·대략적 용량 표시
+- 현재 타임라인 우선 렌더링, 타임라인 탭 전용 비차단 저장 요약과 증분 용량 메타데이터
 - 인덱스에서 누락된 타임라인과 규칙·비교 정책·창 설정까지 포함하는 모든 ST DevTools 로컬 데이터 긴급 삭제
 - 채팅별 저장 잠금, 저장 실패 알림과 동일 스냅샷 재시도
 - 스냅샷 개별 삭제와 체크박스·모두 선택을 이용한 잠금 기반 다중 삭제
@@ -173,7 +174,7 @@ npm test
 
 UI 접근성을 수동 검토할 때는 `npm run sandbox`를 실행하고 출력된 로컬 주소를 엽니다.
 
-구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.7 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요. 버전별 계획은 [`docs/ROADMAP.md`](docs/ROADMAP.md)에 정리했습니다.
+구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.8 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요. 버전별 계획은 [`docs/ROADMAP.md`](docs/ROADMAP.md)에 정리했습니다.
 
 ## 다음 예정 방향
 

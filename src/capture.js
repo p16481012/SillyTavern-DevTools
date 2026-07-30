@@ -177,6 +177,14 @@ function sanitizeCaptureValue(value, pathPrefix) {
     };
 }
 
+function emptySanitizedLore() {
+    return {
+        value: [],
+        redactedPaths: [],
+        omittedMediaPaths: [],
+    };
+}
+
 export class CaptureController extends EventTarget {
     constructor({
         getContext,
@@ -190,7 +198,7 @@ export class CaptureController extends EventTarget {
         this.version = version;
         this.settingsWaitMs = settingsWaitMs;
         this.started = false;
-        this.pendingLore = [];
+        this.pendingLore = emptySanitizedLore();
         this.generationType = 'unknown';
         this.pending = {
             'chat-completion': [],
@@ -216,7 +224,7 @@ export class CaptureController extends EventTarget {
                 this.generationType = typeof data === 'string'
                     ? data
                     : data?.type ?? data?.generationType ?? 'unknown';
-                this.pendingLore = [];
+                this.pendingLore = emptySanitizedLore();
                 this.activeGeneration = {
                     id: ++this.generationSequence,
                     status: 'started',
@@ -241,7 +249,10 @@ export class CaptureController extends EventTarget {
 
         if (events.WORLD_INFO_ACTIVATED) {
             context.eventSource.on(events.WORLD_INFO_ACTIVATED, (entries) => {
-                this.pendingLore = deepClone(Array.isArray(entries) ? entries : []);
+                this.pendingLore = sanitizeCaptureValue(
+                    Array.isArray(entries) ? entries : [],
+                    'activatedLore',
+                );
             });
         }
 
@@ -313,18 +324,12 @@ export class CaptureController extends EventTarget {
             snapshotContext(this.getContext()),
             'contextState',
         );
-        const promptReadyPayload = sanitizeCaptureValue(
-            mutablePayload,
-            'promptReadyPayload',
-        );
-        const activatedLore = sanitizeCaptureValue(
-            this.pendingLore,
-            'activatedLore',
-        );
+        const activatedLore = this.pendingLore;
         const pending = {
             contextState: contextState.value,
             promptType,
-            promptReadyPayload: promptReadyPayload.value,
+            promptReadyPayload: deepClone(mutablePayload),
+            promptReadySanitized: null,
             activatedLore: activatedLore.value,
             supplementalRedactedPaths: [
                 ...contextState.redactedPaths,
@@ -334,8 +339,8 @@ export class CaptureController extends EventTarget {
                 ...contextState.omittedMediaPaths,
                 ...activatedLore.omittedMediaPaths,
             ],
-            fallbackRedactedPaths: promptReadyPayload.redactedPaths,
-            fallbackOmittedMediaPaths: promptReadyPayload.omittedMediaPaths,
+            fallbackRedactedPaths: [],
+            fallbackOmittedMediaPaths: [],
             generationType: this.generationType,
             generation: this.activeGeneration,
             correlationId,
@@ -343,12 +348,13 @@ export class CaptureController extends EventTarget {
             reserved: false,
             timer: null,
         };
-        this.pendingLore = [];
+        this.pendingLore = emptySanitizedLore();
         this.pending[key].push(pending);
         pending.timer = setTimeout(() => {
+            const promptReady = this.sanitizePendingPrompt(pending);
             this.finishPending(pending, {
-                payload: pending.promptReadyPayload,
-                requestBody: null,
+                payload: promptReady.value,
+                request: null,
                 eventName: promptType === 'chat-completion'
                     ? 'CHAT_COMPLETION_PROMPT_READY'
                     : 'GENERATE_AFTER_COMBINE_PROMPTS',
@@ -357,6 +363,18 @@ export class CaptureController extends EventTarget {
                 correlationMethod: 'prompt-only',
             });
         }, this.settingsWaitMs);
+    }
+
+    sanitizePendingPrompt(pending) {
+        if (!pending.promptReadySanitized) {
+            pending.promptReadySanitized = sanitizeCaptureValue(
+                pending.promptReadyPayload,
+                'promptReadyPayload',
+            );
+            pending.fallbackRedactedPaths = pending.promptReadySanitized.redactedPaths;
+            pending.fallbackOmittedMediaPaths = pending.promptReadySanitized.omittedMediaPaths;
+        }
+        return pending.promptReadySanitized;
     }
 
     attachRequestBody(promptType, mutableRequestBody, eventName, stage) {
@@ -394,15 +412,16 @@ export class CaptureController extends EventTarget {
 
         setTimeout(() => {
             if (pending.settled || !this.pending[key].includes(pending)) return;
-            const requestBody = deepClone(mutableRequestBody);
-            const payload = sanitizeRequestBody(extractPromptPayload(
-                requestBody,
+            const request = createRequestRecord(mutableRequestBody);
+            const requestPayload = extractPromptPayload(
+                request.body,
                 promptType,
-                pending.promptReadyPayload,
-            )).body;
+                null,
+            );
+            const payload = requestPayload ?? this.sanitizePendingPrompt(pending).value;
             this.finishPending(pending, {
                 payload,
-                requestBody,
+                request,
                 eventName,
                 stage,
                 fallback: false,
@@ -413,7 +432,7 @@ export class CaptureController extends EventTarget {
 
     finishPending(pending, {
         payload,
-        requestBody,
+        request = null,
         eventName,
         stage,
         fallback,
@@ -425,23 +444,23 @@ export class CaptureController extends EventTarget {
         const key = pendingKey(pending.promptType);
         this.pending[key] = this.pending[key].filter((item) => item !== pending);
 
-        const request = createRequestRecord(requestBody);
-        request.redactedPaths = [...new Set([
-            ...request.redactedPaths,
+        const normalizedRequest = request ?? createRequestRecord(null);
+        normalizedRequest.redactedPaths = [...new Set([
+            ...normalizedRequest.redactedPaths,
             ...pending.supplementalRedactedPaths,
-            ...(fallback ? pending.fallbackRedactedPaths : []),
+            ...pending.fallbackRedactedPaths,
         ])];
-        request.omittedMediaPaths = [...new Set([
-            ...request.omittedMediaPaths,
+        normalizedRequest.omittedMediaPaths = [...new Set([
+            ...normalizedRequest.omittedMediaPaths,
             ...pending.supplementalOmittedMediaPaths,
-            ...(fallback ? pending.fallbackOmittedMediaPaths : []),
+            ...pending.fallbackOmittedMediaPaths,
         ])];
         const capture = createCaptureBoundary({
             eventName,
             stage,
-            requestBodyAvailable: Boolean(request.body),
+            requestBodyAvailable: Boolean(normalizedRequest.body),
             fallback,
-            correlationId: request.correlationId ?? pending.correlationId,
+            correlationId: normalizedRequest.correlationId ?? pending.correlationId,
             correlationMethod,
             generationStatus: pending.generation?.status ?? 'unknown',
             statusEvent: pending.generation?.statusEvent ?? null,
@@ -456,7 +475,7 @@ export class CaptureController extends EventTarget {
                 generationType: pending.generationType,
                 activatedLore: pending.activatedLore,
                 capture,
-                request,
+                request: normalizedRequest,
                 generation: pending.generation,
             }).catch((error) => {
                 console.error('[ST DevTools] Failed to persist prompt snapshot.', error);

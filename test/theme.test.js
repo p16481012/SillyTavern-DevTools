@@ -164,7 +164,7 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });
 
-test('v0.8.7 safety controls remain visible, responsive, and confirm destructive output actions', async () => {
+test('v0.8.8 safety controls remain visible, responsive, and confirm destructive output actions', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
@@ -184,6 +184,8 @@ test('v0.8.7 safety controls remain visible, responsive, and confirm destructive
     assert.match(cssBlock(css, '.st-devtools-storage-metrics'), /flex-wrap:\s*wrap/);
     assert.match(cssBlock(css, '.st-devtools-capture-lifecycle'), /border-radius:\s*999px/);
     assert.match(i18n, /'storage\.memoryWarning':/);
+    assert.match(i18n, /'storage\.snapshotCountPending':\s*'스냅샷 수 계산 중'/);
+    assert.doesNotMatch(ui, /summary\.snapshotCount\s*\?\?\s*t\('common\.unknown'\)/);
     assert.match(i18n, /'search\.error\.regex-timeout':/);
     assert.match(i18n, /'export\.previewWarning':/);
 });

@@ -487,6 +487,10 @@ export class DevToolsWindow {
         this.selectedTimelineIds = new Set();
         this.timelineSelectionChatId = null;
         this.refreshRequestId = 0;
+        this.storageSummaryRefreshPromise = null;
+        this.storageSummaryRebuildPromise = null;
+        this.storageSummaryRebuildScheduled = false;
+        this.storageSummaryGeneration = 0;
         this.storageSummary = {
             ...(this.store.getStatus?.() ?? {
                 type: 'memory',
@@ -498,6 +502,8 @@ export class DevToolsWindow {
             localSettingCount: null,
             approximateBytes: null,
             snapshotApproximateBytes: null,
+            complete: false,
+            rebuilding: false,
         };
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
@@ -704,9 +710,6 @@ export class DevToolsWindow {
     async onSnapshot(snapshot) {
         this.storageErrors = this.storageErrors.filter((item) => item.snapshotId !== snapshot.id);
         const panelVisible = Boolean(this.root && !this.root.hidden);
-        if (panelVisible) {
-            this.storageSummary = await this.readStorageSummary();
-        }
         if (snapshot.chatId === this.currentChatId()) {
             const alreadyPresent = this.timeline.some((item) => item.id === snapshot.id);
             this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
@@ -714,7 +717,10 @@ export class DevToolsWindow {
             this.pruneTimelineSelection();
             if (!alreadyPresent) this.selectedId = snapshot.id;
         }
-        if (panelVisible) this.render();
+        if (panelVisible) {
+            this.render();
+            if (this.activeTab === 'timeline') void this.refreshStorageSummary();
+        }
     }
 
     onCaptureError(detail) {
@@ -767,21 +773,18 @@ export class DevToolsWindow {
     } = {}) {
         const requestId = ++this.refreshRequestId;
         try {
-            const [timeline, storageSummary] = await Promise.all([
-                this.store.getTimeline(chatId),
-                this.readStorageSummary(),
-            ]);
+            const timeline = await this.store.getTimeline(chatId);
             if (requestId !== this.refreshRequestId || chatId !== this.currentChatId()) {
                 return false;
             }
             this.timeline = timeline;
-            this.storageSummary = storageSummary;
             this.pruneTimelineSelection();
             if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
                 this.selectedId = this.timeline.at(-1)?.id ?? null;
             }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== 'refresh');
             this.render();
+            if (this.activeTab === 'timeline') void this.refreshStorageSummary();
             return true;
         } catch (error) {
             if (throwOnError) throw error;
@@ -834,6 +837,108 @@ export class DevToolsWindow {
                     : snapshotApproximateBytes + localData.approximateBytes,
                 summaryError: true,
             };
+        }
+    }
+
+    refreshStorageSummary() {
+        if (this.storageSummaryRefreshPromise) return this.storageSummaryRefreshPromise;
+        const generation = this.storageSummaryGeneration;
+        const refresh = (async () => {
+            const summary = await this.readStorageSummary();
+            if (generation !== this.storageSummaryGeneration) return null;
+            this.storageSummary = summary;
+            const panelVisible = Boolean(this.root && !this.root.hidden);
+            if (panelVisible && this.activeTab === 'timeline') this.render();
+            if (
+                panelVisible
+                && this.activeTab === 'timeline'
+                && summary.complete === false
+            ) {
+                this.scheduleStorageSummaryRebuild();
+            }
+            return summary;
+        })().catch(() => null).finally(() => {
+            if (this.storageSummaryRefreshPromise === refresh) {
+                this.storageSummaryRefreshPromise = null;
+            }
+        });
+        this.storageSummaryRefreshPromise = refresh;
+        return refresh;
+    }
+
+    scheduleStorageSummaryRebuild() {
+        if (
+            this.storageSummaryRebuildScheduled
+            || this.storageSummaryRebuildPromise
+            || typeof this.store.rebuildStorageSummary !== 'function'
+        ) {
+            return;
+        }
+        this.storageSummaryRebuildScheduled = true;
+        const generation = this.storageSummaryGeneration;
+        const run = () => {
+            this.storageSummaryRebuildScheduled = false;
+            if (
+                generation !== this.storageSummaryGeneration
+                || !this.root
+                || this.root.hidden
+                || this.activeTab !== 'timeline'
+                || this.storageSummaryRebuildPromise
+            ) {
+                return;
+            }
+            this.storageSummary = {
+                ...this.storageSummary,
+                rebuilding: true,
+            };
+            if (this.activeTab === 'timeline') this.render();
+            const rebuild = this.store.rebuildStorageSummary()
+                .then((summary) => {
+                    if (summary && generation === this.storageSummaryGeneration) {
+                        this.storageSummary = {
+                            ...summary,
+                            localSettingCount: this.storageSummary.localSettingCount,
+                            snapshotApproximateBytes: summary.approximateBytes,
+                            approximateBytes: summary.approximateBytes == null
+                                ? null
+                                : summary.approximateBytes
+                                    + this.readLocalDataSummary().approximateBytes,
+                        };
+                    }
+                })
+                .catch(() => {
+                    if (generation !== this.storageSummaryGeneration) return;
+                    this.storageSummary = {
+                        ...this.storageSummary,
+                        rebuilding: false,
+                        summaryError: true,
+                    };
+                })
+                .finally(() => {
+                    if (this.storageSummaryRebuildPromise === rebuild) {
+                        this.storageSummaryRebuildPromise = null;
+                    }
+                    if (
+                        generation === this.storageSummaryGeneration
+                        && this.storageSummary.complete === false
+                        && !this.storageSummary.summaryError
+                    ) {
+                        this.storageSummary = {
+                            ...this.storageSummary,
+                            rebuilding: false,
+                        };
+                        this.scheduleStorageSummaryRebuild();
+                    }
+                    if (this.root && !this.root.hidden && this.activeTab === 'timeline') {
+                        this.render();
+                    }
+                });
+            this.storageSummaryRebuildPromise = rebuild;
+        };
+        if (typeof requestIdleCallback === 'function') {
+            requestIdleCallback(run, { timeout: 1000 });
+        } else {
+            setTimeout(run, 50);
         }
     }
 
@@ -994,6 +1099,9 @@ export class DevToolsWindow {
         this.activeTab = nextTab;
         localStorage.setItem(LAST_TAB_KEY, this.activeTab);
         this.render();
+        if (this.activeTab === 'timeline' && this.root && !this.root.hidden) {
+            void this.refreshStorageSummary();
+        }
         if (changed && this.content) this.content.scrollTop = 0;
         if (focus) this.activeTabButton()?.focus();
     }
@@ -1731,6 +1839,11 @@ export class DevToolsWindow {
 
     renderStorageOverview() {
         const summary = this.storageSummary ?? {};
+        const pending = summary.complete === false || summary.rebuilding;
+        const metricText = (value, completeKey, pendingKey, unknownKey, parameter) => {
+            if (value == null) return t(pending ? pendingKey : unknownKey);
+            return t(completeKey, { [parameter]: value });
+        };
         const status = element('section', {
             className: `st-devtools-storage-overview${summary.persistent ? '' : ' is-temporary'}`,
         });
@@ -1745,26 +1858,42 @@ export class DevToolsWindow {
         const metrics = element('div', { className: 'st-devtools-storage-metrics' });
         metrics.append(
             element('span', {
-                text: t('storage.chatCount', {
-                    count: summary.chatCount ?? t('common.unknown'),
-                }),
+                text: metricText(
+                    summary.chatCount,
+                    'storage.chatCount',
+                    'storage.chatCountPending',
+                    'storage.chatCountUnknown',
+                    'count',
+                ),
             }),
             element('span', {
-                text: t('storage.snapshotCount', {
-                    count: summary.snapshotCount ?? t('common.unknown'),
-                }),
+                text: metricText(
+                    summary.snapshotCount,
+                    'storage.snapshotCount',
+                    'storage.snapshotCountPending',
+                    'storage.snapshotCountUnknown',
+                    'count',
+                ),
             }),
             element('span', {
-                text: t('storage.localSettingCount', {
-                    count: summary.localSettingCount ?? t('common.unknown'),
-                }),
+                text: metricText(
+                    summary.localSettingCount,
+                    'storage.localSettingCount',
+                    'storage.localSettingCountPending',
+                    'storage.localSettingCountUnknown',
+                    'count',
+                ),
             }),
             element('span', {
-                text: t('storage.approximateSize', {
-                    size: summary.approximateBytes == null
-                        ? t('common.unknown')
+                text: metricText(
+                    summary.approximateBytes == null
+                        ? null
                         : formatBytes(summary.approximateBytes),
-                }),
+                    'storage.approximateSize',
+                    'storage.approximateSizePending',
+                    'storage.approximateSizeUnknown',
+                    'size',
+                ),
             }),
         );
         status.append(heading, metrics);
@@ -1776,6 +1905,8 @@ export class DevToolsWindow {
             status.appendChild(warning);
         } else if (summary.summaryError) {
             status.appendChild(proseElement('p', t('storage.summaryUnavailable')));
+        } else if (pending) {
+            status.appendChild(proseElement('p', t('storage.summaryPending')));
         }
         return status;
     }
@@ -2005,12 +2136,23 @@ export class DevToolsWindow {
             if (typeof this.store.clearAll !== 'function') {
                 throw new Error(t('storage.clearAllUnsupported'));
             }
+            this.storageSummaryGeneration += 1;
+            this.storageSummaryRebuildScheduled = false;
             const result = await this.store.clearAll();
             const localSettingCount = this.clearLocalData();
             this.timeline = [];
             this.selectedId = null;
             this.selectedTimelineIds.clear();
-            this.storageSummary = await this.readStorageSummary();
+            this.storageSummary = {
+                ...(this.store.getStatus?.() ?? this.storageSummary),
+                complete: true,
+                rebuilding: false,
+                chatCount: 0,
+                snapshotCount: 0,
+                localSettingCount: 0,
+                snapshotApproximateBytes: 0,
+                approximateBytes: 0,
+            };
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             globalThis.toastr?.success?.(
                 t('storage.clearedAll', {
@@ -2049,9 +2191,9 @@ export class DevToolsWindow {
                 this.selectedId = null;
                 this.selectedTimelineIds.clear();
             }
-            this.storageSummary = await this.readStorageSummary();
             this.storageErrors = this.storageErrors.filter((item) => item.id !== 'clear-timeline');
             this.render();
+            void this.refreshStorageSummary();
             return true;
         } catch (error) {
             if (throwOnError) throw error;
@@ -2085,9 +2227,9 @@ export class DevToolsWindow {
                     this.selectedId = this.timeline.at(-1)?.id ?? null;
                 }
             }
-            this.storageSummary = await this.readStorageSummary();
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             this.render();
+            void this.refreshStorageSummary();
             return true;
         } catch (error) {
             if (throwOnError) throw error;
@@ -2143,13 +2285,13 @@ export class DevToolsWindow {
                     this.selectedId = this.timeline.at(-1)?.id ?? null;
                 }
             }
-            this.storageSummary = await this.readStorageSummary();
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             globalThis.toastr?.success?.(
                 t('timeline.deletedSelected', { count: deletedCount }),
                 'ST DevTools',
             );
             this.render();
+            void this.refreshStorageSummary();
             return true;
         } catch (error) {
             if (throwOnError) throw error;

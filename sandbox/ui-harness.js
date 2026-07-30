@@ -27,7 +27,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 5,
-        extensionVersion: '0.8.7',
+        extensionVersion: '0.8.8',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -420,6 +420,7 @@ let otherTimeline = [
     createSnapshot('other-1', Date.now() - 30000, 96, { chatId: 'other-private-chat' }),
 ];
 let temporaryStorage = false;
+let summaryNeedsRebuild = false;
 let darkTheme = false;
 
 const capture = new EventTarget();
@@ -476,13 +477,31 @@ const store = {
     },
     async getStorageSummary() {
         const timelines = await this.getAllTimelines();
+        if (summaryNeedsRebuild) {
+            return {
+                ...this.getStatus(),
+                complete: false,
+                rebuilding: false,
+                chatCount: timelines.length,
+                snapshotCount: null,
+                approximateBytes: null,
+                maxSnapshotsPerChat: 100,
+            };
+        }
         return {
             ...this.getStatus(),
+            complete: true,
+            rebuilding: false,
             chatCount: timelines.length,
             snapshotCount: timelines.reduce((count, item) => count + item.timeline.length, 0),
             approximateBytes: new TextEncoder().encode(JSON.stringify(timelines)).length,
             maxSnapshotsPerChat: 100,
         };
+    },
+    async rebuildStorageSummary() {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        summaryNeedsRebuild = false;
+        return this.getStorageSummary();
     },
 };
 const context = {
@@ -493,7 +512,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.7',
+    version: '0.8.8',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
@@ -509,6 +528,10 @@ document.getElementById('sandbox-storage-error').addEventListener('click', () =>
 document.getElementById('sandbox-storage-mode').addEventListener('click', async () => {
     temporaryStorage = !temporaryStorage;
     await devTools.refresh();
+});
+document.getElementById('sandbox-summary-mode').addEventListener('click', async () => {
+    summaryNeedsRebuild = true;
+    await devTools.refreshStorageSummary();
 });
 document.getElementById('sandbox-theme').addEventListener('click', () => {
     darkTheme = !darkTheme;

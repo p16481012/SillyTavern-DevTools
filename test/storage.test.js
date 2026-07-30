@@ -155,8 +155,15 @@ test('storage summary counts every timeline and clearAll removes indexed and sta
     await store.addSnapshot(snapshot('b', 'chat-b', 2));
     store.memory.set('timeline:stale-chat', [snapshot('stale', 'stale-chat', 3)]);
 
-    const summary = await store.getStorageSummary();
+    const initial = await store.getStorageSummary();
+    assert.equal(initial.complete, false);
+    assert.equal(initial.chatCount, 3);
+    assert.equal(initial.snapshotCount, null);
+    assert.equal(initial.approximateBytes, null);
+
+    const summary = await store.rebuildStorageSummary();
     assert.equal(summary.type, 'memory');
+    assert.equal(summary.complete, true);
     assert.equal(summary.chatCount, 3);
     assert.equal(summary.snapshotCount, 3);
     assert.equal(summary.approximateBytes > 0, true);
@@ -167,4 +174,153 @@ test('storage summary counts every timeline and clearAll removes indexed and sta
     });
     assert.deepEqual(await store.storageKeys(), []);
     assert.deepEqual(await store.getAllTimelines(), []);
+});
+
+test('fast storage summary never reads snapshot timeline values', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    store.memory.set('timeline:chat-a', [snapshot('a', 'chat-a', 1)]);
+    store.memory.set('timeline:chat-b', [snapshot('b', 'chat-b', 2)]);
+    const read = store.read.bind(store);
+    let timelineReads = 0;
+    store.read = async (key, ...args) => {
+        if (String(key).startsWith('timeline:')) timelineReads += 1;
+        return read(key, ...args);
+    };
+
+    const summary = await store.getStorageSummary();
+
+    assert.equal(summary.complete, false);
+    assert.equal(summary.chatCount, 2);
+    assert.equal(summary.snapshotCount, null);
+    assert.equal(timelineReads, 0);
+});
+
+test('concurrent summary rebuild requests share one timeline scan', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    store.memory.set('timeline:chat-a', [snapshot('a', 'chat-a', 1)]);
+    store.memory.set('timeline:chat-b', [snapshot('b', 'chat-b', 2)]);
+    const read = store.read.bind(store);
+    let timelineReads = 0;
+    store.read = async (key, ...args) => {
+        if (String(key).startsWith('timeline:')) {
+            timelineReads += 1;
+            await Promise.resolve();
+        }
+        return read(key, ...args);
+    };
+
+    const [first, second] = await Promise.all([
+        store.rebuildStorageSummary(),
+        store.rebuildStorageSummary(),
+    ]);
+
+    assert.equal(first.snapshotCount, 2);
+    assert.equal(second.snapshotCount, 2);
+    assert.equal(timelineReads, 2);
+});
+
+test('complete storage metadata updates incrementally after mutations', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('a', 'chat', 1));
+    await store.addSnapshot(snapshot('b', 'chat', 2));
+    const rebuilt = await store.rebuildStorageSummary();
+
+    const replacement = {
+        ...snapshot('a', 'chat', 3),
+        finalText: 'replacement text with a different byte length',
+    };
+    await store.addSnapshot(replacement);
+    const afterReplacement = await store.getStorageSummary();
+    assert.equal(afterReplacement.complete, true);
+    assert.equal(afterReplacement.chatCount, 1);
+    assert.equal(afterReplacement.snapshotCount, 2);
+    assert.notEqual(afterReplacement.approximateBytes, rebuilt.approximateBytes);
+
+    await store.deleteSnapshot('chat', 'b');
+    const afterDelete = await store.getStorageSummary();
+    assert.equal(afterDelete.complete, true);
+    assert.equal(afterDelete.snapshotCount, 1);
+    assert.equal(afterDelete.approximateBytes < afterReplacement.approximateBytes, true);
+
+    await store.clearTimeline('chat');
+    const afterClear = await store.getStorageSummary();
+    assert.equal(afterClear.complete, true);
+    assert.equal(afterClear.chatCount, 0);
+    assert.equal(afterClear.snapshotCount, 0);
+    assert.equal(afterClear.approximateBytes, 0);
+});
+
+test('an empty store reports zero without creating persistent metadata', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const empty = await store.getStorageSummary();
+    assert.equal(empty.complete, true);
+    assert.equal(empty.snapshotCount, 0);
+    assert.deepEqual(await store.storageKeys(), []);
+});
+
+test('optional summary metadata failures do not fail snapshot persistence', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('existing', 'chat', 1));
+    await store.rebuildStorageSummary();
+    const write = store.write.bind(store);
+    store.write = async (key, value) => {
+        if (key === 'storage-summary:v1') throw new Error('metadata unavailable');
+        return write(key, value);
+    };
+
+    await store.addSnapshot(snapshot('saved', 'chat', 2));
+
+    assert.deepEqual(
+        (await store.getTimeline('chat')).map(({ id }) => id),
+        ['existing', 'saved'],
+    );
+    const summary = await store.getStorageSummary();
+    assert.equal(summary.complete, false);
+    assert.equal(summary.chatCount, 1);
+});
+
+test('empty orphan timeline records do not keep summary rebuilding forever', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    store.memory.set('timeline:empty-orphan', []);
+
+    const rebuilt = await store.rebuildStorageSummary();
+    const cached = await store.getStorageSummary();
+
+    assert.equal(rebuilt.complete, true);
+    assert.equal(rebuilt.chatCount, 0);
+    assert.equal(rebuilt.timelineRecordCount, 1);
+    assert.equal(cached.complete, true);
+    assert.equal(cached.snapshotCount, 0);
+});
+
+test('a mutation during background rebuild discards stale metadata safely', async () => {
+    let announceYield;
+    let releaseYield;
+    const yielded = new Promise((resolve) => {
+        announceYield = resolve;
+    });
+    const held = new Promise((resolve) => {
+        releaseYield = resolve;
+    });
+    const store = new SnapshotStore({
+        namespace: 'test',
+        summaryYieldBudgetMs: 0,
+        summaryYield: async () => {
+            announceYield();
+            await held;
+        },
+    });
+    store.memory.set('timeline:chat', [snapshot('old', 'chat', 1)]);
+
+    const rebuilding = store.rebuildStorageSummary();
+    await yielded;
+    await store.addSnapshot(snapshot('new', 'chat', 2));
+    releaseYield();
+
+    const discarded = await rebuilding;
+    assert.equal(discarded.complete, false);
+
+    const rebuilt = await store.rebuildStorageSummary();
+    assert.equal(rebuilt.complete, true);
+    assert.equal(rebuilt.snapshotCount, 2);
 });

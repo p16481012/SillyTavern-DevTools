@@ -85,6 +85,100 @@ test('a delayed refresh for chat A cannot overwrite a newer chat B timeline', as
     assert.deepEqual(devTools.timeline.map(({ id }) => id), ['b']);
 });
 
+test('timeline refresh is not blocked by a slow all-chat storage summary', async () => {
+    const current = { chatId: 'chat-a' };
+    const pendingSummary = deferred();
+    let summaryReads = 0;
+    const devTools = createWindow({
+        current,
+        store: {
+            async getTimeline() {
+                return [snapshot('ready', 'chat-a')];
+            },
+            getStorageSummary() {
+                summaryReads += 1;
+                return pendingSummary.promise;
+            },
+        },
+    });
+    devTools.root = { hidden: false };
+    devTools.activeTab = 'timeline';
+
+    assert.equal(await devTools.refresh(), true);
+    assert.deepEqual(devTools.timeline.map(({ id }) => id), ['ready']);
+    assert.equal(summaryReads, 1);
+
+    pendingSummary.resolve({
+        type: 'indexeddb',
+        persistent: true,
+        complete: true,
+        chatCount: 1,
+        snapshotCount: 1,
+        approximateBytes: 100,
+    });
+    await devTools.storageSummaryRefreshPromise;
+});
+
+test('non-timeline tabs do not request a storage summary during refresh', async () => {
+    const current = { chatId: 'chat-a' };
+    let summaryReads = 0;
+    const devTools = createWindow({
+        current,
+        store: {
+            async getTimeline() {
+                return [snapshot('ready', 'chat-a')];
+            },
+            async getStorageSummary() {
+                summaryReads += 1;
+                return {};
+            },
+        },
+    });
+    devTools.root = { hidden: false };
+    devTools.activeTab = 'rules';
+
+    assert.equal(await devTools.refresh(), true);
+    assert.equal(summaryReads, 0);
+});
+
+test('visible snapshot updates render before a slow summary and coalesce refreshes', async () => {
+    const current = { chatId: 'chat-a' };
+    const pendingSummary = deferred();
+    let summaryReads = 0;
+    let renders = 0;
+    const devTools = createWindow({
+        current,
+        store: {
+            getStorageSummary() {
+                summaryReads += 1;
+                return pendingSummary.promise;
+            },
+        },
+    });
+    devTools.root = { hidden: false };
+    devTools.activeTab = 'timeline';
+    devTools.render = () => {
+        renders += 1;
+    };
+
+    await devTools.onSnapshot(snapshot('new', 'chat-a'));
+    const duplicateRefresh = devTools.refreshStorageSummary();
+
+    assert.deepEqual(devTools.timeline.map(({ id }) => id), ['new']);
+    assert.equal(renders, 1);
+    assert.equal(summaryReads, 1);
+
+    pendingSummary.resolve({
+        type: 'indexeddb',
+        persistent: true,
+        complete: true,
+        chatCount: 1,
+        snapshotCount: 1,
+        approximateBytes: 100,
+    });
+    await duplicateRefresh;
+});
+
 test('bulk-delete retry stays bound to chat A and cannot mutate chat B', async () => {
     const current = { chatId: 'chat-a' };
     const calls = [];
@@ -331,6 +425,40 @@ test('clear-all resets current UI only after every stored timeline is removed', 
     assert.equal(localStorage.getItem('st-devtools:future-setting'), null);
     assert.equal(localStorage.getItem('unrelated-setting'), 'keep');
     assert.deepEqual(devTools.comparisonPolicySettings.nameRules, []);
+});
+
+test('a late storage summary cannot overwrite the cleared-all zero state', async () => {
+    const current = { chatId: 'chat-a' };
+    const pendingSummary = deferred();
+    const devTools = createWindow({
+        current,
+        store: {
+            getStorageSummary() {
+                return pendingSummary.promise;
+            },
+            async clearAll() {
+                return { chatCount: 1, snapshotCount: 4 };
+            },
+        },
+    });
+    devTools.root = { hidden: false };
+    devTools.activeTab = 'timeline';
+    const staleRefresh = devTools.refreshStorageSummary();
+
+    assert.equal(await devTools.clearAllSnapshots(), true);
+    pendingSummary.resolve({
+        type: 'indexeddb',
+        persistent: true,
+        complete: true,
+        chatCount: 9,
+        snapshotCount: 99,
+        approximateBytes: 999,
+    });
+    await staleRefresh;
+
+    assert.equal(devTools.storageSummary.chatCount, 0);
+    assert.equal(devTools.storageSummary.snapshotCount, 0);
+    assert.equal(devTools.storageSummary.approximateBytes, 0);
 });
 
 test('storage summary includes ST DevTools local settings but excludes unrelated keys', async () => {
