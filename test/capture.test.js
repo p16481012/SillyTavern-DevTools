@@ -36,7 +36,11 @@ function createContext(eventSource) {
         characters: [],
         characterId: undefined,
         extensionPrompts: {},
-        chatCompletionSettings: { openai_max_tokens: 128, prompts: [] },
+        chatCompletionSettings: {
+            openai_max_tokens: 128,
+            chat_completion_source: 'makersuite',
+            prompts: [],
+        },
         textCompletionSettings: {},
         powerUserSettings: {},
         chatMetadata: {},
@@ -133,6 +137,7 @@ test('request-ready capture pairs settings without mutating event payloads', asy
         model: 'request-model',
         temperature: 0.7,
         max_completion_tokens: 321,
+        chat_completion_source: 'openrouter',
         api_key: 'must-not-be-stored',
     };
     eventSource.on('chat_completion_settings_ready', (data) => {
@@ -150,6 +155,7 @@ test('request-ready capture pairs settings without mutating event payloads', asy
     assert.equal(saved[0].request.settings.temperature, 0.7);
     assert.equal(saved[0].request.body.api_key, '[민감 정보 제거됨]');
     assert.equal(saved[0].model, 'request-model');
+    assert.equal(saved[0].provider, 'openrouter');
     assert.equal(saved[0].stats.maxOutput, 321);
 });
 
@@ -176,6 +182,7 @@ test('prompt-ready fallback preserves captures on older SillyTavern versions', a
     assert.equal(saved[0].capture.stage, 'prompt-ready');
     assert.equal(saved[0].capture.fallback, true);
     assert.equal(saved[0].request.body, null);
+    assert.equal(saved[0].provider, 'makersuite');
 });
 
 test('text completion prefers settings-ready data and ignores the later duplicate event', async () => {
@@ -183,7 +190,11 @@ test('text completion prefers settings-ready data and ignores the later duplicat
     const saved = [];
     const context = createContext(eventSource);
     context.mainApi = 'textgenerationwebui';
-    context.textCompletionSettings = { model: 'text-model', amount_gen: 200 };
+    context.textCompletionSettings = {
+        model: 'text-model',
+        amount_gen: 200,
+        type: 'openrouter',
+    };
     const controller = new CaptureController({
         getContext: () => context,
         store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
@@ -208,6 +219,7 @@ test('text completion prefers settings-ready data and ignores the later duplicat
     assert.equal(saved.length, 1);
     assert.equal(saved[0].payload, 'Request-ready text prompt');
     assert.equal(saved[0].capture.eventName, 'TEXT_COMPLETION_SETTINGS_READY');
+    assert.equal(saved[0].provider, 'openrouter');
     assert.equal(saved[0].stats.maxOutput, 200);
 });
 

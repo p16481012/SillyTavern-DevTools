@@ -2,6 +2,8 @@ import { DevToolsWindow } from '../src/ui.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
+    const provider = additions.provider ?? additions.chatCompletionSource ?? 'openai';
+    const model = additions.model ?? 'gpt-4o';
     const koreanInstruction = additions.koreanInstruction ?? '반드시 한국어로 답변하세요.';
     const japaneseInstruction = 'Always respond in Japanese.';
     const englishInstruction = 'Always respond in English.';
@@ -25,13 +27,14 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 4,
-        extensionVersion: '0.8.3',
+        extensionVersion: '0.8.4',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
         messageCount: 2,
-        api: 'openai',
-        model: 'gpt-4o',
+        api: additions.api ?? 'openai',
+        ...(additions.omitProvider ? {} : { provider }),
+        model,
         preset: 'sandbox',
         promptType: 'chat-completion',
         generationType: 'normal',
@@ -69,14 +72,14 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         },
         request: {
             body: {
-                model: 'gpt-4o',
-                chat_completion_source: 'openai',
+                model,
+                chat_completion_source: provider,
                 messages: [],
                 tools: [],
             },
             settings: {
-                model: 'gpt-4o',
-                chat_completion_source: 'openai',
+                model,
+                chat_completion_source: provider,
                 temperature: 0.7,
             },
             bodyKeys: ['model', 'messages', 'tools'],
@@ -366,12 +369,41 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     };
 }
 
-let timeline = [
-    createSnapshot('sandbox-1', Date.now() - 120000, 120),
-    createSnapshot('sandbox-2', Date.now() - 60000, 168, {
+const sandboxNow = Date.now();
+const historicalProviders = [
+    ['openai', 'gpt-4o'],
+    ['claude', 'claude-sonnet-4'],
+    ['makersuite', 'gemini-2.5-pro'],
+    ['openrouter', 'gemini-3.1-pro-preview'],
+    ['custom', 'private-model'],
+    ['mistralai', 'mistral-large'],
+    ['cohere', 'command-r-plus'],
+    ['perplexity', 'sonar-pro'],
+    ['groq', 'llama-3.3-70b'],
+];
+let timeline = historicalProviders.map(([provider, model], index) => createSnapshot(
+    `sandbox-${index + 1}`,
+    sandboxNow - ((12 - index) * 60000),
+    84 + (index * 9),
+    {
+        provider,
+        model,
+        omitProvider: index < 4,
+    },
+));
+timeline.push(
+    createSnapshot('sandbox-10', sandboxNow - 120000, 120, {
+        provider: 'openrouter',
+        model: 'gemini-3.1-pro-preview',
+    }),
+    createSnapshot('sandbox-11', sandboxNow - 60000, 168, {
+        provider: 'makersuite',
+        model: 'gemini-2.5-pro',
         lorebookEntries: [{ uid: 1, world: 'Sandbox', content: '활성 로어' }],
     }),
-    createSnapshot('sandbox-3', Date.now(), 214, {
+    createSnapshot('sandbox-12', sandboxNow, 214, {
+        provider: 'claude',
+        model: 'claude-sonnet-4',
         correlationMethod: 'explicit-id',
         correlationId: 'sandbox-request',
         koreanInstruction: '반드시 자연스러운 한국어로 답변하세요.',
@@ -379,7 +411,7 @@ let timeline = [
         omittedInstruction: '이 미포함 프롬프트 변경은 소스 비교에 나오면 안 됩니다.',
         disabledInstruction: '이 비활성 프롬프트 변경도 소스 비교에 나오면 안 됩니다.',
     }),
-];
+);
 const otherTimeline = [
     createSnapshot('other-1', Date.now() - 30000, 96, { chatId: 'other-private-chat' }),
 ];
@@ -416,7 +448,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.3',
+    version: '0.8.4',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

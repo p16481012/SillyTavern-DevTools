@@ -9,7 +9,68 @@ import {
     flattenPrompt,
     searchSnapshot,
     serializeSnapshot,
+    snapshotProvider,
 } from '../src/model.js';
+import { providerDisplayLabel } from '../src/i18n.js';
+
+test('snapshot provider prefers the captured Chat Completion source', () => {
+    const legacySnapshot = {
+        api: 'openai',
+        promptType: 'chat-completion',
+        request: {
+            settings: {
+                chat_completion_source: 'makersuite',
+                provider: ['Google', 'Anthropic'],
+            },
+        },
+    };
+
+    assert.equal(snapshotProvider(legacySnapshot), 'makersuite');
+    assert.equal(providerDisplayLabel(snapshotProvider(legacySnapshot)), 'Google AI Studio');
+    assert.equal(snapshotProvider({
+        ...legacySnapshot,
+        provider: 'openrouter',
+    }), 'makersuite');
+});
+
+test('snapshot provider keeps non-chat APIs and legacy fallbacks accurate', () => {
+    assert.equal(snapshotProvider({
+        api: 'kobold',
+        promptType: 'text-completion',
+        request: { settings: { provider: 'openai' } },
+    }), 'kobold');
+    assert.equal(snapshotProvider({
+        api: 'openai',
+        promptType: 'chat-completion',
+    }), 'openai');
+    assert.equal(snapshotProvider({
+        api: 'textgenerationwebui',
+        provider: 'openrouter',
+        promptType: 'text-completion',
+    }), 'openrouter');
+    assert.equal(snapshotProvider({
+        api: 'textgenerationwebui',
+        provider: 'ooba',
+        promptType: 'text-completion',
+    }), 'textgenerationwebui');
+    assert.equal(snapshotProvider({
+        api: 'textgenerationwebui',
+        provider: 'unknown',
+        promptType: 'text-completion',
+    }), 'textgenerationwebui');
+    assert.equal(snapshotProvider({
+        api: 'unknown',
+        provider: 'openrouter',
+        promptType: 'text-completion',
+    }), 'openrouter');
+    assert.equal(snapshotProvider({
+        api: 'unknown',
+        provider: 'ooba',
+        promptType: 'text-completion',
+    }), 'textgenerationwebui');
+    assert.equal(providerDisplayLabel('private-router'), 'private-router');
+    assert.equal(providerDisplayLabel('unknown'), '알 수 없음');
+});
 
 test('flattenPrompt preserves chat message order and roles', () => {
     const flattened = flattenPrompt([

@@ -1,10 +1,11 @@
-# v0.8.3 기술 구현 현황
+# v0.8.4 기술 구현 현황
 
 ## 구현 완료
 
 ### 캡처와 소스
 
 - SillyTavern Chat Completion·Text Completion prompt/settings/generation 이벤트 캡처
+- API 전송 계열과 Chat Completion의 `chat_completion_source`, Text Completion의 generation 유형을 분리해 기록하고 기존 스냅샷도 요청 설정에서 제공자 복원
 - 활성 로어북·생성 유형·모델·sampler·출력 한도와 캡처 경계 기록
 - 공개 요청 식별자가 양쪽 이벤트에 있을 때 ID 일치, 그 외 FIFO 연결
 - credential 형태 필드의 재귀 마스킹, 순환 참조 보호, 미디어 data URL 생략
@@ -46,14 +47,15 @@
 - 같은 채팅과 채팅 인덱스 작업의 직렬화 잠금
 - 저장 실패 알림과 동일 스냅샷 ID 재시도
 - 원본 소스↔최종 프롬프트 상호 탐색
-- 토큰 성장·로어북 활성/제거·실제 요청 포함 소스별 diff
+- 최근 10개 점의 hover·focus·click 토큰 상세와 모바일 터치 영역·roving tabindex를 포함한 토큰 성장 그래프, 로어북 활성/제거, 실제 요청 포함 소스별 diff
 - 일반/정규식/대소문자 검색과 JSON·TXT·Markdown 내보내기
 - 현재 채팅 및 모든 저장 채팅의 개인정보 제외 진단 JSON·Markdown
 - 진단 JSON 크기·버전·범위·개수·금지 필드 검증과 검토 전용 가져오기
 - 모달 focus trap·포커스 복원·탭 및 성장 그래프 키보드 탐색
 - 밝은/어두운 테마별 WCAG AA 상태색, 선택·hover 탭 상태 분리, 좁은 패널의 가로 버튼 및 검색 옵션 배치
 - 탐색기 소스 그룹과 연결 상태 설명, 요약 우선의 타임라인·비교·컨텍스트 접기 구조
-- 제목 옆 도움말의 PC hover·키보드 focus·모바일 click 동작, 비교 정책 내부의 독립 접기 구조
+- 제목 옆 도움말의 PC hover·키보드 focus·모바일 click 동작, 패널 내부 자동 배치, 설명·예시 문단 분리, 비교 정책 내부의 독립 접기 구조
+- 공백·문장 경계를 우선하는 한글 줄바꿈과 모바일 가로 넘침 방지
 
 ## 부분 구현 또는 알려진 경계
 
@@ -76,6 +78,7 @@
 
 - 2026-07-29 기준 공식 SillyTavern prompt/settings 이벤트는 기본적으로 공개 요청 ID를 전달하지 않습니다. 공개 ID가 없는 일반 경로는 프롬프트 유형별 FIFO를 사용합니다.
 - provider 서버가 변환한 실제 최종 HTTP 본문과 응답 패킷은 공개 프런트엔드 이벤트 범위 밖입니다.
+- 표시되는 제공자는 Chat Completion의 `chat_completion_source` 또는 Text Completion의 generation type입니다. OpenRouter·사용자 지정 API 내부에서 최종 요청을 처리한 upstream provider까지 뜻하지는 않습니다.
 - 저장 재시도는 일시적 IndexedDB 오류를 복구하지만 저장 할당량 부족·비공개 모드 제한 같은 근본 원인을 해결하지 않습니다.
 - 진단 가져오기는 검토용 요약이며 스냅샷 백업·복원 또는 타임라인 병합 기능이 아닙니다.
 - 멀티모달 추정은 캡처된 이미지 크기와 미디어 길이가 있을 때만 완전한 산정이 가능합니다.

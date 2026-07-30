@@ -143,6 +143,8 @@ function snapshotContext(context) {
         chatId: context.getCurrentChatId?.() ?? context.chatId ?? '__global__',
         messageCount: context.chat?.length ?? 0,
         mainApi: context.mainApi,
+        chatCompletionSource: context.chatCompletionSettings?.chat_completion_source ?? null,
+        textCompletionSource: context.textCompletionSettings?.type ?? null,
         model: getModel(context),
         preset,
         maxContext: context.maxContext,

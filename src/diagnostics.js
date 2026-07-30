@@ -1,4 +1,6 @@
 import { analyzeSnapshot, DEFAULT_RULE_SETTINGS } from './rules.js';
+import { providerDisplayLabel } from './i18n.js';
+import { snapshotProvider } from './model.js';
 
 function increment(target, key) {
     const normalized = String(key ?? 'unknown');
@@ -39,6 +41,7 @@ function snapshotDiagnostic(snapshot) {
         id: snapshot.id,
         timestamp: snapshot.timestamp,
         api: snapshot.api ?? 'unknown',
+        provider: snapshotProvider(snapshot),
         model: snapshot.model ?? null,
         promptType: snapshot.promptType ?? 'unknown',
         generationType: snapshot.generationType ?? 'unknown',
@@ -83,6 +86,7 @@ export function buildTimelineDiagnostics(timeline, { generatedAt = Date.now() } 
         .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0))
         .map(snapshotDiagnostic);
     const apiCounts = {};
+    const providerCounts = {};
     const modelCounts = {};
     const promptTypeCounts = {};
     const generationTypeCounts = {};
@@ -107,6 +111,7 @@ export function buildTimelineDiagnostics(timeline, { generatedAt = Date.now() } 
 
     for (const snapshot of snapshots) {
         increment(apiCounts, snapshot.api);
+        increment(providerCounts, snapshot.provider);
         increment(modelCounts, snapshot.model ?? 'unknown');
         increment(promptTypeCounts, snapshot.promptType);
         increment(generationTypeCounts, snapshot.generationType);
@@ -147,6 +152,7 @@ export function buildTimelineDiagnostics(timeline, { generatedAt = Date.now() } 
             firstTimestamp: snapshots[0]?.timestamp ?? null,
             lastTimestamp: snapshots.at(-1)?.timestamp ?? null,
             apiCounts,
+            providerCounts,
             modelCounts,
             promptTypeCounts,
             generationTypeCounts,
@@ -185,6 +191,13 @@ function formatCounts(counts) {
         : '없음';
 }
 
+function formatProviderCounts(counts) {
+    const entries = Object.entries(counts ?? {});
+    return entries.length
+        ? entries.map(([key, value]) => `${providerDisplayLabel(key)} ${value}`).join(' · ')
+        : '없음';
+}
+
 export function serializeTimelineDiagnostics(timeline, format = 'json', options = {}) {
     const report = buildTimelineDiagnostics(timeline, options);
     if (format === 'json') {
@@ -193,7 +206,7 @@ export function serializeTimelineDiagnostics(timeline, format = 'json', options 
 
     const summary = report.summary;
     const snapshotRows = report.snapshots.map((snapshot) => (
-        `| ${new Date(snapshot.timestamp).toISOString()} | ${snapshot.api} | ${snapshot.model ?? '미확인'} | ` +
+        `| ${new Date(snapshot.timestamp).toISOString()} | ${snapshot.api} | ${providerDisplayLabel(snapshot.provider)} | ${snapshot.model ?? '미확인'} | ` +
         `${snapshot.tokens.prompt ?? '미확인'} | ${snapshot.capture.stage ?? '미확인'} | ` +
         `${snapshot.capture.correlationMethod ?? '미확인'} | ${snapshot.rules.total ?? '실패'} |`
     ));
@@ -203,7 +216,8 @@ export function serializeTimelineDiagnostics(timeline, format = 'json', options 
         `- 생성 시각: ${new Date(report.generatedAt).toISOString()}`,
         `- 범위: 현재 채팅 타임라인 ${summary.snapshotCount}개`,
         '- 개인정보 보호: 프롬프트 내용·요청 본문·요청 식별자 값은 포함하지 않음',
-        `- API: ${formatCounts(summary.apiCounts)}`,
+        `- API 경로: ${formatCounts(summary.apiCounts)}`,
+        `- 생성 제공자: ${formatProviderCounts(summary.providerCounts)}`,
         `- 캡처 경계: ${formatCounts(summary.captureStageCounts)}`,
         `- 연결 방식: ${formatCounts(summary.correlationMethodCounts)}`,
         `- 대체 캡처: ${summary.fallbackCaptures}`,
@@ -216,8 +230,8 @@ export function serializeTimelineDiagnostics(timeline, format = 'json', options 
         '',
         '## 스냅샷',
         '',
-        '| 시각 | API | 모델 | 토큰 | 캡처 경계 | 연결 방식 | 규칙 |',
-        '| --- | --- | --- | ---: | --- | --- | ---: |',
+        '| 시각 | API 경로 | 생성 제공자 | 모델 | 토큰 | 캡처 경계 | 연결 방식 | 규칙 |',
+        '| --- | --- | --- | --- | ---: | --- | --- | ---: |',
         ...snapshotRows,
         '',
     ].join('\n');
@@ -245,6 +259,7 @@ export function buildAllTimelineDiagnostics(chatTimelines, { generatedAt = Date.
         firstTimestamp: report.summary.firstTimestamp,
         lastTimestamp: report.summary.lastTimestamp,
         apiCounts: report.summary.apiCounts,
+        providerCounts: report.summary.providerCounts,
         modelCounts: report.summary.modelCounts,
         fallbackCaptures: report.summary.fallbackCaptures,
         tokens: report.summary.tokens,
@@ -268,7 +283,7 @@ export function serializeAllTimelineDiagnostics(chatTimelines, format = 'json', 
     ));
     const snapshotRows = report.snapshots.map((snapshot) => (
         `| ${snapshot.chatRef} | ${new Date(snapshot.timestamp).toISOString()} | ` +
-        `${snapshot.api} | ${snapshot.model ?? '미확인'} | ${snapshot.tokens.prompt ?? '미확인'} | ` +
+        `${snapshot.api} | ${providerDisplayLabel(snapshot.provider)} | ${snapshot.model ?? '미확인'} | ${snapshot.tokens.prompt ?? '미확인'} | ` +
         `${snapshot.capture.stage ?? '미확인'} | ${snapshot.rules.total ?? '실패'} |`
     ));
     return [
@@ -277,7 +292,8 @@ export function serializeAllTimelineDiagnostics(chatTimelines, format = 'json', 
         `- 생성 시각: ${new Date(report.generatedAt).toISOString()}`,
         `- 범위: 채팅 ${summary.chatCount}개 · 스냅샷 ${summary.snapshotCount}개`,
         '- 개인정보 보호: 채팅 ID·프롬프트 내용·요청 본문·요청 식별자 값은 포함하지 않음',
-        `- API: ${formatCounts(summary.apiCounts)}`,
+        `- API 경로: ${formatCounts(summary.apiCounts)}`,
+        `- 생성 제공자: ${formatProviderCounts(summary.providerCounts)}`,
         `- 캡처 경계: ${formatCounts(summary.captureStageCounts)}`,
         `- 대체 캡처: ${summary.fallbackCaptures}`,
         `- 토큰: 최소 ${summary.tokens.minimum ?? '미확인'} · 최대 ${summary.tokens.maximum ?? '미확인'} · 평균 ${summary.tokens.average ?? '미확인'}`,
@@ -291,8 +307,8 @@ export function serializeAllTimelineDiagnostics(chatTimelines, format = 'json', 
         '',
         '## 스냅샷',
         '',
-        '| 익명 채팅 | 시각 | API | 모델 | 토큰 | 캡처 경계 | 규칙 |',
-        '| --- | --- | --- | --- | ---: | --- | ---: |',
+        '| 익명 채팅 | 시각 | API 경로 | 생성 제공자 | 모델 | 토큰 | 캡처 경계 | 규칙 |',
+        '| --- | --- | --- | --- | --- | ---: | --- | ---: |',
         ...snapshotRows,
         '',
     ].join('\n');
@@ -319,6 +335,7 @@ const SAFE_COUNT_MAP_KEYS = new Set([
     'generationTypeCounts',
     'modelCounts',
     'promptTypeCounts',
+    'providerCounts',
     'rules',
     'ruleSeverityCounts',
     'sourceTypes',

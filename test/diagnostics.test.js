@@ -15,6 +15,7 @@ function snapshot(id, timestamp, totalTokens) {
         id,
         timestamp,
         api: 'openai',
+        provider: 'openrouter',
         model: 'test-model',
         promptType: 'chat-completion',
         generationType: 'normal',
@@ -59,6 +60,8 @@ test('timeline diagnostics summarize every snapshot without prompt or request co
     assert.equal(report.summary.snapshotCount, 2);
     assert.equal(report.summary.tokens.delta, 60);
     assert.equal(report.summary.structuredTotals.toolSchemas, 2);
+    assert.deepEqual(report.summary.providerCounts, { openrouter: 2 });
+    assert.equal(report.snapshots[0].provider, 'openrouter');
     assert.equal(report.privacy.promptContentIncluded, false);
     assert.equal(report.privacy.chatIdValuesIncluded, false);
 
@@ -67,7 +70,9 @@ test('timeline diagnostics summarize every snapshot without prompt or request co
         assert.equal(output.includes('private prompt'), false);
         assert.equal(output.includes('secret-request'), false);
         assert.match(output, /test-model/);
+        assert.match(output, /openrouter|OpenRouter/);
     }
+    assert.match(serializeTimelineDiagnostics(timeline, 'markdown'), /생성 제공자: OpenRouter 2/);
 });
 
 test('all-chat diagnostics use anonymous chat references and metadata only', () => {

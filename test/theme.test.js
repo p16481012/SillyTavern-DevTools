@@ -74,17 +74,22 @@ test('status text colors keep WCAG AA contrast on muted badge surfaces', async (
     }
 });
 
-test('tabs and Korean action controls keep distinct, horizontal states', async () => {
+test('tabs stay distinct while Korean action text wraps only at safe boundaries', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const actionButton = cssBlock(css, '.st-devtools-window .menu_button');
+    const panel = cssBlock(css, '.st-devtools-window');
     const activeTab = cssBlock(css, '.st-devtools-tab.active');
     const focusTab = cssBlock(css, '.st-devtools-tab:focus-visible');
     const searchOptions = cssBlock(css, '.st-devtools-search-options');
 
-    assert.match(actionButton, /white-space:\s*nowrap/);
+    assert.match(actionButton, /white-space:\s*normal/);
+    assert.match(actionButton, /min-width:\s*0/);
     assert.match(actionButton, /word-break:\s*keep-all/);
     assert.match(actionButton, /writing-mode:\s*horizontal-tb/);
+    assert.match(panel, /overflow-wrap:\s*normal/);
+    assert.match(panel, /text-wrap:\s*pretty/);
+    assert.match(panel, /word-break:\s*keep-all/);
     assert.match(activeTab, /border-bottom-color:/);
     assert.doesNotMatch(focusTab, /background:/);
     assert.match(searchOptions, /display:\s*flex/);
@@ -100,11 +105,21 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
         /@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*?\.st-devtools-help-tooltip:hover/,
     );
     assert.match(css, /\.st-devtools-help-tooltip\.is-open\s+\.st-devtools-help-bubble/);
+    assert.match(cssBlock(css, '.st-devtools-help-bubble'), /box-sizing:\s*border-box/);
     assert.match(
         css,
         /\.st-devtools-window\s+details:not\(\[open\]\)\s*>\s*:not\(summary\)[\s\S]*?display:\s*none\s*!important/,
     );
     assert.match(ui, /trigger\.setAttribute\('aria-expanded', 'false'\)/);
+    assert.match(ui, /trigger\.setAttribute\('aria-describedby', tooltipId\)/);
     assert.match(ui, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
     assert.match(ui, /details\.dataset\.policySection/);
+    assert.match(ui, /function positionHelpTooltip\(wrapper\)/);
+    assert.match(ui, /boundaryRect\.right - measured\.width/);
+    assert.match(ui, /function descriptionParagraphs\(text\)/);
+    assert.match(ui, /GROWTH_CHART_POINT_LIMIT = 10/);
+    assert.match(ui, /analyses\.slice\(-GROWTH_CHART_POINT_LIMIT\)/);
+    assert.match(ui, /class:\s*'st-devtools-growth-hit'/);
+    assert.match(ui, /r:\s*28/);
+    assert.match(ui, /detailText\.setAttribute\('role', 'status'\)/);
 });

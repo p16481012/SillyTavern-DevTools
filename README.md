@@ -4,7 +4,7 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 
 ## 현재 버전
 
-`v0.8.3`
+`v0.8.4`
 
 주요 기능:
 
@@ -33,6 +33,7 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 - 채팅별 저장 잠금, 저장 실패 알림과 동일 스냅샷 재시도
 - 스냅샷 개별 삭제
 - 턴별 토큰 증감·프롬프트 성장 그래프
+- 전체 기록 중 최근 10개 성장 그래프와 점별 hover·focus·click 토큰 상세
 - 턴별 활성화·제거 로어북 변화
 - 토큰 그래프 기본 펼침과 스냅샷 목록 기본 접힘
 - 프리셋·기타 요청 소스·최종 결과를 구분하고 토큰 수·포함 상태·연결 근거를 설명하는 프롬프트 탐색기
@@ -50,6 +51,9 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 - 같은 대안 그룹의 내부 비교 제외, 그룹 밖 프롬프트와의 비교 유지
 - 실제 요청 포함 상태, 제외된 비교, 그룹 적용 결과와 다중 활성 경고 표시
 - 제목 옆 도움말 아이콘의 PC hover·키보드 focus·모바일 click 설명
+- 패널 경계를 벗어나지 않는 도움말과 설명·예시 문단 분리
+- API 전송 계열과 실제 Chat Completion·Text Completion 생성 제공자를 구분한 화면·내보내기·진단 표시
+- 공백·문장 경계를 우선하고 한글 단어를 임의로 자르지 않는 공통 줄바꿈
 - 모달 포커스 트랩, 탭 좌우/Home/End 이동, 성장 그래프 포인트 키보드 탐색
 
 ## 캡처 정확성과 경계
@@ -166,7 +170,7 @@ npm test
 
 UI 접근성을 수동 검토할 때는 `npm run sandbox`를 실행하고 출력된 로컬 주소를 엽니다.
 
-구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.3 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요.
+구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.8.4 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요.
 
 ## v0.9.0 예정 방향
 
