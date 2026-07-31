@@ -415,7 +415,7 @@ function extractRoleAtoms(source, capability, context) {
     for (const pattern of ROLE_PATTERNS) {
         pattern.lastIndex = 0;
         for (const match of context.text.matchAll(pattern)) {
-            const value = normalizedText(match[1]).toLocaleLowerCase();
+            const value = normalizedText(match[1]).toLowerCase();
             if (!value) continue;
             const range = { start: match.index, end: match.index + match[0].length };
             const excluded = context.excluded.find((item) => rangeOverlaps(range, item));
@@ -609,7 +609,7 @@ function normalizedRoleTokens(value) {
         '도우미',
     ]);
     return new Set(normalizedText(value)
-        .toLocaleLowerCase()
+        .toLowerCase()
         .split(/[^\p{L}\p{N}]+/u)
         .filter((token) => token && !ignored.has(token)));
 }

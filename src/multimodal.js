@@ -43,7 +43,7 @@ function partDetail(part) {
         ?? part?.image_url?.detail
         ?? part?.image?.detail
         ?? 'auto',
-    ).toLocaleLowerCase();
+    ).toLowerCase();
 }
 
 export function detectMultimodalProvider(contextState = {}, request = {}) {
@@ -55,8 +55,8 @@ export function detectMultimodalProvider(contextState = {}, request = {}) {
         settings?.api_type,
         body?.chat_completion_source,
         contextState?.mainApi,
-    ].filter(Boolean).join(' ').toLocaleLowerCase();
-    const model = String(settings?.model ?? contextState?.model ?? '').toLocaleLowerCase();
+    ].filter(Boolean).join(' ').toLowerCase();
+    const model = String(settings?.model ?? contextState?.model ?? '').toLowerCase();
     const identity = `${source} ${model}`;
 
     if (/anthropic|claude/u.test(identity)) return 'anthropic';
@@ -190,7 +190,7 @@ export function estimateMultimodalTokens({
     provider,
     model,
 }) {
-    const normalizedModel = String(model ?? '').toLocaleLowerCase();
+    const normalizedModel = String(model ?? '').toLowerCase();
     let estimate;
     if (provider === 'openai' && type === 'image') {
         estimate = openAiImageEstimate(part, normalizedModel);

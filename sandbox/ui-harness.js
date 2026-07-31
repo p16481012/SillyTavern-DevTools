@@ -1,5 +1,6 @@
 import { DevToolsWindow } from '../src/ui.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
+import { createProfileContext } from '../src/profile-context.js';
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     const provider = additions.provider ?? additions.chatCompletionSource ?? 'openai';
@@ -27,7 +28,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 5,
-        extensionVersion: '0.9.0',
+        extensionVersion: '0.9.1',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -36,6 +37,12 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         ...(additions.omitProvider ? {} : { provider }),
         model,
         preset: 'sandbox',
+        profileContext: createProfileContext({
+            chatId: additions.chatId ?? 'sandbox',
+            preset: { id: 'sandbox-preset', name: '샌드박스 프리셋' },
+            character: { avatar: 'sandbox-character.png', name: '샌드박스 캐릭터' },
+            characterId: 1,
+        }),
         promptType: 'chat-completion',
         generationType: 'normal',
         payload: [
@@ -549,7 +556,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.9.0',
+    version: '0.9.1',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

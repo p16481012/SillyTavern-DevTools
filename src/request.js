@@ -36,7 +36,7 @@ const PRIVATE_KEY_BEGIN = /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----/gu;
 const PRIVATE_KEY_END = /-----END [A-Z0-9 ]{0,64}PRIVATE KEY-----/gu;
 
 function isSensitiveKey(key) {
-    const normalized = String(key).replace(/[^a-z0-9]/giu, '').toLocaleLowerCase();
+    const normalized = String(key).replace(/[^a-z0-9]/giu, '').toLowerCase();
     return [
         'apikey',
         'accesstoken',

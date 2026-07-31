@@ -22,4 +22,11 @@ test('Rule Inspector V3 UI stays collapsed and exposes evidence metadata', async
     assert.match(i18n, /'rules\.determination\.confirmed':\s*'확정'/);
     assert.match(i18n, /'rules\.determination\.candidate':\s*'후보'/);
     assert.match(i18n, /'rules\.determination\.insufficient-evidence':\s*'근거 부족'/);
+
+    const comparisonStart = ui.indexOf('renderComparisonAnalysis(snapshot, comparison = {})');
+    const comparisonEnd = ui.indexOf('\n    renderInstructionModel(model)', comparisonStart);
+    const comparisonUi = ui.slice(comparisonStart, comparisonEnd);
+    assert.match(comparisonUi, /suppressedComparisonCount/);
+    assert.match(comparisonUi, /attachLazyDetailsContent\(details, \(\) => \{/);
+    assert.match(comparisonUi, /comparison\.suppressedTruncated/);
 });

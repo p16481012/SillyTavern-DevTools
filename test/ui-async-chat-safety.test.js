@@ -59,6 +59,53 @@ function createWindow({ current, store }) {
     return devTools;
 }
 
+test('review changes stay in the policy draft until the user applies it', () => {
+    globalThis.localStorage = memoryLocalStorage();
+    const devTools = new DevToolsWindow({
+        getContext: () => ({ chatId: 'chat-a' }),
+        store: {},
+        capture: { addEventListener() {} },
+        version: 'test',
+    });
+    devTools.render = () => {};
+    devTools.comparisonPolicyDirty = true;
+    const currentSnapshot = {
+        ...snapshot('review', 'chat-a'),
+        sources: [{
+            id: 'source:one',
+            type: 'utility',
+            label: 'Prompt one',
+            content: 'Use Korean.',
+            metadata: {
+                sourceKind: 'configuredPrompt',
+                identifier: 'prompt-one',
+            },
+        }],
+    };
+    const finding = {
+        id: 'language:one',
+        ruleId: 'language',
+        sourceIds: ['source:one'],
+        evidence: 'Use Korean.',
+    };
+
+    devTools.updateFindingDecision(
+        currentSnapshot,
+        finding,
+        'false-positive',
+    );
+
+    assert.equal(devTools.findingReviewDocument.decisions.length, 0);
+    assert.equal(devTools.pendingImportedReviews.decisions.length, 1);
+    assert.equal(devTools.comparisonPolicyDirty, true);
+
+    const applied = devTools.commitPolicyDraft();
+    assert.equal(applied.ok, true);
+    assert.equal(devTools.findingReviewDocument.decisions.length, 1);
+    assert.equal(devTools.pendingImportedReviews, null);
+    assert.equal(devTools.comparisonPolicyDirty, false);
+});
+
 test('a delayed refresh for chat A cannot overwrite a newer chat B timeline', async () => {
     const current = { chatId: 'chat-a' };
     const pendingA = deferred();

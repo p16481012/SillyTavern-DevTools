@@ -216,7 +216,7 @@ export class SnapshotStore {
                 ? backend.driver()
                 : null;
             this.backendStatus = {
-                type: String(driver).toLocaleLowerCase().includes('indexeddb')
+                type: String(driver).toLowerCase().includes('indexeddb')
                     || driver === 'asyncStorage'
                     ? 'indexeddb'
                     : 'persistent',

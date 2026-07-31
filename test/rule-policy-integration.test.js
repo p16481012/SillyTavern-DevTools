@@ -96,6 +96,26 @@ test('ignore mode hides both internal conflicts and the group activation warning
     assert.equal(analysis.comparison.suppressedComparisons.length, 3);
 });
 
+test('large alternative groups preserve exact totals while bounding comparison records', () => {
+    const sources = Array.from({ length: 500 }, (_, index) => configuredSource(
+        `language-${index}`,
+        `출력언어 | 옵션 ${index}`,
+        index % 2 === 0
+            ? '반드시 한국어로 답변하세요.'
+            : 'Always respond in English.',
+    ));
+    const analysis = analyzeSnapshotDetailed(
+        snapshot(sources),
+        { enabled: { duplicates: false } },
+        templatePolicy(),
+    );
+
+    assert.equal(analysis.comparison.suppressedComparisonCount, 62_500);
+    assert.equal(analysis.comparison.suppressedComparisons.length, 100);
+    assert.equal(analysis.comparison.suppressedComparisonsTruncated, true);
+    assert.equal(analysis.comparison.suppressedComparisonsOmitted, 62_400);
+});
+
 test('only prompts included in the actual request participate in comparisons', () => {
     const [korean, japanese, english] = languageOptions.map(
         (values) => configuredSource(...values),

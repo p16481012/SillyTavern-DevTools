@@ -23,7 +23,7 @@ function nonEmptyString(value) {
 
 function firstKnownString(...values) {
     const normalized = values.map(nonEmptyString).filter(Boolean);
-    return normalized.find((value) => value.toLocaleLowerCase() !== 'unknown')
+    return normalized.find((value) => value.toLowerCase() !== 'unknown')
         ?? normalized[0]
         ?? null;
 }
@@ -31,8 +31,8 @@ function firstKnownString(...values) {
 function textCompletionProvider(api, source) {
     const normalizedApi = nonEmptyString(api);
     const normalizedSource = nonEmptyString(source);
-    const apiKey = normalizedApi?.toLocaleLowerCase();
-    const sourceKey = normalizedSource?.toLocaleLowerCase();
+    const apiKey = normalizedApi?.toLowerCase();
+    const sourceKey = normalizedSource?.toLowerCase();
     const knownApi = normalizedApi && apiKey !== 'unknown';
     const knownSource = normalizedSource && sourceKey !== 'unknown';
 
@@ -114,7 +114,7 @@ export function contentToText(content) {
 }
 
 function mediaType(part) {
-    const type = String(part?.type ?? '').toLocaleLowerCase();
+    const type = String(part?.type ?? '').toLowerCase();
     if (type.includes('image') || part?.image_url || part?.image) return 'image';
     if (type.includes('audio') || part?.audio_url || part?.input_audio || part?.audio) return 'audio';
     if (type.includes('video') || part?.video_url || part?.video) return 'video';
@@ -175,7 +175,7 @@ function payloadMessageEntries(payload) {
         const rawContent = contentToText(message?.content);
         const content = rawContent.trim();
         if (content) {
-            const role = String(message?.role ?? 'unknown').toLocaleLowerCase();
+            const role = String(message?.role ?? 'unknown').toLowerCase();
             const header = `# ${messageIndex + 1} ${role.toUpperCase()}${
                 message?.name ? ` (${message.name})` : ''
             }\n`;
@@ -223,7 +223,7 @@ function normalizeWithMap(value) {
         offset += character.length;
         if (/[\u200B-\u200D\uFEFF]/u.test(character)) continue;
 
-        const transformed = character.normalize('NFKC').toLocaleLowerCase();
+        const transformed = character.normalize('NFKC').toLowerCase();
         for (const transformedCharacter of transformed) {
             const whitespace = /\s/u.test(transformedCharacter);
             if (whitespace) {
@@ -447,7 +447,7 @@ function normalizedConfiguredRole(role) {
     if (role === 1 || role === '1') return 'user';
     if (role === 2 || role === '2') return 'assistant';
 
-    const normalized = String(role ?? '').trim().toLocaleLowerCase();
+    const normalized = String(role ?? '').trim().toLowerCase();
     return ['system', 'developer', 'user', 'assistant'].includes(normalized)
         ? normalized
         : null;
@@ -1034,6 +1034,7 @@ export async function finalizeSnapshot({
         provider,
         model: normalizedRequest.settings?.model ?? contextState.model ?? null,
         preset: contextState.preset || null,
+        profileContext: contextState.profileContext ?? null,
         promptType,
         generationType: generationType || 'unknown',
         payload,

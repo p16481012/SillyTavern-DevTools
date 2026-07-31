@@ -1,4 +1,5 @@
 import { deepClone, finalizeSnapshot } from './model.js';
+import { createProfileContext } from './profile-context.js';
 import {
     createCaptureBoundary,
     createRequestRecord,
@@ -128,25 +129,67 @@ function getCharacterFields(context, character) {
     });
 }
 
+function selectedGroupContext(context) {
+    const rawDirectGroup = context.group ?? context.selectedGroup ?? null;
+    const directGroup = rawDirectGroup && typeof rawDirectGroup === 'object'
+        ? rawDirectGroup
+        : null;
+    const groupId = context.groupId
+        ?? context.group_id
+        ?? context.selectedGroupId
+        ?? (directGroup ? null : rawDirectGroup)
+        ?? directGroup?.id
+        ?? directGroup?.group_id
+        ?? null;
+    const groups = context.groups;
+    let group = directGroup;
+    if (!group && groupId != null && groups instanceof Map) {
+        group = groups.get(groupId) ?? groups.get(String(groupId)) ?? null;
+    } else if (!group && groupId != null && Array.isArray(groups)) {
+        group = groups.find((item) => (
+            String(item?.id ?? item?.group_id) === String(groupId)
+        )) ?? null;
+    } else if (!group && groupId != null && groups && typeof groups === 'object') {
+        group = groups[groupId] ?? groups[String(groupId)] ?? null;
+    }
+    return { group, groupId };
+}
+
 function snapshotContext(context) {
     const character = context.characters?.[context.characterId] ?? null;
+    const { group, groupId } = selectedGroupContext(context);
+    const chatId = context.getCurrentChatId?.() ?? context.chatId ?? '__global__';
     let preset = null;
+    let presetNamespace = context.mainApi ?? null;
     try {
         const presetManager = context.getPresetManager?.();
         preset = presetManager?.getSelectedPreset?.()
             ?? presetManager?.selectedPreset
             ?? null;
+        presetNamespace = presetManager?.apiId
+            ?? presetManager?.api
+            ?? presetManager?.type
+            ?? presetNamespace;
     } catch {
         // A preset manager is not available for every API or app state.
     }
     return {
-        chatId: context.getCurrentChatId?.() ?? context.chatId ?? '__global__',
+        chatId,
         messageCount: context.chat?.length ?? 0,
         mainApi: context.mainApi,
         chatCompletionSource: context.chatCompletionSettings?.chat_completion_source ?? null,
         textCompletionSource: context.textCompletionSettings?.type ?? null,
         model: getModel(context),
         preset,
+        profileContext: createProfileContext({
+            chatId,
+            preset,
+            presetNamespace,
+            character,
+            characterId: context.characterId,
+            group,
+            groupId,
+        }),
         maxContext: context.maxContext,
         maxOutput: getMaxOutput(context),
         character: deepClone(character),

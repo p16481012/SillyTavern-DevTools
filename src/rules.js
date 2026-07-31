@@ -9,6 +9,8 @@ import {
 import { sourceDisplayLabel, t } from './i18n.js';
 import { buildInstructionModel } from './instruction-atoms.js';
 
+const SUPPRESSED_COMPARISON_RECORD_LIMIT = 100;
+
 export const RULE_DEFINITIONS = Object.freeze([
     { id: 'context', labelKey: 'rules.setting.context' },
     { id: 'duplicates', labelKey: 'rules.setting.duplicates' },
@@ -100,12 +102,15 @@ function finding(ruleId, id, severity, titleKey, messageKey, variables = {}, det
         relationId: details.relationId ?? null,
         clusterId: details.clusterId ?? null,
         evidenceRecords: details.evidenceRecords ?? [],
+        relationKind: details.relationKind ?? null,
+        semanticRecords: details.semanticRecords ?? [],
+        suppressionSignature: details.suppressionSignature ?? null,
     };
 }
 
 function normalizeSentence(sentence) {
     return sentence
-        .toLocaleLowerCase()
+        .toLowerCase()
         .replace(/[`*_>#()[\]{}]/gu, ' ')
         .replace(/\s+/gu, ' ')
         .trim();
@@ -139,24 +144,41 @@ function suppressionCollector() {
     const keys = new Set();
     return {
         records,
+        get totalCount() {
+            return keys.size;
+        },
+        get truncated() {
+            return keys.size > records.length;
+        },
+        get omittedCount() {
+            return Math.max(0, keys.size - records.length);
+        },
         compare(left, right, category) {
             if (left.id === right.id) return true;
             const decision = compareSourcePair(left, right, category);
             if (decision.compare) return true;
             const sourceIds = [left.id, right.id].sort();
-            const key = `${category}:${decision.groupKey}:${sourceIds.join(':')}`;
+            const key = JSON.stringify([
+                category,
+                decision.groupInstanceKey ?? decision.groupKey,
+                ...sourceIds,
+            ]);
             if (!keys.has(key)) {
                 keys.add(key);
-                records.push({
-                    leftId: left.id,
-                    rightId: right.id,
-                    sourceIds: [left.id, right.id],
-                    category,
-                    group: decision.group,
-                    groupKey: decision.groupKey,
-                    mode: decision.mode,
-                    reason: decision.reason,
-                });
+                if (records.length < SUPPRESSED_COMPARISON_RECORD_LIMIT) {
+                    records.push({
+                        leftId: left.id,
+                        rightId: right.id,
+                        sourceIds: [left.id, right.id],
+                        category,
+                        group: decision.group,
+                        groupKey: decision.groupKey,
+                        groupInstanceKey: decision.groupInstanceKey ?? null,
+                        profileId: decision.profileId ?? null,
+                        mode: decision.mode,
+                        reason: decision.reason,
+                    });
+                }
             }
             return false;
         },
@@ -213,6 +235,7 @@ function analyzeDuplicates(sources, minimumLength, collector) {
                 { count: sourceIds.length },
                 {
                     evidence: items[0].original,
+                    suppressionSignature: normalized,
                     sourceIds,
                     finalRanges: sourceRanges(sources, sourceIds),
                     confidence: 'high',
@@ -235,6 +258,7 @@ function analyzeDuplicates(sources, minimumLength, collector) {
                 },
                 {
                     evidence: items[0].original,
+                    suppressionSignature: normalized,
                     sourceIds: source.synthetic ? [] : [source.id],
                     finalRanges: validRanges(source),
                     confidence: 'high',
@@ -353,10 +377,27 @@ function findingsFromInstructionModel(model) {
                 relationId: relation.id,
                 clusterId: relation.clusterId,
                 evidenceRecords: relation.localEvidence,
+                relationKind: relation.kind,
+                semanticRecords: atoms.map((atom) => ({
+                    category: atom.category,
+                    target: atom.target,
+                    action: atom.action,
+                    property: atom.property,
+                    value: atom.value,
+                    polarity: atom.polarity,
+                    scope: atom.scope,
+                    condition: atom.condition,
+                    exception: atom.exception,
+                    priority: atom.priority,
+                    status: atom.status,
+                })),
             },
         );
     });
     for (const alert of model.alerts) {
+        const atoms = alert.atomIds
+            .map((atomId) => atomById.get(atomId))
+            .filter(Boolean);
         results.push(finding(
             'directives',
             model.alerts.length === 1
@@ -377,6 +418,23 @@ function findingsFromInstructionModel(model) {
                 determination: alert.status,
                 atomIds: alert.atomIds,
                 evidenceRecords: alert.localEvidence,
+                relationKind: 'priority-override',
+                semanticRecords: atoms.map((atom) => ({
+                    category: atom.category,
+                    target: atom.target,
+                    action: atom.action,
+                    property: atom.property,
+                    value: atom.value,
+                    polarity: atom.polarity,
+                    scope: atom.scope,
+                    condition: atom.condition,
+                    exception: atom.exception,
+                    priority: atom.priority,
+                    status: atom.status,
+                })),
+                suppressionSignature: alert.localEvidence
+                    .map(({ text }) => text)
+                    .join('\n'),
             },
         ));
     }
@@ -394,6 +452,7 @@ export function analyzeSnapshotDetailed(
     const annotatedSources = annotateSourcesWithPolicies(
         snapshot?.sources ?? [],
         comparisonSettings,
+        snapshot,
     );
     const skippedSources = [];
     let eligibleSources = [];
@@ -569,6 +628,7 @@ export function analyzeSnapshotDetailed(
             finalRanges: sourceRanges(annotatedSources, warning.sourceIds),
             method: 'comparison-policy',
             confidence: 'high',
+            suppressionSignature: warning.groupInstanceKey,
         });
     }
 
@@ -577,6 +637,9 @@ export function analyzeSnapshotDetailed(
         instructions: instructionModel,
         comparison: {
             suppressedComparisons: collector.records,
+            suppressedComparisonCount: collector.totalCount,
+            suppressedComparisonsTruncated: collector.truncated,
+            suppressedComparisonsOmitted: collector.omittedCount,
             skippedSources,
             groups: groupSummary.groups,
             groupWarnings: groupSummary.warnings,

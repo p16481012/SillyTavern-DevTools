@@ -11,7 +11,15 @@ test('safe user regular expressions compile with requested flags', () => {
     const expression = compileUserRegex('(?<group>[^|]+)\\|(?<option>.+)', 'giu');
     assert.equal(expression.global, true);
     assert.equal(expression.ignoreCase, true);
-    assert.equal(validateUserRegex('출력언어\\s*[|:]\\s*(?<option>.+)').ok, true);
+    assert.equal(validateUserRegex('출력언어\\s*[|:]\\s*(?<option>\\S.*)').ok, true);
+    assert.equal(
+        validateUserRegex('(?<group>[^:]+)::(?<option>.+)').ok,
+        true,
+    );
+    assert.equal(validateUserRegex('^\\d+\\.\\d+$').ok, true);
+    assert.equal(validateUserRegex('^a+b+c+$').ok, true);
+    assert.equal(validateUserRegex('\\(\\?=literal').ok, true);
+    assert.equal(validateUserRegex('^\\\\b+$').ok, true);
 });
 
 test('user regular expressions reject excessive and high-risk patterns', () => {
@@ -31,8 +39,52 @@ test('user regular expressions reject excessive and high-risk patterns', () => {
     for (const pattern of [
         '(a+)+$',
         '(a|aa)+$',
+        '(?:(?:a+))+$',
+        '((a+))+$',
+        '(?:(?:a|aa))+$',
+        '(?:a?b?c?d?e?f?g?)*$',
+        'a*a*a*a*a*a*a*a*a*a*b',
         '.*prefix.*suffix.*',
         '(?<value>.+)\\1',
+    ]) {
+        assert.equal(validateUserRegex(pattern).code, 'unsafe-regex', pattern);
+    }
+});
+
+test('ambiguous adjacent repetitions and every lookaround are rejected', () => {
+    for (const pattern of [
+        '^a+a+a+a+a+a+$',
+        '^a+a+$',
+        '^\\w+\\w+$',
+        '^[^:]+[^:]+$',
+        '^(a+)(a+)(a+)(a+)(a+)(a+)$',
+        '^(?:a+)(?:a+)(?:a+)(?:a+)(?:a+)(?:a+)$',
+        '^(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)$',
+        '^(ab)+(ab)+$',
+        '^[a]+a+[a]+a+[a]+a+$',
+        '^a+[a]+a+[a]+a+[a]+$',
+        '^\\p{L}+a+\\p{L}+a+\\p{L}+a+$',
+        '^\\x61+a+$',
+        '^\\u0061+a+$',
+        '^\\u{61}+a+$',
+        '^\\t+\\x09+\\t+\\x09+\\t+\\x09+$',
+        '^\\n+\\x0a+\\n+\\x0a+\\n+\\x0a+$',
+        '^\\0+\\x00+\\0+\\x00+\\0+\\x00+$',
+        '^a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?b$',
+        '^a{0,2}a{0,2}a{0,2}a{0,2}a{0,2}a{0,2}b$',
+        '^a+\\Ba+\\Ba+\\Ba+\\Ba+\\Ba+$',
+        '^😀+😀+😀+😀+😀+😀+$',
+        '^\\uD83D\\uDE00+\\uD83D\\uDE00+\\uD83D\\uDE00+$',
+        '^\\s*.+X$',
+        '^(?i:a+)(?i:a+)(?i:a+)(?i:a+)(?i:a+)(?i:a+)$',
+        '^a+b{0}a+b{0}a+b{0}a+b{0}a+b{0}a+$',
+        '^a+b{0,0}a+b{0,0}a+b{0,0}a+b{0,0}a+$',
+        '^s+ſ+s+ſ+s+ſ+$',
+        '^σ+ς+σ+ς+σ+ς+$',
+        '(?=prefix)prefix.+',
+        '(?!private).+',
+        '(?<=:)value',
+        '(?<!:)value',
     ]) {
         assert.equal(validateUserRegex(pattern).code, 'unsafe-regex', pattern);
     }

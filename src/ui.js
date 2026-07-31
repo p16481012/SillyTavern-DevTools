@@ -31,10 +31,33 @@ import {
     normalizeRuleSettings,
 } from './rules.js';
 import {
+    COMPARISON_POLICY_PROFILE_SCOPES,
     DEFAULT_COMPARISON_POLICY_SETTINGS,
     annotateSourcesWithPolicies,
+    buildBulkManualAssignments,
+    comparisonScopeKeyEquals,
     normalizeComparisonPolicySettings,
+    previewNameMatcher,
+    resolveComparisonPolicyContext,
 } from './comparison-policy.js';
+import {
+    DEFAULT_FINDING_REVIEW_DOCUMENT,
+    applyFindingReviews,
+    normalizeFindingReviewDocument,
+    setFindingDecision,
+    setFindingIgnore,
+} from './finding-review.js';
+import {
+    DEFAULT_AUDIT_LOG,
+    appendAuditEntry,
+    normalizeAuditLog,
+} from './audit-log.js';
+import { buildPolicyChangePreview } from './policy-preview.js';
+import {
+    POLICY_IO_LIMITS,
+    preparePolicyImport,
+    serializePolicyDocument,
+} from './policy-io.js';
 import { resolvePanelTheme } from './theme.js';
 import { descriptionParagraphs } from './text-format.js';
 import {
@@ -61,12 +84,18 @@ import {
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
-const COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-policy:v1`;
+const LEGACY_COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-policy:v1`;
+const COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-policy:v2`;
+const FINDING_REVIEW_SETTINGS_KEY = `${STORAGE_PREFIX}finding-reviews:v1`;
+const RULE_AUDIT_LOG_KEY = `${STORAGE_PREFIX}rule-audit:v1`;
 const LAST_TAB_KEY = `${STORAGE_PREFIX}last-tab`;
 const GEOMETRY_KEY = `${STORAGE_PREFIX}geometry`;
 const KNOWN_LOCAL_DATA_KEYS = [
     RULE_SETTINGS_KEY,
+    LEGACY_COMPARISON_POLICY_SETTINGS_KEY,
     COMPARISON_POLICY_SETTINGS_KEY,
+    FINDING_REVIEW_SETTINGS_KEY,
+    RULE_AUDIT_LOG_KEY,
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
@@ -76,6 +105,7 @@ const COMPARISON_MODES = ['alternative', 'ignore', 'normal'];
 const COMPARISON_TARGETS = ['configured', 'all'];
 const COMPARISON_RULE_KINDS = ['template', 'regex'];
 const GROWTH_CHART_POINT_LIMIT = 10;
+const POLICY_PREVIEW_SOURCE_LIMIT = 100;
 const TABS = [
     ['explorer', 'tab.explorer'],
     ['timeline', 'tab.timeline'],
@@ -94,6 +124,11 @@ function element(tag, options = {}) {
     if (options.title) node.title = options.title;
     if (options.type) node.type = options.type;
     return node;
+}
+
+function setPolicyFormStatus(node, text, isError = false) {
+    node.textContent = text;
+    node.classList.toggle('is-error', isError);
 }
 
 function attachLazyDetailsContent(details, createContent) {
@@ -546,11 +581,31 @@ export class DevToolsWindow {
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
         this.comparisonPolicySettings = this.loadComparisonPolicySettings();
+        this.savedComparisonPolicySettings = normalizeComparisonPolicySettings(
+            this.comparisonPolicySettings,
+        );
+        this.comparisonPolicyDirty = false;
+        this.policyPreviewRevision = 0;
+        this.policyPreviewCache = null;
+        this.activeComparisonProfileId = this.comparisonPolicySettings.profiles?.[0]?.id ?? 'global';
+        this.findingReviewDocument = this.loadFindingReviewDocument();
+        this.findingHiddenOnce = new Set();
+        this.ruleAuditLog = this.loadRuleAuditLog();
+        this.ruleReviewStatus = '';
+        this.ruleReviewStatusIsError = false;
+        this.pendingImportedRuleSettings = null;
+        this.pendingImportedReviews = null;
+        this.invalidatePolicyPreview();
         this.comparisonPolicyOpen = false;
         this.comparisonPolicySectionOpen = {
+            profiles: false,
+            groups: false,
             rules: false,
             manual: false,
             preview: false,
+            transfer: false,
+            reviewed: false,
+            audit: false,
         };
         this.instructionModelOpen = false;
         this.instructionAtomsOpen = false;
@@ -988,11 +1043,19 @@ export class DevToolsWindow {
     }
 
     saveRuleSettings(settings) {
+        const previous = this.ruleSettings;
         this.ruleSettings = normalizeRuleSettings(settings);
+        this.invalidatePolicyPreview();
         try {
-            localStorage.setItem(RULE_SETTINGS_KEY, JSON.stringify(this.ruleSettings));
-        } catch {
-            // The current browser may not allow persistent local storage.
+            const serialized = JSON.stringify(this.ruleSettings);
+            localStorage.setItem(RULE_SETTINGS_KEY, serialized);
+            if (localStorage.getItem(RULE_SETTINGS_KEY) !== serialized) {
+                throw new Error(t('comparison.storageVerificationFailed'));
+            }
+            return { ok: true, error: null };
+        } catch (error) {
+            this.ruleSettings = previous;
+            return { ok: false, error };
         }
     }
 
@@ -1120,10 +1183,29 @@ export class DevToolsWindow {
         try {
             const geometry = JSON.parse(localStorage.getItem(GEOMETRY_KEY));
             if (!geometry) return;
-            this.window.style.width = `${geometry.width}px`;
-            this.window.style.height = `${geometry.height}px`;
-            this.window.style.left = `${geometry.left}px`;
-            this.window.style.top = `${geometry.top}px`;
+            const margin = 16;
+            const maximumWidth = Math.max(280, window.innerWidth - margin);
+            const maximumHeight = Math.max(320, window.innerHeight - margin);
+            const width = Math.min(
+                maximumWidth,
+                Math.max(Math.min(560, maximumWidth), Number(geometry.width) || 0),
+            );
+            const height = Math.min(
+                maximumHeight,
+                Math.max(Math.min(380, maximumHeight), Number(geometry.height) || 0),
+            );
+            const left = Math.min(
+                Math.max(0, window.innerWidth - width),
+                Math.max(0, Number(geometry.left) || 0),
+            );
+            const top = Math.min(
+                Math.max(0, window.innerHeight - height),
+                Math.max(0, Number(geometry.top) || 0),
+            );
+            this.window.style.width = `${width}px`;
+            this.window.style.height = `${height}px`;
+            this.window.style.left = `${left}px`;
+            this.window.style.top = `${top}px`;
             this.window.style.transform = 'none';
         } catch {
             // Ignore invalid settings.
@@ -1458,11 +1540,30 @@ export class DevToolsWindow {
         this.comparisonPolicySettings = normalizeComparisonPolicySettings(
             DEFAULT_COMPARISON_POLICY_SETTINGS,
         );
+        this.savedComparisonPolicySettings = normalizeComparisonPolicySettings(
+            DEFAULT_COMPARISON_POLICY_SETTINGS,
+        );
+        this.comparisonPolicyDirty = false;
+        this.activeComparisonProfileId = 'global';
+        this.findingReviewDocument = normalizeFindingReviewDocument(
+            DEFAULT_FINDING_REVIEW_DOCUMENT,
+        );
+        this.findingHiddenOnce = new Set();
+        this.ruleAuditLog = normalizeAuditLog(DEFAULT_AUDIT_LOG);
+        this.ruleReviewStatus = '';
+        this.ruleReviewStatusIsError = false;
+        this.pendingImportedRuleSettings = null;
+        this.pendingImportedReviews = null;
         this.comparisonPolicyOpen = false;
         this.comparisonPolicySectionOpen = {
+            profiles: false,
+            groups: false,
             rules: false,
             manual: false,
             preview: false,
+            transfer: false,
+            reviewed: false,
+            audit: false,
         };
         this.preferences = normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
@@ -1553,9 +1654,9 @@ export class DevToolsWindow {
 
     loadComparisonPolicySettings() {
         try {
-            const stored = JSON.parse(
-                localStorage.getItem(COMPARISON_POLICY_SETTINGS_KEY) ?? 'null',
-            );
+            const current = localStorage.getItem(COMPARISON_POLICY_SETTINGS_KEY);
+            const legacy = localStorage.getItem(LEGACY_COMPARISON_POLICY_SETTINGS_KEY);
+            const stored = JSON.parse(current ?? legacy ?? 'null');
             return normalizeComparisonPolicySettings(
                 stored ?? DEFAULT_COMPARISON_POLICY_SETTINGS,
             );
@@ -1566,17 +1667,173 @@ export class DevToolsWindow {
 
     setComparisonPolicySettings(settings) {
         this.comparisonPolicySettings = normalizeComparisonPolicySettings(settings);
+        this.comparisonPolicyDirty = JSON.stringify(this.comparisonPolicySettings)
+            !== JSON.stringify(this.savedComparisonPolicySettings)
+            || Boolean(this.pendingImportedRuleSettings)
+            || Boolean(this.pendingImportedReviews);
+        this.invalidatePolicyPreview();
+    }
+
+    invalidatePolicyPreview() {
+        this.policyPreviewRevision = (this.policyPreviewRevision ?? 0) + 1;
+        this.policyPreviewCache = null;
     }
 
     saveComparisonPolicySettings(settings = this.comparisonPolicySettings) {
+        const before = this.savedComparisonPolicySettings;
         this.setComparisonPolicySettings(settings);
         try {
+            const serialized = JSON.stringify(this.comparisonPolicySettings);
             localStorage.setItem(
                 COMPARISON_POLICY_SETTINGS_KEY,
-                JSON.stringify(this.comparisonPolicySettings),
+                serialized,
             );
+            if (localStorage.getItem(COMPARISON_POLICY_SETTINGS_KEY) !== serialized) {
+                throw new Error(t('comparison.storageVerificationFailed'));
+            }
+            localStorage.removeItem(LEGACY_COMPARISON_POLICY_SETTINGS_KEY);
+            this.savedComparisonPolicySettings = normalizeComparisonPolicySettings(
+                this.comparisonPolicySettings,
+            );
+            this.comparisonPolicyDirty = false;
+            this.ruleAuditLog = appendAuditEntry(this.ruleAuditLog, {
+                action: 'policy.apply',
+                before,
+                after: this.savedComparisonPolicySettings,
+                summary: {
+                    profiles: this.savedComparisonPolicySettings.profiles.length,
+                },
+            });
+            this.saveRuleAuditLog();
+            return { ok: true, error: null };
+        } catch (error) {
+            this.savedComparisonPolicySettings = before;
+            this.comparisonPolicyDirty = true;
+            return { ok: false, error };
+        }
+    }
+
+    loadFindingReviewDocument() {
+        try {
+            return normalizeFindingReviewDocument(JSON.parse(
+                localStorage.getItem(FINDING_REVIEW_SETTINGS_KEY) ?? 'null',
+            ) ?? DEFAULT_FINDING_REVIEW_DOCUMENT);
         } catch {
-            // The current browser may not allow persistent local storage.
+            return normalizeFindingReviewDocument(DEFAULT_FINDING_REVIEW_DOCUMENT);
+        }
+    }
+
+    saveFindingReviewDocument(document = this.findingReviewDocument) {
+        const normalized = normalizeFindingReviewDocument(document);
+        try {
+            const serialized = JSON.stringify(normalized);
+            localStorage.setItem(FINDING_REVIEW_SETTINGS_KEY, serialized);
+            if (localStorage.getItem(FINDING_REVIEW_SETTINGS_KEY) !== serialized) {
+                throw new Error(t('comparison.storageVerificationFailed'));
+            }
+            this.findingReviewDocument = normalized;
+            return { ok: true, error: null };
+        } catch (error) {
+            return { ok: false, error };
+        }
+    }
+
+    loadRuleAuditLog() {
+        try {
+            return normalizeAuditLog(JSON.parse(
+                localStorage.getItem(RULE_AUDIT_LOG_KEY) ?? 'null',
+            ) ?? DEFAULT_AUDIT_LOG);
+        } catch {
+            return normalizeAuditLog(DEFAULT_AUDIT_LOG);
+        }
+    }
+
+    saveRuleAuditLog(log = this.ruleAuditLog) {
+        const normalized = normalizeAuditLog(log);
+        try {
+            localStorage.setItem(RULE_AUDIT_LOG_KEY, JSON.stringify(normalized));
+            this.ruleAuditLog = normalized;
+            return { ok: true, error: null };
+        } catch (error) {
+            return { ok: false, error };
+        }
+    }
+
+    commitPolicyDraft() {
+        const keys = [
+            RULE_SETTINGS_KEY,
+            COMPARISON_POLICY_SETTINGS_KEY,
+            FINDING_REVIEW_SETTINGS_KEY,
+            RULE_AUDIT_LOG_KEY,
+        ];
+        const backup = new Map();
+        const previousState = {
+            ruleSettings: this.ruleSettings,
+            savedPolicy: this.savedComparisonPolicySettings,
+            reviews: this.findingReviewDocument,
+            audit: this.ruleAuditLog,
+        };
+        try {
+            keys.forEach((key) => backup.set(key, localStorage.getItem(key)));
+            const nextRuleSettings = normalizeRuleSettings(
+                this.pendingImportedRuleSettings ?? this.ruleSettings,
+            );
+            const nextPolicy = normalizeComparisonPolicySettings(
+                this.comparisonPolicySettings,
+            );
+            const nextReviews = normalizeFindingReviewDocument(
+                this.pendingImportedReviews ?? this.findingReviewDocument,
+            );
+            const nextAudit = appendAuditEntry(this.ruleAuditLog, {
+                action: this.pendingImportedRuleSettings
+                    ? 'policy.import-apply'
+                    : 'policy.apply',
+                before: this.savedComparisonPolicySettings,
+                after: nextPolicy,
+                summary: {
+                    profiles: nextPolicy.profiles.length,
+                    imported: Boolean(this.pendingImportedRuleSettings),
+                },
+            });
+            const values = new Map([
+                [RULE_SETTINGS_KEY, JSON.stringify(nextRuleSettings)],
+                [COMPARISON_POLICY_SETTINGS_KEY, JSON.stringify(nextPolicy)],
+                [FINDING_REVIEW_SETTINGS_KEY, JSON.stringify(nextReviews)],
+                [RULE_AUDIT_LOG_KEY, JSON.stringify(nextAudit)],
+            ]);
+            for (const [key, value] of values) {
+                localStorage.setItem(key, value);
+                if (localStorage.getItem(key) !== value) {
+                    throw new Error(t('comparison.storageVerificationFailed'));
+                }
+            }
+            localStorage.removeItem(LEGACY_COMPARISON_POLICY_SETTINGS_KEY);
+            this.ruleSettings = nextRuleSettings;
+            this.comparisonPolicySettings = nextPolicy;
+            this.savedComparisonPolicySettings = normalizeComparisonPolicySettings(nextPolicy);
+            this.findingReviewDocument = nextReviews;
+            this.ruleAuditLog = nextAudit;
+            this.comparisonPolicyDirty = false;
+            this.pendingImportedRuleSettings = null;
+            this.pendingImportedReviews = null;
+            this.invalidatePolicyPreview();
+            return { ok: true, error: null };
+        } catch (error) {
+            for (const [key, value] of backup) {
+                try {
+                    if (value == null) localStorage.removeItem(key);
+                    else localStorage.setItem(key, value);
+                } catch {
+                    // Preserve the original error; in-memory state still rolls back.
+                }
+            }
+            this.ruleSettings = previousState.ruleSettings;
+            this.savedComparisonPolicySettings = previousState.savedPolicy;
+            this.findingReviewDocument = previousState.reviews;
+            this.ruleAuditLog = previousState.audit;
+            this.comparisonPolicyDirty = true;
+            this.invalidatePolicyPreview();
+            return { ok: false, error };
         }
     }
 
@@ -3502,6 +3759,8 @@ export class DevToolsWindow {
 
     renderRuleSettings() {
         const details = element('details', { className: 'st-devtools-rule-settings' });
+        const displayedRuleSettings = this.pendingImportedRuleSettings
+            ?? this.ruleSettings;
         details.open = this.ruleSettingsOpen;
         details.addEventListener('toggle', () => {
             this.ruleSettingsOpen = details.open;
@@ -3520,7 +3779,7 @@ export class DevToolsWindow {
             const input = element('input');
             input.type = 'checkbox';
             input.name = `enabled-${definition.id}`;
-            input.checked = this.ruleSettings.enabled[definition.id];
+            input.checked = displayedRuleSettings.enabled[definition.id];
             label.append(input, document.createTextNode(` ${t(definition.labelKey)}`));
             toggles.appendChild(label);
         }
@@ -3543,35 +3802,35 @@ export class DevToolsWindow {
             numberField(
                 'contextWarning',
                 'rules.setting.contextWarning',
-                Math.round(this.ruleSettings.contextWarning * 100),
+                Math.round(displayedRuleSettings.contextWarning * 100),
                 10,
                 98,
             ),
             numberField(
                 'contextCritical',
                 'rules.setting.contextCritical',
-                Math.round(this.ruleSettings.contextCritical * 100),
+                Math.round(displayedRuleSettings.contextCritical * 100),
                 11,
                 100,
             ),
             numberField(
                 'largeSourceTokens',
                 'rules.setting.largeSourceTokens',
-                this.ruleSettings.largeSourceTokens,
+                displayedRuleSettings.largeSourceTokens,
                 1,
                 1_000_000,
             ),
             numberField(
                 'largeSourceShare',
                 'rules.setting.largeSourceShare',
-                Math.round(this.ruleSettings.largeSourceShare * 100),
+                Math.round(displayedRuleSettings.largeSourceShare * 100),
                 1,
                 100,
             ),
             numberField(
                 'minimumSentenceLength',
                 'rules.setting.minimumSentenceLength',
-                this.ruleSettings.minimumSentenceLength,
+                displayedRuleSettings.minimumSentenceLength,
                 5,
                 500,
             ),
@@ -3589,10 +3848,31 @@ export class DevToolsWindow {
             type: 'button',
         });
         reset.addEventListener('click', () => {
-            this.saveRuleSettings(DEFAULT_RULE_SETTINGS);
+            if (this.pendingImportedRuleSettings) {
+                this.pendingImportedRuleSettings = normalizeRuleSettings(
+                    DEFAULT_RULE_SETTINGS,
+                );
+                this.comparisonPolicyDirty = true;
+                this.invalidatePolicyPreview();
+                this.ruleReviewStatus = t('rules.settingsDraftReset');
+                this.ruleReviewStatusIsError = false;
+            } else {
+                const result = this.saveRuleSettings(DEFAULT_RULE_SETTINGS);
+                this.ruleReviewStatus = result.ok
+                    ? t('rules.settingsReset')
+                    : t('rules.settingsSaveFailed', {
+                        error: result.error?.message ?? t('common.unknown'),
+                    });
+                this.ruleReviewStatusIsError = !result.ok;
+            }
             this.ruleSettingsOpen = true;
             this.render();
-            globalThis.toastr?.info?.(t('rules.settingsReset'), 'ST DevTools');
+            const message = this.ruleReviewStatus;
+            if (this.ruleReviewStatusIsError) {
+                globalThis.toastr?.error?.(message, 'ST DevTools');
+            } else {
+                globalThis.toastr?.info?.(message, 'ST DevTools');
+            }
         });
         actions.append(apply, reset);
         form.append(toggles, thresholds, actions);
@@ -3607,49 +3887,155 @@ export class DevToolsWindow {
                 const raw = value(name);
                 return raw === '' || raw == null ? undefined : Number(raw) / divisor;
             };
-            this.saveRuleSettings({
+            const nextRuleSettings = {
                 enabled,
                 contextWarning: numberValue('contextWarning', 100),
                 contextCritical: numberValue('contextCritical', 100),
                 largeSourceTokens: numberValue('largeSourceTokens'),
                 largeSourceShare: numberValue('largeSourceShare', 100),
                 minimumSentenceLength: numberValue('minimumSentenceLength'),
-            });
+            };
+            if (this.pendingImportedRuleSettings) {
+                this.pendingImportedRuleSettings = normalizeRuleSettings(nextRuleSettings);
+                this.comparisonPolicyDirty = true;
+                this.invalidatePolicyPreview();
+                this.ruleReviewStatus = t('rules.settingsDraftUpdated');
+                this.ruleReviewStatusIsError = false;
+            } else {
+                const result = this.saveRuleSettings(nextRuleSettings);
+                this.ruleReviewStatus = result.ok
+                    ? t('rules.settingsSaved')
+                    : t('rules.settingsSaveFailed', {
+                        error: result.error?.message ?? t('common.unknown'),
+                    });
+                this.ruleReviewStatusIsError = !result.ok;
+            }
             this.ruleSettingsOpen = true;
             this.render();
-            globalThis.toastr?.info?.(t('rules.settingsSaved'), 'ST DevTools');
+            const message = this.ruleReviewStatus;
+            if (this.ruleReviewStatusIsError) {
+                globalThis.toastr?.error?.(message, 'ST DevTools');
+            } else {
+                globalThis.toastr?.info?.(message, 'ST DevTools');
+            }
         });
         details.appendChild(form);
         return details;
     }
 
     comparisonNameRules() {
-        return Array.isArray(this.comparisonPolicySettings?.nameRules)
-            ? this.comparisonPolicySettings.nameRules
-            : [];
+        const profile = this.activeComparisonProfile();
+        const groups = new Map(
+            (profile?.groupDefinitions ?? []).map((group) => [group.id, group]),
+        );
+        return (profile?.matchers ?? []).map((matcher) => {
+            const group = groups.get(matcher.groupDefinitionId);
+            return {
+                ...matcher,
+                mode: group?.mode ?? 'alternative',
+                categories: group?.categories ?? ['*'],
+            };
+        });
     }
 
     comparisonManualAssignments() {
-        return Array.isArray(this.comparisonPolicySettings?.manualAssignments)
-            ? this.comparisonPolicySettings.manualAssignments
+        const profile = this.activeComparisonProfile();
+        const groups = new Map(
+            (profile?.groupDefinitions ?? []).map((group) => [group.id, group]),
+        );
+        return (profile?.manualAssignments ?? []).map((assignment) => {
+            const group = groups.get(assignment.groupDefinitionId);
+            return {
+                ...assignment,
+                sourceIdentifier: assignment.sourceIdentity?.identifier ?? null,
+                sourceFingerprint: assignment.sourceIdentity?.fingerprint ?? null,
+                sourceId: assignment.sourceIdentity?.sourceId ?? null,
+                sourceLabel: assignment.sourceIdentity?.label ?? null,
+                mode: group?.mode ?? 'alternative',
+                categories: group?.categories ?? ['*'],
+            };
+        });
+    }
+
+    comparisonProfiles() {
+        return Array.isArray(this.comparisonPolicySettings?.profiles)
+            ? this.comparisonPolicySettings.profiles
             : [];
     }
 
-    replaceComparisonNameRules(nameRules) {
+    activeComparisonProfile() {
+        return this.comparisonProfiles().find(
+            ({ id }) => id === this.activeComparisonProfileId,
+        ) ?? this.comparisonProfiles()[0] ?? null;
+    }
+
+    comparisonGroupDefinitions() {
+        return this.activeComparisonProfile()?.groupDefinitions ?? [];
+    }
+
+    replaceActiveComparisonProfile(update) {
+        const active = this.activeComparisonProfile();
+        if (!active) return;
         this.setComparisonPolicySettings({
             ...this.comparisonPolicySettings,
-            nameRules,
+            profiles: this.comparisonProfiles().map((profile) => (
+                profile.id === active.id
+                    ? (typeof update === 'function' ? update(profile) : update)
+                    : profile
+            )),
         });
+    }
+
+    replaceComparisonGroupDefinitions(groupDefinitions) {
+        const validGroupIds = new Set(groupDefinitions.map(({ id }) => id));
+        this.replaceActiveComparisonProfile((profile) => ({
+            ...profile,
+            groupDefinitions,
+            matchers: profile.matchers.filter(
+                ({ groupDefinitionId }) => validGroupIds.has(groupDefinitionId),
+            ),
+            manualAssignments: profile.manualAssignments.filter(
+                ({ groupDefinitionId }) => validGroupIds.has(groupDefinitionId),
+            ),
+        }));
+    }
+
+    replaceComparisonNameRules(nameRules) {
+        this.replaceActiveComparisonProfile((profile) => ({
+            ...profile,
+            matchers: nameRules.map((rule, order) => ({
+                id: rule.id,
+                enabled: rule.enabled !== false,
+                groupDefinitionId: rule.groupDefinitionId,
+                kind: rule.kind,
+                pattern: rule.pattern,
+                fixedGroup: rule.fixedGroup ?? null,
+                fixedOption: rule.fixedOption ?? null,
+                target: rule.target ?? 'configured',
+                order,
+            })),
+        }));
     }
 
     replaceManualAssignments(manualAssignments) {
-        this.setComparisonPolicySettings({
-            ...this.comparisonPolicySettings,
-            manualAssignments,
-        });
+        this.replaceActiveComparisonProfile((profile) => ({
+            ...profile,
+            manualAssignments: manualAssignments.map((assignment) => ({
+                id: assignment.id,
+                groupDefinitionId: assignment.groupDefinitionId,
+                group: assignment.group,
+                option: assignment.option ?? null,
+                sourceIdentity: assignment.sourceIdentity ?? {
+                    identifier: assignment.sourceIdentifier ?? null,
+                    fingerprint: assignment.sourceFingerprint ?? null,
+                    sourceId: assignment.sourceId ?? null,
+                    label: assignment.sourceLabel ?? null,
+                },
+            })),
+        }));
     }
 
-    renderComparisonRuleCard(rule, index) {
+    renderComparisonRuleCard(rule, index, snapshot) {
         const card = element('article', { className: 'st-devtools-policy-rule' });
         const heading = element('header');
         const enabledLabel = element('label', { className: 'st-devtools-policy-enabled' });
@@ -3665,6 +4051,9 @@ export class DevToolsWindow {
                 ruleIndex === index ? { ...item, enabled: enabled.checked } : item
             ));
             this.replaceComparisonNameRules(rules);
+            this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.rules = true;
+            this.render();
         });
         enabledLabel.append(enabled, document.createTextNode(` ${t('comparison.ruleEnabled')}`));
         const moveRule = (offset) => {
@@ -3746,24 +4135,260 @@ export class DevToolsWindow {
             error.setAttribute('role', 'alert');
             card.appendChild(error);
         }
+        const editor = element('details', { className: 'st-devtools-policy-inline-editor' });
+        editor.appendChild(element('summary', { text: t('action.editPolicyRule') }));
+        const form = element('form', { className: 'st-devtools-policy-creator' });
+        const kind = element('select');
+        for (const value of COMPARISON_RULE_KINDS) {
+            const option = element('option', { text: t(`comparison.ruleKind.${value}`) });
+            option.value = value;
+            option.selected = value === rule.kind;
+            kind.appendChild(option);
+        }
+        const pattern = element('input');
+        pattern.value = rule.pattern;
+        pattern.required = true;
+        const fixedGroup = element('input');
+        fixedGroup.value = rule.fixedGroup ?? '';
+        fixedGroup.placeholder = t('comparison.fixedGroupPlaceholder');
+        const groupDefinition = this.renderGroupDefinitionSelect(rule.groupDefinitionId);
+        const target = element('select');
+        for (const value of COMPARISON_TARGETS) {
+            const option = element('option', { text: t(`comparison.target.${value}`) });
+            option.value = value;
+            option.selected = value === rule.target;
+            target.appendChild(option);
+        }
+        const status = element('p', { className: 'st-devtools-policy-form-status' });
+        status.setAttribute('aria-live', 'polite');
+        const updateLimit = () => {
+            pattern.maxLength = kind.value === 'regex'
+                ? USER_REGEX_MAX_LENGTH
+                : SEARCH_QUERY_MAX_LENGTH;
+        };
+        const preview = () => {
+            const group = this.comparisonGroupDefinitions().find(
+                ({ id }) => id === groupDefinition.value,
+            );
+            const result = previewNameMatcher({
+                ...rule,
+                kind: kind.value,
+                pattern: pattern.value.trim(),
+                fixedGroup: fixedGroup.value.trim() || null,
+                groupDefinitionId: groupDefinition.value,
+                target: target.value,
+            }, snapshot?.sources ?? [], group);
+            setPolicyFormStatus(
+                status,
+                result.error
+                    ? t('comparison.livePreviewError', { error: result.error })
+                    : t('comparison.livePreviewMatches', { count: result.totalMatches }),
+                Boolean(result.error),
+            );
+        };
+        let previewTimer = null;
+        const schedulePreview = () => {
+            clearTimeout(previewTimer);
+            previewTimer = setTimeout(preview, 180);
+        };
+        [kind, pattern, fixedGroup, groupDefinition, target].forEach((control) => {
+            control.addEventListener('input', schedulePreview);
+            control.addEventListener('change', schedulePreview);
+        });
+        kind.addEventListener('change', updateLimit);
+        updateLimit();
+        form.append(
+            this.policyField('comparison.ruleKind', kind),
+            this.policyField('comparison.pattern', pattern),
+            this.policyField('comparison.fixedGroup', fixedGroup),
+            this.policyField('comparison.groupDefinition', groupDefinition),
+            this.policyField('comparison.target', target),
+            element('button', {
+                className: 'menu_button',
+                text: t('action.savePolicyRule'),
+                type: 'submit',
+            }),
+            status,
+        );
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const edited = {
+                ...rule,
+                kind: kind.value,
+                pattern: pattern.value.trim(),
+                fixedGroup: fixedGroup.value.trim() || null,
+                groupDefinitionId: groupDefinition.value,
+                target: target.value,
+            };
+            const error = comparisonRuleError(edited);
+            if (error) {
+                setPolicyFormStatus(
+                    status,
+                    t('comparison.invalidRule', { message: error }),
+                    true,
+                );
+                return;
+            }
+            this.replaceComparisonNameRules(this.comparisonNameRules().map(
+                (item, ruleIndex) => ruleIndex === index ? edited : item,
+            ));
+            this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.rules = true;
+            this.render();
+        });
+        editor.appendChild(form);
+        card.appendChild(editor);
         return card;
     }
 
-    renderComparisonRuleCreator() {
-        const form = element('form', { className: 'st-devtools-policy-creator' });
-        const field = (labelKey, control, descriptionKey = null) => {
-            if (descriptionKey) {
-                return describedControlField(
-                    t(labelKey),
-                    control,
-                    t(descriptionKey),
-                );
-            }
-            const label = element('label');
-            label.append(element('span', { text: t(labelKey) }), control);
-            return label;
-        };
+    policyField(labelKey, control, descriptionKey = null) {
+        if (descriptionKey) {
+            return describedControlField(t(labelKey), control, t(descriptionKey));
+        }
+        const label = element('label');
+        label.append(element('span', { text: t(labelKey) }), control);
+        return label;
+    }
 
+    renderGroupDefinitionSelect(selectedId = null) {
+        const select = element('select');
+        select.required = true;
+        for (const group of this.comparisonGroupDefinitions()) {
+            const option = element('option', {
+                text: `${group.label} · ${policyModeLabel(group.mode)}`,
+            });
+            option.value = group.id;
+            option.selected = group.id === selectedId;
+            select.appendChild(option);
+        }
+        return select;
+    }
+
+    renderComparisonGroupDefinitions() {
+        const wrapper = element('div', { className: 'st-devtools-policy-group-list' });
+        for (const [index, group] of this.comparisonGroupDefinitions().entries()) {
+            const form = element('form', {
+                className: 'st-devtools-policy-group-definition',
+            });
+            const label = element('input');
+            label.value = group.label;
+            label.required = true;
+            const mode = element('select');
+            for (const value of COMPARISON_MODES) {
+                const option = element('option', { text: policyModeLabel(value) });
+                option.value = value;
+                option.selected = value === group.mode;
+                mode.appendChild(option);
+            }
+            const categories = element('input');
+            categories.value = categoriesLabel(group.categories);
+            categories.placeholder = t('comparison.categoriesPlaceholder');
+            const save = element('button', {
+                className: 'menu_button',
+                text: t('action.saveGroupDefinition'),
+                type: 'submit',
+            });
+            const remove = element('button', {
+                className: 'menu_button',
+                text: t('action.deleteGroupDefinition'),
+                type: 'button',
+            });
+            remove.addEventListener('click', () => {
+                const used = this.comparisonNameRules().some(
+                    ({ groupDefinitionId }) => groupDefinitionId === group.id,
+                ) || this.comparisonManualAssignments().some(
+                    ({ groupDefinitionId }) => groupDefinitionId === group.id,
+                );
+                if (used && !confirm(t('comparison.groupDeleteConfirm'))) return;
+                this.replaceComparisonGroupDefinitions(
+                    this.comparisonGroupDefinitions().filter((_, itemIndex) => (
+                        itemIndex !== index
+                    )),
+                );
+                this.comparisonPolicyOpen = true;
+                this.comparisonPolicySectionOpen.groups = true;
+                this.render();
+            });
+            form.append(
+                this.policyField('comparison.groupDefinitionLabel', label),
+                this.policyField(
+                    'comparison.mode',
+                    mode,
+                    'comparison.behaviorDescription',
+                ),
+                this.policyField('comparison.categories', categories),
+                save,
+                remove,
+            );
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                const definitions = this.comparisonGroupDefinitions().map(
+                    (item, itemIndex) => itemIndex === index
+                        ? {
+                            ...item,
+                            label: label.value.trim(),
+                            mode: mode.value,
+                            categories: categoriesFromInput(categories.value),
+                        }
+                        : item,
+                );
+                this.replaceComparisonGroupDefinitions(definitions);
+                this.comparisonPolicyOpen = true;
+                this.comparisonPolicySectionOpen.groups = true;
+                this.render();
+            });
+            wrapper.appendChild(form);
+        }
+
+        const creator = element('form', {
+            className: 'st-devtools-policy-group-definition',
+        });
+        const label = element('input');
+        label.required = true;
+        label.placeholder = t('comparison.groupDefinitionPlaceholder');
+        const mode = element('select');
+        for (const value of COMPARISON_MODES) {
+            const option = element('option', { text: policyModeLabel(value) });
+            option.value = value;
+            mode.appendChild(option);
+        }
+        const categories = element('input');
+        categories.value = '*';
+        categories.placeholder = t('comparison.categoriesPlaceholder');
+        creator.append(
+            this.policyField('comparison.groupDefinitionLabel', label),
+            this.policyField('comparison.mode', mode, 'comparison.behaviorDescription'),
+            this.policyField('comparison.categories', categories),
+            element('button', {
+                className: 'menu_button',
+                text: t('action.addGroupDefinition'),
+                type: 'submit',
+            }),
+        );
+        creator.addEventListener('submit', (event) => {
+            event.preventDefault();
+            this.replaceComparisonGroupDefinitions([
+                ...this.comparisonGroupDefinitions(),
+                {
+                    id: policyId('group'),
+                    label: label.value.trim(),
+                    mode: mode.value,
+                    categories: categoriesFromInput(categories.value),
+                },
+            ]);
+            this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.groups = true;
+            this.render();
+        });
+        wrapper.appendChild(creator);
+        return wrapper;
+    }
+
+    renderComparisonRuleCreator(snapshot) {
+        if (this.comparisonGroupDefinitions().length === 0) {
+            return proseElement('p', t('comparison.groupRequired'));
+        }
+        const form = element('form', { className: 'st-devtools-policy-creator' });
         const kind = element('select');
         kind.name = 'kind';
         for (const value of COMPARISON_RULE_KINDS) {
@@ -3781,17 +4406,7 @@ export class DevToolsWindow {
         const fixedGroup = element('input');
         fixedGroup.name = 'fixedGroup';
         fixedGroup.placeholder = t('comparison.fixedGroupPlaceholder');
-        const mode = element('select');
-        mode.name = 'mode';
-        for (const value of COMPARISON_MODES) {
-            const option = element('option', { text: policyModeLabel(value) });
-            option.value = value;
-            mode.appendChild(option);
-        }
-        const categories = element('input');
-        categories.name = 'categories';
-        categories.value = '*';
-        categories.placeholder = t('comparison.categoriesPlaceholder');
+        const groupDefinition = this.renderGroupDefinitionSelect();
         const target = element('select');
         target.name = 'target';
         for (const value of COMPARISON_TARGETS) {
@@ -3814,16 +4429,44 @@ export class DevToolsWindow {
         const status = element('p', { className: 'st-devtools-policy-form-status' });
         status.setAttribute('aria-live', 'polite');
         form.append(
-            field('comparison.ruleKind', kind),
-            field('comparison.pattern', pattern),
-            field('comparison.fixedGroup', fixedGroup),
-            field('comparison.mode', mode, 'comparison.behaviorDescription'),
-            field('comparison.categories', categories),
-            field('comparison.target', target),
-            proseElement('small', t('comparison.categoriesHint')),
+            this.policyField('comparison.ruleKind', kind),
+            this.policyField('comparison.pattern', pattern),
+            this.policyField('comparison.fixedGroup', fixedGroup),
+            this.policyField('comparison.groupDefinition', groupDefinition),
+            this.policyField('comparison.target', target),
             submit,
             status,
         );
+        let previewTimer = null;
+        const updatePreview = () => {
+            const group = this.comparisonGroupDefinitions().find(
+                ({ id }) => id === groupDefinition.value,
+            );
+            const result = previewNameMatcher({
+                id: 'preview',
+                enabled: true,
+                kind: kind.value,
+                pattern: pattern.value.trim(),
+                fixedGroup: fixedGroup.value.trim() || null,
+                groupDefinitionId: groupDefinition.value,
+                target: target.value,
+            }, snapshot?.sources ?? [], group);
+            setPolicyFormStatus(
+                status,
+                result.error
+                    ? t('comparison.livePreviewError', { error: result.error })
+                    : t('comparison.livePreviewMatches', { count: result.totalMatches }),
+                Boolean(result.error),
+            );
+        };
+        const schedulePreview = () => {
+            clearTimeout(previewTimer);
+            previewTimer = setTimeout(updatePreview, 180);
+        };
+        [kind, pattern, fixedGroup, groupDefinition, target].forEach((control) => {
+            control.addEventListener('input', schedulePreview);
+            control.addEventListener('change', schedulePreview);
+        });
         form.addEventListener('submit', (event) => {
             event.preventDefault();
             const rule = {
@@ -3832,17 +4475,21 @@ export class DevToolsWindow {
                 kind: kind.value,
                 pattern: pattern.value.trim(),
                 fixedGroup: fixedGroup.value.trim() || null,
-                mode: mode.value,
-                categories: categoriesFromInput(categories.value),
+                groupDefinitionId: groupDefinition.value,
                 target: target.value,
             };
             const validationError = comparisonRuleError(rule);
             if (validationError) {
-                status.textContent = t('comparison.invalidRule', { message: validationError });
+                setPolicyFormStatus(
+                    status,
+                    t('comparison.invalidRule', { message: validationError }),
+                    true,
+                );
                 return;
             }
             this.replaceComparisonNameRules([...this.comparisonNameRules(), rule]);
             this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.rules = true;
             this.render();
         });
         return form;
@@ -3871,7 +4518,6 @@ export class DevToolsWindow {
         heading.append(element('strong', { text: assignment.sourceLabel || identity }), remove);
         card.append(
             heading,
-            element('small', { text: identity }),
             element('p', {
                 text: `${assignment.group} · ${assignment.option || t('common.unknown')} · ${policyModeLabel(assignment.mode)} · ${categoriesLabel(assignment.categories)}`,
             }),
@@ -3884,21 +4530,14 @@ export class DevToolsWindow {
         if (configuredSources.length === 0) {
             return proseElement('p', t('comparison.manualNoSources'));
         }
+        if (this.comparisonGroupDefinitions().length === 0) {
+            return proseElement('p', t('comparison.groupRequired'));
+        }
 
         const form = element('form', { className: 'st-devtools-policy-manual-form' });
-        const field = (labelKey, control, descriptionKey = null) => {
-            if (descriptionKey) {
-                return describedControlField(
-                    t(labelKey),
-                    control,
-                    t(descriptionKey),
-                );
-            }
-            const label = element('label');
-            label.append(element('span', { text: t(labelKey) }), control);
-            return label;
-        };
         const sourceSelect = element('select');
+        sourceSelect.multiple = true;
+        sourceSelect.size = Math.min(6, Math.max(2, configuredSources.length));
         for (const source of configuredSources) {
             const option = element('option', { text: policySourceLabel(source) });
             option.value = source.id;
@@ -3908,64 +4547,381 @@ export class DevToolsWindow {
         group.required = true;
         group.placeholder = t('comparison.groupPlaceholder');
         const optionName = element('input');
-        optionName.required = true;
         optionName.placeholder = t('comparison.optionPlaceholder');
-        const mode = element('select');
-        for (const value of COMPARISON_MODES) {
-            const option = element('option', { text: policyModeLabel(value) });
-            option.value = value;
-            mode.appendChild(option);
-        }
-        const categories = element('input');
-        categories.value = '*';
-        categories.placeholder = t('comparison.categoriesPlaceholder');
+        const groupDefinition = this.renderGroupDefinitionSelect();
         const submit = element('button', {
             className: 'menu_button',
             text: t('action.addManualAssignment'),
             type: 'submit',
         });
         form.append(
-            field('comparison.manualSource', sourceSelect),
-            field('comparison.group', group),
-            field('comparison.option', optionName),
-            field('comparison.mode', mode, 'comparison.behaviorDescription'),
-            field('comparison.categories', categories),
-            proseElement('small', t('comparison.categoriesHint')),
+            this.policyField('comparison.manualSources', sourceSelect),
+            proseElement('small', t('comparison.manualMultipleHint')),
+            this.policyField('comparison.groupDefinition', groupDefinition),
+            this.policyField('comparison.group', group),
+            this.policyField('comparison.optionOptional', optionName),
             submit,
         );
         form.addEventListener('submit', (event) => {
             event.preventDefault();
-            const source = configuredSources.find((item) => item.id === sourceSelect.value);
-            if (!source) return;
-            const assignment = {
-                id: policyId('manual'),
-                sourceIdentifier: source.metadata?.identifier ?? null,
-                sourceLabel: source.label ?? null,
-                sourceId: source.id,
-                group: group.value.trim(),
-                option: optionName.value.trim(),
-                mode: mode.value,
-                categories: categoriesFromInput(categories.value),
-            };
-            const identityMatches = (item) => (
-                Boolean(
-                    assignment.sourceIdentifier
-                    && item.sourceIdentifier === assignment.sourceIdentifier
-                )
-                || Boolean(assignment.sourceId && item.sourceId === assignment.sourceId)
-                || Boolean(
-                    assignment.sourceLabel
-                    && item.sourceLabel === assignment.sourceLabel
-                )
+            const selectedIds = new Set(
+                [...sourceSelect.selectedOptions].map(({ value }) => value),
             );
+            const selectedSources = configuredSources.filter(
+                ({ id }) => selectedIds.has(id),
+            );
+            if (selectedSources.length === 0) return;
+            const assignments = buildBulkManualAssignments(selectedSources, {
+                groupDefinitionId: groupDefinition.value,
+                group: group.value.trim(),
+                option: selectedSources.length === 1
+                    ? optionName.value.trim() || null
+                    : null,
+            });
+            const identities = new Set(assignments.map((assignment) => (
+                assignment.sourceIdentity.identifier
+                    ? `id:${assignment.sourceIdentity.identifier}`
+                    : `fp:${assignment.sourceIdentity.fingerprint}`
+            )));
             this.replaceManualAssignments([
-                ...this.comparisonManualAssignments().filter((item) => !identityMatches(item)),
-                assignment,
+                ...this.comparisonManualAssignments().filter((item) => {
+                    const identity = item.sourceIdentifier
+                        ? `id:${item.sourceIdentifier}`
+                        : `fp:${item.sourceFingerprint}`;
+                    return !identities.has(identity);
+                }),
+                ...assignments,
             ]);
             this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.manual = true;
             this.render();
         });
         return form;
+    }
+
+    comparisonScopeContext(snapshot) {
+        return resolveComparisonPolicyContext({
+            snapshot,
+            profileContext: snapshot?.profileContext,
+        });
+    }
+
+    applicableComparisonProfiles(snapshot) {
+        const context = this.comparisonScopeContext(snapshot);
+        const precedence = new Map(
+            COMPARISON_POLICY_PROFILE_SCOPES.map((scope, index) => [scope, index]),
+        );
+        return this.comparisonProfiles()
+            .filter((profile) => {
+                if (!profile.enabled) return false;
+                if (profile.scope.kind === 'global') return true;
+                return comparisonScopeKeyEquals(
+                    context[profile.scope.kind]?.key,
+                    profile.scope.key,
+                );
+            })
+            .sort((left, right) => (
+                precedence.get(right.scope.kind) - precedence.get(left.scope.kind)
+                || right.priority - left.priority
+            ));
+    }
+
+    renderComparisonProfiles(snapshot) {
+        const wrapper = element('div', { className: 'st-devtools-policy-profile-manager' });
+        const selector = element('select');
+        for (const profile of this.comparisonProfiles()) {
+            const option = element('option', {
+                text: `${profile.label} · ${t(`comparison.profile.scope.${profile.scope.kind}`)}`,
+            });
+            option.value = profile.id;
+            option.selected = profile.id === this.activeComparisonProfile()?.id;
+            selector.appendChild(option);
+        }
+        selector.addEventListener('change', () => {
+            this.activeComparisonProfileId = selector.value;
+            this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.profiles = true;
+            this.render();
+        });
+        wrapper.appendChild(this.policyField('comparison.profile.editing', selector));
+
+        const chain = this.applicableComparisonProfiles(snapshot);
+        const chainCard = element('div', { className: 'st-devtools-policy-profile-chain' });
+        chainCard.append(
+            element('strong', { text: t('comparison.profile.activeChain') }),
+            element('p', {
+                text: chain.length > 0
+                    ? chain.map((profile) => (
+                        `${t(`comparison.profile.scope.${profile.scope.kind}`)}: ${profile.label}`
+                    )).join(' → ')
+                    : t('comparison.profile.noActive'),
+            }),
+        );
+        wrapper.appendChild(chainCard);
+
+        const active = this.activeComparisonProfile();
+        if (active) {
+            const actions = element('div', {
+                className: 'st-devtools-policy-profile-actions',
+            });
+            const enabledLabel = element('label', {
+                className: 'st-devtools-policy-enabled',
+            });
+            const enabled = element('input');
+            enabled.type = 'checkbox';
+            enabled.checked = active.enabled !== false;
+            enabled.addEventListener('change', () => {
+                this.replaceActiveComparisonProfile({
+                    ...active,
+                    enabled: enabled.checked,
+                });
+                this.comparisonPolicyOpen = true;
+                this.comparisonPolicySectionOpen.profiles = true;
+                this.render();
+            });
+            enabledLabel.append(enabled, document.createTextNode(
+                ` ${t('comparison.profile.enabled')}`,
+            ));
+            actions.appendChild(enabledLabel);
+            const priority = element('input');
+            priority.type = 'number';
+            priority.min = '-1000';
+            priority.max = '1000';
+            priority.step = '1';
+            priority.value = String(active.priority ?? 0);
+            priority.addEventListener('change', () => {
+                this.replaceActiveComparisonProfile({
+                    ...active,
+                    priority: Math.max(
+                        -1000,
+                        Math.min(1000, Math.trunc(Number(priority.value) || 0)),
+                    ),
+                });
+                this.comparisonPolicyOpen = true;
+                this.comparisonPolicySectionOpen.profiles = true;
+                this.render();
+            });
+            actions.appendChild(this.policyField(
+                'comparison.profile.priority',
+                priority,
+                'comparison.profile.priorityDescription',
+            ));
+            if (active.scope.kind !== 'global') {
+                const remove = element('button', {
+                    className: 'menu_button',
+                    text: t('action.deleteProfile'),
+                    type: 'button',
+                });
+                remove.addEventListener('click', () => {
+                    if (!confirm(t('comparison.profile.deleteConfirm'))) return;
+                    const profiles = this.comparisonProfiles().filter(
+                        ({ id }) => id !== active.id,
+                    );
+                    this.setComparisonPolicySettings({
+                        ...this.comparisonPolicySettings,
+                        profiles,
+                    });
+                    this.activeComparisonProfileId = profiles[0]?.id ?? 'global';
+                    this.comparisonPolicyOpen = true;
+                    this.comparisonPolicySectionOpen.profiles = true;
+                    this.render();
+                });
+                actions.appendChild(remove);
+            }
+            wrapper.appendChild(actions);
+        }
+
+        const context = this.comparisonScopeContext(snapshot);
+        const creator = element('form', {
+            className: 'st-devtools-policy-profile-creator',
+        });
+        const scope = element('select');
+        const scopeKey = (kind) => (
+            kind === 'global' ? null : context[kind]?.key ?? null
+        );
+        const profileExists = (kind) => this.comparisonProfiles().some((profile) => (
+            profile.scope.kind === kind
+            && (
+                kind === 'global'
+                || comparisonScopeKeyEquals(profile.scope.key, scopeKey(kind))
+            )
+        ));
+        const scopeAvailable = (kind) => (
+            (kind === 'global' || Boolean(scopeKey(kind)))
+            && !profileExists(kind)
+        );
+        for (const value of COMPARISON_POLICY_PROFILE_SCOPES) {
+            const option = element('option', {
+                text: t(`comparison.profile.scope.${value}`),
+            });
+            option.value = value;
+            option.disabled = !scopeAvailable(value);
+            scope.appendChild(option);
+        }
+        const firstAvailableScope = [...scope.options].find(({ disabled }) => !disabled);
+        if (firstAvailableScope) scope.value = firstAvailableScope.value;
+        scope.disabled = !firstAvailableScope;
+        const label = element('input');
+        label.required = true;
+        label.placeholder = t('comparison.profile.labelPlaceholder');
+        const scopeState = element('small', { className: 'st-devtools-policy-scope-state' });
+        const updateScopeState = () => {
+            const entry = context[scope.value];
+            scopeState.textContent = !firstAvailableScope
+                ? t('comparison.profile.noAvailableScopes')
+                : profileExists(scope.value)
+                    ? t('comparison.profile.scopeExists')
+                    : scope.value === 'global'
+                        ? t('comparison.profile.scopeGlobalHint')
+                        : entry
+                            ? t('comparison.profile.scopeDetected', { label: entry.label })
+                            : t('comparison.profile.scopeUnavailable');
+            if (!label.value.trim() && entry?.label) label.placeholder = entry.label;
+        };
+        scope.addEventListener('change', updateScopeState);
+        updateScopeState();
+        const add = element('button', {
+            className: 'menu_button',
+            text: t('action.addProfile'),
+            type: 'submit',
+        });
+        add.disabled = !firstAvailableScope;
+        creator.append(
+            this.policyField('comparison.profile.scope', scope),
+            scopeState,
+            this.policyField('comparison.profile.label', label),
+            add,
+        );
+        creator.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const entry = context[scope.value];
+            const key = scope.value === 'global' ? null : entry?.key;
+            if (scope.value !== 'global' && !key) return;
+            if (!scopeAvailable(scope.value)) return;
+            const profile = {
+                id: policyId(`profile-${scope.value}`),
+                label: label.value.trim() || entry?.label || scope.value,
+                enabled: true,
+                priority: 0,
+                scope: { kind: scope.value, key },
+                groupDefinitions: [],
+                matchers: [],
+                manualAssignments: [],
+            };
+            this.setComparisonPolicySettings({
+                ...this.comparisonPolicySettings,
+                profiles: [...this.comparisonProfiles(), profile],
+            });
+            this.activeComparisonProfileId = profile.id;
+            this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.profiles = true;
+            this.render();
+        });
+        wrapper.appendChild(creator);
+        return wrapper;
+    }
+
+    renderPolicyTransfer() {
+        const wrapper = element('div', { className: 'st-devtools-policy-transfer' });
+        const includeReviewsLabel = element('label', {
+            className: 'st-devtools-policy-checkbox-label',
+        });
+        const includeReviews = element('input');
+        includeReviews.type = 'checkbox';
+        includeReviewsLabel.append(
+            includeReviews,
+            document.createTextNode(` ${t('comparison.transfer.includeReviews')}`),
+        );
+        const exportButton = element('button', {
+            className: 'menu_button',
+            text: t('action.exportPolicy'),
+            type: 'button',
+        });
+        const importInput = element('input');
+        importInput.type = 'file';
+        importInput.accept = 'application/json,.json';
+        const status = element('p', { className: 'st-devtools-policy-form-status' });
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+
+        exportButton.addEventListener('click', () => {
+            try {
+                const serialized = serializePolicyDocument({
+                    ruleSettings: this.pendingImportedRuleSettings ?? this.ruleSettings,
+                    comparisonPolicy: this.comparisonPolicySettings,
+                    reviews: includeReviews.checked
+                        ? this.pendingImportedReviews ?? this.findingReviewDocument
+                        : null,
+                    extensionVersion: this.version,
+                });
+                downloadText(
+                    `st-devtools-rule-policy-${Date.now()}.json`,
+                    serialized,
+                    'application/json',
+                );
+                setPolicyFormStatus(status, t('comparison.transfer.exported'));
+            } catch (error) {
+                setPolicyFormStatus(
+                    status,
+                    t('comparison.transfer.failed', {
+                        error: error?.code ?? error?.message ?? t('common.unknown'),
+                    }),
+                    true,
+                );
+            }
+        });
+        importInput.addEventListener('change', async () => {
+            const file = importInput.files?.[0];
+            if (!file) return;
+            if (file.size > POLICY_IO_LIMITS.inputBytes) {
+                setPolicyFormStatus(status, t('comparison.transfer.tooLarge'), true);
+                importInput.value = '';
+                return;
+            }
+            try {
+                const prepared = preparePolicyImport(await file.text(), {
+                    ruleSettings: this.pendingImportedRuleSettings ?? this.ruleSettings,
+                    comparisonPolicy: this.comparisonPolicySettings,
+                    reviews: this.pendingImportedReviews ?? this.findingReviewDocument,
+                });
+                this.pendingImportedRuleSettings = prepared.nextState.ruleSettings;
+                this.pendingImportedReviews = prepared.nextState.reviews ?? null;
+                this.setComparisonPolicySettings(prepared.nextState.comparisonPolicy);
+                this.comparisonPolicyDirty = true;
+                this.comparisonPolicyOpen = true;
+                this.comparisonPolicySectionOpen.transfer = true;
+                this.comparisonPolicySectionOpen.preview = true;
+                this.ruleAuditLog = appendAuditEntry(this.ruleAuditLog, {
+                    action: 'policy.import-preview',
+                    before: this.savedComparisonPolicySettings,
+                    after: this.comparisonPolicySettings,
+                    summary: {
+                        profiles: this.comparisonPolicySettings.profiles.length,
+                    },
+                });
+                this.ruleReviewStatus = t('comparison.transfer.ready');
+                this.ruleReviewStatusIsError = false;
+                this.render();
+            } catch (error) {
+                setPolicyFormStatus(
+                    status,
+                    t('comparison.transfer.failed', {
+                        error: error?.code ?? error?.message ?? t('common.unknown'),
+                    }),
+                    true,
+                );
+            } finally {
+                importInput.value = '';
+            }
+        });
+        wrapper.append(
+            proseElement('p', t('comparison.transfer.privacy')),
+            includeReviewsLabel,
+            exportButton,
+            this.policyField('comparison.transfer.import', importInput),
+            status,
+        );
+        return wrapper;
     }
 
     createComparisonPolicySection(key, title, description) {
@@ -3984,120 +4940,174 @@ export class DevToolsWindow {
         return { details, content };
     }
 
+    policyPreviewFor(snapshot) {
+        const key = [
+            this.policyPreviewRevision,
+            snapshot?.id ?? 'none',
+            snapshot?.sources?.length ?? 0,
+            snapshot?.finalText?.length ?? 0,
+        ].join(':');
+        if (this.policyPreviewCache?.key === key) {
+            return this.policyPreviewCache.value;
+        }
+        const value = {
+            preview: buildPolicyChangePreview(
+                snapshot,
+                this.ruleSettings,
+                this.savedComparisonPolicySettings,
+                this.comparisonPolicySettings,
+                this.pendingImportedRuleSettings ?? this.ruleSettings,
+            ),
+            annotated: annotateSourcesWithPolicies(
+                snapshot?.sources ?? [],
+                this.comparisonPolicySettings,
+                snapshot,
+            ),
+        };
+        this.policyPreviewCache = { key, value };
+        return value;
+    }
+
     renderComparisonPreview(snapshot) {
         const { details: section, content } = this.createComparisonPolicySection(
             'preview',
             t('comparison.previewTitle'),
             t('comparison.previewDescription'),
         );
-        try {
-            const annotated = annotateSourcesWithPolicies(
-                snapshot?.sources ?? [],
-                this.comparisonPolicySettings,
-            );
-            const entries = Array.isArray(annotated)
-                ? annotated
-                : annotated?.sources ?? annotated?.annotatedSources ?? [];
-            const rows = entries
-                .map((entry) => ({
-                    source: entry?.source ?? entry,
-                    policy: entry?.policy
-                        ?? entry?.comparisonPolicy
-                        ?? entry?.metadata?.comparisonPolicy
-                        ?? null,
-                }))
-                .filter(({ source }) => (
-                    source?.type !== 'final'
-                    && source?.type !== 'chat_history'
-                    && source?.content?.trim()
-                ));
-            if (rows.length === 0) {
-                content.appendChild(proseElement('p', t('comparison.previewEmpty')));
-                return section;
-            }
+        let mounted = false;
+        const mount = () => {
+            if (mounted) return;
+            mounted = true;
+            try {
+                if (!this.comparisonPolicyDirty) {
+                    content.appendChild(proseElement(
+                        'p',
+                        t('comparison.diff.noDraftChanges'),
+                    ));
+                    return;
+                }
+                const { preview, annotated } = this.policyPreviewFor(snapshot);
+                const summary = element('dl', {
+                    className: 'st-devtools-policy-diff-summary',
+                });
+                const stat = (label, value) => {
+                    const item = element('div');
+                    item.append(
+                        element('dt', { text: label }),
+                        element('dd', { text: value }),
+                    );
+                    summary.appendChild(item);
+                };
+                stat(t('comparison.diff.beforeFindings'), preview.before.findings);
+                stat(t('comparison.diff.afterFindings'), preview.after.findings);
+                stat(t('comparison.diff.added'), preview.findingDelta.added);
+                stat(t('comparison.diff.removed'), preview.findingDelta.removed);
+                stat(t('comparison.diff.unchanged'), preview.findingDelta.unchanged);
+                stat(t('comparison.diff.suppressed'), preview.after.suppressed);
+                content.appendChild(summary);
+                if (preview.truncated) {
+                    content.appendChild(proseElement(
+                        'p',
+                        t('comparison.diff.truncated'),
+                        { className: 'st-devtools-policy-invalid' },
+                    ));
+                }
 
-            const tableWrapper = element('div', { className: 'st-devtools-policy-table-wrapper' });
-            const table = element('table', { className: 'st-devtools-policy-table' });
-            const head = element('thead');
-            const headingRow = element('tr');
-            for (const key of [
-                'comparison.previewName',
-                'comparison.previewPolicy',
-                'comparison.previewState',
-            ]) {
-                headingRow.appendChild(element('th', { text: t(key) }));
-            }
-            head.appendChild(headingRow);
-            const body = element('tbody');
-            for (const { source, policy } of rows) {
-                const row = element('tr');
-                const name = element('td');
-                name.appendChild(element('strong', { text: policySourceLabel(source) }));
-                if (source.metadata?.identifier) {
-                    name.appendChild(element('small', {
-                        text: t('comparison.manualIdentifier', {
-                            identifier: source.metadata.identifier,
+                const rows = annotated.filter(({ type, content: sourceContent }) => (
+                    type !== 'final'
+                    && type !== 'chat_history'
+                    && sourceContent?.trim()
+                ));
+                if (rows.length === 0) {
+                    content.appendChild(proseElement('p', t('comparison.previewEmpty')));
+                    return;
+                }
+                const list = element('div', { className: 'st-devtools-policy-preview-list' });
+                for (const source of rows.slice(0, POLICY_PREVIEW_SOURCE_LIMIT)) {
+                    const policy = source.comparisonPolicy
+                        ?? source.metadata?.comparisonPolicy
+                        ?? null;
+                    const card = element('article', {
+                        className: 'st-devtools-policy-preview-card',
+                    });
+                    card.appendChild(element('strong', {
+                        text: policySourceLabel(source),
+                    }));
+                    if (policy) {
+                        card.append(
+                            element('span', {
+                                text: `${policy.group} · ${
+                                    policy.option || t('common.unknown')
+                                }`,
+                            }),
+                            element('small', {
+                                text: t('comparison.previewTrace', {
+                                    profile: policy.profileLabel
+                                        ?? policy.profileId
+                                        ?? t('common.unknown'),
+                                    scope: t(
+                                        `comparison.profile.scope.${
+                                            policy.profileScope ?? 'global'
+                                        }`,
+                                    ),
+                                    origin: policy.origin === 'manual'
+                                        ? t('comparison.previewManual')
+                                        : t('comparison.previewRule'),
+                                }),
+                            }),
+                        );
+                    } else {
+                        card.appendChild(element('span', {
+                            text: t('comparison.previewNoPolicy'),
+                        }));
+                    }
+                    const state = element('small', {
+                        text: [
+                            source.configuredEnabled === false
+                                || source.metadata?.configuredEnabled === false
+                                ? t('comparison.previewDisabled')
+                                : t('comparison.previewEnabled'),
+                            source.included === false
+                                ? t('comparison.previewNotIncluded')
+                                : t('comparison.previewIncluded'),
+                        ].join(' · '),
+                    });
+                    card.appendChild(state);
+                    list.appendChild(card);
+                }
+                content.appendChild(list);
+                if (rows.length > POLICY_PREVIEW_SOURCE_LIMIT) {
+                    content.appendChild(proseElement('p', t(
+                        'comparison.previewSourceTruncated',
+                        {
+                            shown: POLICY_PREVIEW_SOURCE_LIMIT,
+                            total: rows.length,
+                        },
+                    )));
+                }
+                if (preview.assignmentChanges.length > 0) {
+                    content.appendChild(element('p', {
+                        className: 'st-devtools-policy-preview-note',
+                        text: t('comparison.diff.assignmentChanges', {
+                            count: preview.assignmentChanges.length,
                         }),
                     }));
                 }
-                const policyCell = element('td');
-                if (policy?.groupKey || policy?.group) {
-                    const group = policy.group ?? policy.groupKey;
-                    policyCell.append(
-                        element('strong', {
-                            text: `${group} · ${policy.option || t('common.unknown')}`,
-                        }),
-                        element('small', { text: policyModeLabel(policy.mode) }),
-                    );
-                    const origin = policy.origin ?? policy.matchType ?? policy.source;
-                    if (origin) {
-                        policyCell.appendChild(element('small', {
-                            text: t('comparison.previewMatched', {
-                                origin: origin === 'manual'
-                                    ? t('comparison.previewManual')
-                                    : t('comparison.previewRule'),
-                            }),
-                        }));
-                    }
-                } else {
-                    policyCell.textContent = t('comparison.previewNoPolicy');
-                }
-                const state = element('td');
-                const configuredEnabled = source.configuredEnabled
-                    ?? source.metadata?.configuredEnabled
-                    ?? source.metadata?.enabled;
-                state.append(
-                    element('span', {
-                        text: configuredEnabled === true
-                            ? t('comparison.previewEnabled')
-                            : configuredEnabled === false
-                                ? t('comparison.previewDisabled')
-                                : t('comparison.previewEnabledUnknown'),
+            } catch (error) {
+                const message = element('p', {
+                    className: 'st-devtools-policy-invalid',
+                    text: t('comparison.previewInvalid', {
+                        message: error?.message ?? t('common.unknown'),
                     }),
-                    element('span', {
-                        text: source.included === true
-                            ? t('comparison.previewIncluded')
-                            : source.included === false
-                                ? t('comparison.previewNotIncluded')
-                                : t('comparison.previewIncludedUnknown'),
-                    }),
-                );
-                row.append(name, policyCell, state);
-                body.appendChild(row);
+                });
+                message.setAttribute('role', 'alert');
+                content.appendChild(message);
             }
-            table.append(head, body);
-            tableWrapper.appendChild(table);
-            content.appendChild(tableWrapper);
-        } catch (error) {
-            const message = element('p', {
-                className: 'st-devtools-policy-invalid',
-                text: t('comparison.previewInvalid', {
-                    message: error?.message ?? t('common.unknown'),
-                }),
-            });
-            message.setAttribute('role', 'alert');
-            content.appendChild(message);
-        }
+        };
+        section.addEventListener('toggle', () => {
+            if (section.open) mount();
+        });
+        if (section.open) mount();
         return section;
     }
 
@@ -4121,6 +5131,26 @@ export class DevToolsWindow {
 
         const content = element('div', { className: 'st-devtools-policy-content' });
         const {
+            details: profileSection,
+            content: profileContent,
+        } = this.createComparisonPolicySection(
+            'profiles',
+            t('comparison.profile.title'),
+            t('comparison.profile.description'),
+        );
+        profileContent.appendChild(this.renderComparisonProfiles(snapshot));
+
+        const {
+            details: groupSection,
+            content: groupContent,
+        } = this.createComparisonPolicySection(
+            'groups',
+            t('comparison.groupDefinition.title'),
+            t('comparison.groupDefinition.description'),
+        );
+        groupContent.appendChild(this.renderComparisonGroupDefinitions());
+
+        const {
             details: ruleSection,
             content: ruleContent,
         } = this.createComparisonPolicySection(
@@ -4134,10 +5164,10 @@ export class DevToolsWindow {
             ruleList.appendChild(proseElement('p', t('comparison.noRules')));
         } else {
             rules.forEach((rule, index) => {
-                ruleList.appendChild(this.renderComparisonRuleCard(rule, index));
+                ruleList.appendChild(this.renderComparisonRuleCard(rule, index, snapshot));
             });
         }
-        ruleContent.append(ruleList, this.renderComparisonRuleCreator());
+        ruleContent.append(ruleList, this.renderComparisonRuleCreator(snapshot));
 
         const {
             details: manualSection,
@@ -4153,6 +5183,16 @@ export class DevToolsWindow {
         });
         manualContent.append(assignmentList, this.renderManualAssignmentCreator(snapshot));
 
+        const {
+            details: transferSection,
+            content: transferContent,
+        } = this.createComparisonPolicySection(
+            'transfer',
+            t('comparison.transfer.title'),
+            t('comparison.transfer.description'),
+        );
+        transferContent.appendChild(this.renderPolicyTransfer());
+
         const actions = element('div', {
             className: 'st-devtools-rule-setting-actions st-devtools-policy-actions',
         });
@@ -4162,8 +5202,24 @@ export class DevToolsWindow {
             type: 'button',
         });
         save.addEventListener('click', () => {
-            this.saveComparisonPolicySettings();
+            const result = this.commitPolicyDraft();
             this.comparisonPolicyOpen = true;
+            if (!result.ok) {
+                this.ruleReviewStatus = t('comparison.settingsSaveFailed', {
+                    error: result.error?.message ?? t('common.unknown'),
+                });
+                this.ruleReviewStatusIsError = true;
+                globalThis.toastr?.error?.(
+                    t('comparison.settingsSaveFailed', {
+                        error: result.error?.message ?? t('common.unknown'),
+                    }),
+                    'ST DevTools',
+                );
+                this.render();
+                return;
+            }
+            this.ruleReviewStatus = t('comparison.settingsSaved');
+            this.ruleReviewStatusIsError = false;
             this.render();
             globalThis.toastr?.info?.(t('comparison.settingsSaved'), 'ST DevTools');
         });
@@ -4173,17 +5229,43 @@ export class DevToolsWindow {
             type: 'button',
         });
         reset.addEventListener('click', () => {
-            this.saveComparisonPolicySettings(DEFAULT_COMPARISON_POLICY_SETTINGS);
+            this.pendingImportedRuleSettings = null;
+            this.pendingImportedReviews = null;
+            this.setComparisonPolicySettings(DEFAULT_COMPARISON_POLICY_SETTINGS);
+            this.activeComparisonProfileId = 'global';
             this.comparisonPolicyOpen = true;
+            this.comparisonPolicySectionOpen.preview = true;
+            this.ruleReviewStatus = t('comparison.settingsResetDraft');
+            this.ruleReviewStatusIsError = false;
             this.render();
-            globalThis.toastr?.info?.(t('comparison.settingsReset'), 'ST DevTools');
+            globalThis.toastr?.info?.(t('comparison.settingsResetDraft'), 'ST DevTools');
         });
-        actions.append(save, reset);
+        const dirty = element('span', {
+            className: this.comparisonPolicyDirty
+                ? 'st-devtools-policy-dirty is-dirty'
+                : 'st-devtools-policy-dirty',
+            text: this.comparisonPolicyDirty
+                ? t('comparison.unsavedChanges')
+                : t('comparison.savedState'),
+        });
+        const status = element('p', {
+            className: this.ruleReviewStatusIsError
+                ? 'st-devtools-policy-form-status is-error'
+                : 'st-devtools-policy-form-status',
+            text: this.ruleReviewStatus,
+        });
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        actions.append(dirty, save, reset);
         content.append(
+            profileSection,
+            groupSection,
             ruleSection,
             manualSection,
             this.renderComparisonPreview(snapshot),
+            transferSection,
             actions,
+            status,
         );
         details.appendChild(content);
         return details;
@@ -4191,6 +5273,14 @@ export class DevToolsWindow {
 
     renderComparisonAnalysis(snapshot, comparison = {}) {
         const suppressed = comparison.suppressedComparisons ?? [];
+        const suppressedTotal = Number.isFinite(comparison.suppressedComparisonCount)
+            ? comparison.suppressedComparisonCount
+            : suppressed.length;
+        const suppressedOmitted = Number.isFinite(comparison.suppressedComparisonsOmitted)
+            ? comparison.suppressedComparisonsOmitted
+            : Math.max(0, suppressedTotal - suppressed.length);
+        const suppressedTruncated = comparison.suppressedComparisonsTruncated === true
+            || suppressedOmitted > 0;
         const skipped = comparison.skippedSources ?? [];
         const groups = comparison.groups ?? [];
         const warnings = comparison.groupWarnings ?? [];
@@ -4205,92 +5295,116 @@ export class DevToolsWindow {
             ),
             element('span', {
                 className: 'st-devtools-policy-result-count',
-                text: t('comparison.suppressedCount', { count: suppressed.length }),
+                text: t('comparison.suppressedCount', { count: suppressedTotal }),
             }),
         );
         details.appendChild(summary);
 
-        const content = element('div', { className: 'st-devtools-policy-result-content' });
-        const badges = element('div', { className: 'st-devtools-rule-summary' });
-        badges.append(
-            element('span', {
-                className: 'st-devtools-policy-result-count',
-                text: t('comparison.skippedCount', { count: skipped.length }),
-            }),
-            element('span', {
-                className: 'st-devtools-policy-result-count',
-                text: t('comparison.groupCount', { count: groups.length }),
-            }),
-            element('span', {
-                className: warnings.length
-                    ? 'st-devtools-policy-result-count has-warning'
-                    : 'st-devtools-policy-result-count',
-                text: t('comparison.warningCount', { count: warnings.length }),
-            }),
-        );
-        content.appendChild(badges);
-        const sourceById = new Map((snapshot?.sources ?? []).map((source) => [source.id, source]));
-        const listSection = (titleKey, items, formatter, className = '') => {
-            if (items.length === 0) return;
-            const section = element('section', {
-                className: `st-devtools-policy-result-section ${className}`.trim(),
+        attachLazyDetailsContent(details, () => {
+            const content = element('div', { className: 'st-devtools-policy-result-content' });
+            const badges = element('div', { className: 'st-devtools-rule-summary' });
+            badges.append(
+                element('span', {
+                    className: 'st-devtools-policy-result-count',
+                    text: t('comparison.skippedCount', { count: skipped.length }),
+                }),
+                element('span', {
+                    className: 'st-devtools-policy-result-count',
+                    text: t('comparison.groupCount', { count: groups.length }),
+                }),
+                element('span', {
+                    className: warnings.length
+                        ? 'st-devtools-policy-result-count has-warning'
+                        : 'st-devtools-policy-result-count',
+                    text: t('comparison.warningCount', { count: warnings.length }),
+                }),
+            );
+            content.appendChild(badges);
+            const sourceById = new Map(
+                (snapshot?.sources ?? []).map((source) => [source.id, source]),
+            );
+            const listSection = (titleKey, items, formatter, className = '') => {
+                if (items.length === 0) return;
+                const section = element('section', {
+                    className: `st-devtools-policy-result-section ${className}`.trim(),
+                });
+                section.appendChild(element('h4', { text: t(titleKey) }));
+                const list = element('ul');
+                items.forEach((item) => {
+                    list.appendChild(element('li', { text: formatter(item) }));
+                });
+                section.appendChild(list);
+                content.appendChild(section);
+            };
+            listSection('comparison.suppressedTitle', suppressed, (item) => {
+                const left = item?.leftId
+                    ?? item?.leftSourceId
+                    ?? item?.left
+                    ?? item?.sourceIds?.[0];
+                const right = item?.rightId
+                    ?? item?.rightSourceId
+                    ?? item?.right
+                    ?? item?.sourceIds?.[1];
+                const pair = t('comparison.itemPair', {
+                    left: sourceReferenceLabel(left, sourceById),
+                    right: sourceReferenceLabel(right, sourceById),
+                });
+                const suffix = [
+                    item?.group,
+                    item?.category,
+                    item?.reason ? policyReasonLabel(item.reason) : null,
+                ].filter(Boolean).join(' · ');
+                return suffix ? `${pair} · ${suffix}` : pair;
             });
-            section.appendChild(element('h4', { text: t(titleKey) }));
-            const list = element('ul');
-            items.forEach((item) => {
-                list.appendChild(element('li', { text: formatter(item) }));
+            if (suppressedTruncated) {
+                content.appendChild(proseElement(
+                    'p',
+                    t('comparison.suppressedTruncated', {
+                        total: suppressedTotal,
+                        shown: suppressed.length,
+                        omitted: suppressedOmitted,
+                    }),
+                    { className: 'st-devtools-policy-result-note' },
+                ));
+            }
+            listSection('comparison.skippedTitle', skipped, (item) => {
+                const label = sourceReferenceLabel(
+                    item?.sourceId ?? item?.id ?? item,
+                    sourceById,
+                );
+                return item?.reason ? `${label} · ${policyReasonLabel(item.reason)}` : label;
             });
-            section.appendChild(list);
-            content.appendChild(section);
-        };
-        listSection('comparison.suppressedTitle', suppressed, (item) => {
-            const left = item?.leftId ?? item?.leftSourceId ?? item?.left ?? item?.sourceIds?.[0];
-            const right = item?.rightId ?? item?.rightSourceId ?? item?.right ?? item?.sourceIds?.[1];
-            const pair = t('comparison.itemPair', {
-                left: sourceReferenceLabel(left, sourceById),
-                right: sourceReferenceLabel(right, sourceById),
+            listSection('comparison.groupsTitle', groups, (item) => {
+                const sourceIds = item?.sourceIds ?? item?.members ?? item?.sources ?? [];
+                const activeSourceIds = item?.activeSourceIds ?? [];
+                const options = item?.options ?? item?.activeOptions ?? [];
+                return t('comparison.groupSummary', {
+                    group: item?.group ?? item?.name ?? t('common.unknown'),
+                    mode: policyModeLabel(item?.mode),
+                    count: sourceIds.length,
+                    active: activeSourceIds.length,
+                    options: options.join(', ') || t('common.unknown'),
+                });
             });
-            const suffix = [
-                item?.group,
-                item?.category,
-                item?.reason ? policyReasonLabel(item.reason) : null,
-            ].filter(Boolean).join(' · ');
-            return suffix ? `${pair} · ${suffix}` : pair;
+            listSection(
+                'comparison.groupWarningsTitle',
+                warnings,
+                (item) => item?.message
+                    ?? (item?.group
+                        ? `${item.group} · ${t('comparison.groupWarningFallback')}`
+                        : t('comparison.groupWarningFallback')),
+                'has-warning',
+            );
+            if (
+                suppressedTotal === 0
+                && skipped.length === 0
+                && groups.length === 0
+                && warnings.length === 0
+            ) {
+                content.appendChild(proseElement('p', t('comparison.noPolicyEffects')));
+            }
+            return content;
         });
-        listSection('comparison.skippedTitle', skipped, (item) => {
-            const label = sourceReferenceLabel(item?.sourceId ?? item?.id ?? item, sourceById);
-            return item?.reason ? `${label} · ${policyReasonLabel(item.reason)}` : label;
-        });
-        listSection('comparison.groupsTitle', groups, (item) => {
-            const sourceIds = item?.sourceIds ?? item?.members ?? item?.sources ?? [];
-            const activeSourceIds = item?.activeSourceIds ?? [];
-            const options = item?.options ?? item?.activeOptions ?? [];
-            return t('comparison.groupSummary', {
-                group: item?.group ?? item?.name ?? t('common.unknown'),
-                mode: policyModeLabel(item?.mode),
-                count: sourceIds.length,
-                active: activeSourceIds.length,
-                options: options.join(', ') || t('common.unknown'),
-            });
-        });
-        listSection(
-            'comparison.groupWarningsTitle',
-            warnings,
-            (item) => item?.message
-                ?? (item?.group
-                    ? `${item.group} · ${t('comparison.groupWarningFallback')}`
-                    : t('comparison.groupWarningFallback')),
-            'has-warning',
-        );
-        if (
-            suppressed.length === 0
-            && skipped.length === 0
-            && groups.length === 0
-            && warnings.length === 0
-        ) {
-            content.appendChild(proseElement('p', t('comparison.noPolicyEffects')));
-        }
-        details.appendChild(content);
         return details;
     }
 
@@ -4569,6 +5683,312 @@ export class DevToolsWindow {
         return details;
     }
 
+    findingReviewContext(snapshot) {
+        const context = this.comparisonScopeContext(snapshot);
+        return {
+            scopeKeys: {
+                preset: context.preset?.key ?? null,
+                character: context.character?.key ?? null,
+                chat: context.chat?.key ?? null,
+            },
+        };
+    }
+
+    findingIgnoreScopeProfiles(snapshot) {
+        const applicable = this.applicableComparisonProfiles(snapshot);
+        if (applicable.length > 0) return applicable;
+        const global = this.comparisonProfiles().find(
+            ({ enabled, scope }) => enabled && scope.kind === 'global',
+        );
+        return global ? [global] : [];
+    }
+
+    shouldStageFindingReview() {
+        return Boolean(
+            this.comparisonPolicyDirty
+            || this.pendingImportedRuleSettings
+            || this.pendingImportedReviews,
+        );
+    }
+
+    updateFindingDecision(snapshot, finding, decision) {
+        const staged = this.shouldStageFindingReview();
+        const next = setFindingDecision(
+            staged
+                ? this.pendingImportedReviews ?? this.findingReviewDocument
+                : this.findingReviewDocument,
+            finding,
+            snapshot?.sources ?? [],
+            decision,
+        );
+        if (staged) {
+            this.pendingImportedReviews = normalizeFindingReviewDocument(next);
+            this.comparisonPolicyDirty = true;
+            this.ruleReviewStatus = t('review.draftUpdated');
+            this.ruleReviewStatusIsError = false;
+        } else {
+            const result = this.saveFindingReviewDocument(next);
+            this.ruleReviewStatus = result.ok
+                ? t(decision
+                    ? `review.saved.${decision}`
+                    : 'review.saved.cleared')
+                : t('review.saveFailed', {
+                    error: result.error?.message ?? t('common.unknown'),
+                });
+            this.ruleReviewStatusIsError = !result.ok;
+        }
+        this.render();
+    }
+
+    updateFindingIgnore(snapshot, finding, enabled, review = null, profile = null) {
+        const selectedProfile = profile
+            ?? this.findingIgnoreScopeProfiles(snapshot)[0]
+            ?? null;
+        const scope = review?.ignoreScope ?? selectedProfile?.scope?.kind ?? 'global';
+        const scopeKey = review?.ignoreScopeKey ?? (
+            scope === 'global' ? null : selectedProfile?.scope?.key
+        );
+        if (scope !== 'global' && !scopeKey) {
+            this.ruleReviewStatus = t('review.scopeUnavailable');
+            this.ruleReviewStatusIsError = true;
+            this.render();
+            return;
+        }
+        const staged = this.shouldStageFindingReview();
+        const next = setFindingIgnore(
+            staged
+                ? this.pendingImportedReviews ?? this.findingReviewDocument
+                : this.findingReviewDocument,
+            finding,
+            snapshot?.sources ?? [],
+            {
+                enabled,
+                scope,
+                scopeKey,
+                label: selectedProfile?.label ?? null,
+            },
+        );
+        if (staged) {
+            this.pendingImportedReviews = normalizeFindingReviewDocument(next);
+            this.comparisonPolicyDirty = true;
+            this.ruleReviewStatus = t('review.draftUpdated');
+            this.ruleReviewStatusIsError = false;
+        } else {
+            const result = this.saveFindingReviewDocument(next);
+            this.ruleReviewStatus = result.ok
+                ? t(enabled ? 'review.saved.ignored' : 'review.saved.ignoreRemoved')
+                : t('review.saveFailed', {
+                    error: result.error?.message ?? t('common.unknown'),
+                });
+            this.ruleReviewStatusIsError = !result.ok;
+        }
+        this.render();
+    }
+
+    renderFindingReviewControls(snapshot, finding) {
+        const details = element('details', { className: 'st-devtools-finding-review' });
+        details.appendChild(element('summary', { text: t('review.action.open') }));
+        const fieldset = element('fieldset');
+        fieldset.appendChild(element('legend', { text: t('review.decisionLegend') }));
+        const decisionName = `finding-review-${finding.review.findingKey}`;
+        for (const decision of ['valid', 'false-positive']) {
+            const label = element('label');
+            const input = element('input');
+            input.type = 'radio';
+            input.name = decisionName;
+            input.value = decision;
+            input.checked = finding.review.decision === decision;
+            label.append(
+                input,
+                document.createTextNode(` ${t(`review.status.${decision}`)}`),
+            );
+            fieldset.appendChild(label);
+        }
+        const saveDecision = element('button', {
+            className: 'menu_button',
+            text: t('review.action.saveDecision'),
+            type: 'button',
+        });
+        saveDecision.addEventListener('click', () => {
+            const selected = fieldset.querySelector('input:checked')?.value;
+            if (selected) this.updateFindingDecision(snapshot, finding, selected);
+        });
+        const clear = element('button', {
+            className: 'menu_button',
+            text: t('review.action.clear'),
+            type: 'button',
+        });
+        clear.disabled = !finding.review.decision;
+        clear.addEventListener('click', () => {
+            this.updateFindingDecision(snapshot, finding, null);
+        });
+        const scopeProfiles = this.findingIgnoreScopeProfiles(snapshot);
+        const ignoreScope = element('select');
+        for (const profile of scopeProfiles) {
+            const option = element('option', {
+                text: `${t(`comparison.profile.scope.${profile.scope.kind}`)} · ${profile.label}`,
+            });
+            option.value = profile.id;
+            ignoreScope.appendChild(option);
+        }
+        // Favor the narrowest applicable scope so an unopened global profile
+        // cannot make a routine ignore action broader than the user expects.
+        const preferredProfile = scopeProfiles[0];
+        if (preferredProfile) ignoreScope.value = preferredProfile.id;
+        const ignore = element('button', {
+            className: 'menu_button',
+            text: t('review.action.alwaysIgnore'),
+            type: 'button',
+        });
+        ignore.disabled = scopeProfiles.length === 0;
+        ignore.addEventListener('click', () => {
+            const profile = scopeProfiles.find(({ id }) => id === ignoreScope.value)
+                ?? scopeProfiles[0];
+            if (!profile) return;
+            if (!confirm(t('review.confirmAlwaysIgnore', {
+                scope: t(`comparison.profile.scope.${
+                    profile.scope.kind
+                }`),
+            }))) return;
+            this.updateFindingIgnore(snapshot, finding, true, null, profile);
+        });
+        const hide = element('button', {
+            className: 'menu_button',
+            text: t('review.action.hideOnce'),
+            type: 'button',
+        });
+        hide.addEventListener('click', () => {
+            this.findingHiddenOnce.add(finding.review.findingKey);
+            this.ruleReviewStatus = t('review.saved.hiddenOnce');
+            this.ruleReviewStatusIsError = false;
+            this.render();
+        });
+        const actions = element('div', {
+            className: 'st-devtools-finding-review-actions',
+        });
+        actions.append(saveDecision, clear, ignore, hide);
+        details.append(
+            fieldset,
+            this.policyField('review.ignoreScope', ignoreScope),
+            actions,
+        );
+        return details;
+    }
+
+    renderReviewedFindings(snapshot, reviewResult) {
+        const reviewed = reviewResult.all.filter(({ review }) => (
+            review.decision === 'false-positive' || review.hidden
+        ));
+        const details = element('details', {
+            className: 'st-devtools-disclosure st-devtools-reviewed-findings',
+        });
+        const summary = element('summary');
+        summary.append(
+            element('strong', { text: t('review.reviewedTitle') }),
+            element('span', {
+                className: 'st-devtools-disclosure-count',
+                text: t('review.reviewedCount', { count: reviewed.length }),
+            }),
+        );
+        details.appendChild(summary);
+        attachLazyDetailsContent(details, () => {
+            const content = element('div', { className: 'st-devtools-reviewed-list' });
+            if (reviewed.length === 0) {
+                content.appendChild(proseElement('p', t('review.none')));
+                return content;
+            }
+            for (const finding of reviewed) {
+                const card = element('article', {
+                    className: 'st-devtools-reviewed-card',
+                });
+                const status = finding.review.hiddenOnce
+                    ? 'hidden-once'
+                    : finding.review.ignored
+                        ? 'always-ignore'
+                        : finding.review.decision;
+                card.append(
+                    element('strong', { text: finding.title }),
+                    element('span', { text: t(`review.status.${status}`) }),
+                );
+                const restore = element('button', {
+                    className: 'menu_button',
+                    text: t('review.action.restore'),
+                    type: 'button',
+                });
+                restore.addEventListener('click', () => {
+                    if (finding.review.hiddenOnce) {
+                        this.findingHiddenOnce.delete(finding.review.findingKey);
+                        this.ruleReviewStatus = t('review.saved.restored');
+                        this.ruleReviewStatusIsError = false;
+                        this.render();
+                    } else if (finding.review.ignored) {
+                        this.updateFindingIgnore(snapshot, finding, false, finding.review);
+                    } else {
+                        this.updateFindingDecision(snapshot, finding, null);
+                    }
+                });
+                card.appendChild(restore);
+                content.appendChild(card);
+            }
+            return content;
+        });
+        return details;
+    }
+
+    renderRuleAuditLog() {
+        const details = element('details', {
+            className: 'st-devtools-disclosure st-devtools-rule-audit',
+        });
+        const reviewAudit = (
+            this.pendingImportedReviews ?? this.findingReviewDocument
+        ).audit ?? [];
+        const policyAudit = this.ruleAuditLog.entries ?? [];
+        const count = reviewAudit.length + policyAudit.length;
+        const summary = element('summary');
+        summary.append(
+            element('strong', { text: t('audit.title') }),
+            element('span', {
+                className: 'st-devtools-disclosure-count',
+                text: t('audit.count', { count }),
+            }),
+        );
+        details.appendChild(summary);
+        attachLazyDetailsContent(details, () => {
+            const content = element('ol', { className: 'st-devtools-rule-audit-list' });
+            const entries = [
+                ...reviewAudit.map((entry) => ({
+                    at: entry.at,
+                    action: entry.action,
+                    scope: entry.scope,
+                })),
+                ...policyAudit.map((entry) => ({
+                    at: entry.at,
+                    action: entry.action,
+                    scope: null,
+                })),
+            ].sort((left, right) => String(right.at).localeCompare(String(left.at)));
+            for (const entry of entries.slice(0, 200)) {
+                content.appendChild(element('li', {
+                    text: t('audit.entry', {
+                        time: formatTimestamp(entry.at),
+                        action: translatedValue(
+                            `audit.action.${entry.action}`,
+                            entry.action,
+                        ),
+                        scope: entry.scope
+                            ? t(`comparison.profile.scope.${entry.scope}`)
+                            : t('common.none'),
+                    }),
+                }));
+            }
+            if (entries.length === 0) {
+                content.appendChild(element('li', { text: t('audit.none') }));
+            }
+            return content;
+        });
+        return details;
+    }
+
     renderRules(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         page.append(
@@ -4578,10 +5998,19 @@ export class DevToolsWindow {
         );
         const analysis = analyzeSnapshotDetailed(
             snapshot,
-            this.ruleSettings,
+            this.pendingImportedRuleSettings ?? this.ruleSettings,
             this.comparisonPolicySettings,
         );
-        const findings = analysis?.findings ?? [];
+        const reviewResult = applyFindingReviews(
+            analysis?.findings ?? [],
+            snapshot?.sources ?? [],
+            this.pendingImportedReviews ?? this.findingReviewDocument,
+            this.findingReviewContext(snapshot),
+            this.findingHiddenOnce,
+        );
+        const findings = reviewResult.visible.filter(
+            ({ review }) => review.decision !== 'false-positive',
+        );
         page.appendChild(this.renderComparisonAnalysis(snapshot, analysis?.comparison));
         page.appendChild(this.renderInstructionModel(analysis?.instructions));
         const counts = findings.reduce((result, item) => {
@@ -4618,6 +6047,21 @@ export class DevToolsWindow {
                 className: 'st-devtools-rule-count severity-info',
                 text: `${t('rules.severity.info')} ${counts.info}`,
             }),
+            element('span', {
+                className: 'st-devtools-rule-count review-reviewed',
+                text: t('review.summaryReviewed', {
+                    count: reviewResult.counts.valid
+                        + reviewResult.counts.falsePositive,
+                }),
+            }),
+            element('span', {
+                className: 'st-devtools-rule-count review-hidden',
+                text: t('review.summaryHidden', {
+                    count: reviewResult.all.filter(({ review }) => (
+                        review.hidden || review.decision === 'false-positive'
+                    )).length,
+                }),
+            }),
         );
         page.appendChild(summary);
         if (Object.values(determinations).some((count) => count > 0)) {
@@ -4635,7 +6079,9 @@ export class DevToolsWindow {
 
         if (findings.length === 0) {
             const empty = element('div', { className: 'st-devtools-rule-empty' });
-            const anyEnabled = Object.values(this.ruleSettings.enabled).some(Boolean);
+            const effectiveRuleSettings = this.pendingImportedRuleSettings
+                ?? this.ruleSettings;
+            const anyEnabled = Object.values(effectiveRuleSettings.enabled).some(Boolean);
             empty.append(
                 element('i', {
                     className: anyEnabled
@@ -4651,6 +6097,21 @@ export class DevToolsWindow {
                 ),
             );
             page.appendChild(empty);
+            page.append(
+                this.renderReviewedFindings(snapshot, reviewResult),
+                this.renderRuleAuditLog(),
+            );
+            if (this.ruleReviewStatus) {
+                const status = element('p', {
+                    className: this.ruleReviewStatusIsError
+                        ? 'st-devtools-rule-review-status is-error'
+                        : 'st-devtools-rule-review-status',
+                    text: this.ruleReviewStatus,
+                });
+                status.setAttribute('role', 'status');
+                status.setAttribute('aria-live', 'polite');
+                page.appendChild(status);
+            }
             return page;
         }
 
@@ -4664,7 +6125,7 @@ export class DevToolsWindow {
             const card = element('article', {
                 className: `st-devtools-rule-card severity-${item.severity}`,
             });
-            card.dataset.findingId = item.id;
+            card.dataset.findingId = item.review?.findingKey ?? item.id;
             card.dataset.ruleId = item.ruleId;
             const header = element('header');
             header.append(
@@ -4680,6 +6141,12 @@ export class DevToolsWindow {
                         item.determination
                     }`,
                     text: t(`rules.determination.${item.determination}`),
+                }));
+            }
+            if (item.review?.decision === 'valid') {
+                header.appendChild(element('span', {
+                    className: 'st-devtools-review-badge is-valid',
+                    text: t('review.status.valid'),
                 }));
             }
             card.append(header, proseElement('p', item.message));
@@ -4756,9 +6223,25 @@ export class DevToolsWindow {
                 actions.appendChild(finalEvidence);
             }
             if (actions.childElementCount > 0) card.appendChild(actions);
+            card.appendChild(this.renderFindingReviewControls(snapshot, item));
             list.appendChild(card);
         }
         page.appendChild(list);
+        page.append(
+            this.renderReviewedFindings(snapshot, reviewResult),
+            this.renderRuleAuditLog(),
+        );
+        if (this.ruleReviewStatus) {
+            const status = element('p', {
+                className: this.ruleReviewStatusIsError
+                    ? 'st-devtools-rule-review-status is-error'
+                    : 'st-devtools-rule-review-status',
+                text: this.ruleReviewStatus,
+            });
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            page.appendChild(status);
+        }
         return page;
     }
 

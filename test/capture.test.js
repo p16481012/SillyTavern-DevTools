@@ -159,6 +159,54 @@ test('request-ready capture pairs settings without mutating event payloads', asy
     assert.equal(saved[0].model, 'request-model');
     assert.equal(saved[0].provider, 'openrouter');
     assert.equal(saved[0].stats.maxOutput, 321);
+    assert.match(saved[0].profileContext.chat.key, /^scope-v1:/u);
+    assert.equal(saved[0].profileContext.chat.key.includes('chat'), false);
+});
+
+test('capture namespaces a shared chat id by character or group owner', async () => {
+    const captureContext = async (overrides) => {
+        const eventSource = new FakeEventSource();
+        const saved = [];
+        const context = Object.assign(createContext(eventSource), overrides);
+        const controller = new CaptureController({
+            getContext: () => context,
+            store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+            version: 'test',
+            settingsWaitMs: 5,
+        });
+        controller.start();
+        eventSource.emitSynchronously('chat_completion_prompt_ready', {
+            chat: [{ role: 'user', content: 'Owner scope' }],
+            dryRun: false,
+        });
+        await waitFor(() => saved.length === 1);
+        return saved[0].profileContext.chat.key;
+    };
+
+    const alice = await captureContext({
+        characters: [{ avatar: 'alice.png', name: 'Alice' }],
+        characterId: 0,
+    });
+    const bob = await captureContext({
+        characters: [{ avatar: 'bob.png', name: 'Bob' }],
+        characterId: 0,
+    });
+    const firstGroup = await captureContext({
+        characters: [{ avatar: 'member.png', name: 'Member' }],
+        characterId: 0,
+        groups: [{ id: 'group-a', name: 'Group A' }],
+        groupId: 'group-a',
+    });
+    const secondGroup = await captureContext({
+        characters: [{ avatar: 'member.png', name: 'Member' }],
+        characterId: 0,
+        groups: [{ id: 'group-b', name: 'Group B' }],
+        groupId: 'group-b',
+    });
+
+    assert.notEqual(alice, bob);
+    assert.notEqual(firstGroup, secondGroup);
+    assert.notEqual(firstGroup, alice);
 });
 
 test('prompt-ready fallback preserves captures on older SillyTavern versions', async () => {
