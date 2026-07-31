@@ -204,6 +204,33 @@ test('retention pruning migrates legacy arrays and keeps only their newest recor
     );
 });
 
+test('retention pruning never migrates legacy records that will be discarded', async () => {
+    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
+    const discarded = snapshot('discarded', 'legacy-chat', 1);
+    Object.defineProperty(discarded, 'sources', {
+        enumerable: true,
+        get() {
+            throw new Error('discarded legacy snapshot must not be migrated');
+        },
+    });
+    store.memory.set('timeline:legacy-chat', [
+        discarded,
+        snapshot('retained', 'legacy-chat', 2),
+    ]);
+
+    const preview = await store.getRetentionPrunePreview(1);
+    assert.equal(preview.snapshotCount, 1);
+    assert.equal(store.memory.has(store.timelineIndexKey('legacy-chat')), false);
+    assert.equal(store.memory.has('timeline:legacy-chat'), true);
+
+    await store.applyRetentionLimit(1, { expectedRevision: preview.revision });
+    assert.equal(store.memory.has('timeline:legacy-chat'), false);
+    assert.deepEqual(
+        (await store.getTimeline('legacy-chat')).map(({ id }) => id),
+        ['retained'],
+    );
+});
+
 test('a capture concurrent with retention pruning still obeys the new limit', async () => {
     const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
     yieldStorageOperations(store);

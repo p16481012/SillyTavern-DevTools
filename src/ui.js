@@ -557,6 +557,7 @@ export class DevToolsWindow {
         this.settingsPreviouslyFocused = null;
         this.settingsOverlay = null;
         this.settingsPanel = null;
+        this.settingsRefreshTimer = null;
         this.themeModeInput = null;
         this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
@@ -810,12 +811,21 @@ export class DevToolsWindow {
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             if (apply.disabled) return;
+            const applyLabel = apply.textContent;
             apply.disabled = true;
+            apply.textContent = t('settings.applying');
+            apply.setAttribute('aria-busy', 'true');
+            const previousPreferences = this.preferences;
             const requested = normalizeUiPreferences({
                 themeMode: themeSelect.value,
                 timelineRetentionLimit: retentionInput.value,
                 timelineReadLimit: readInput.value,
             });
+            const timelineSettingsChanged = (
+                requested.timelineRetentionLimit
+                    !== previousPreferences.timelineRetentionLimit
+                || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
+            );
             try {
                 const previousRetention = Number(this.store.maxSnapshotsPerChat)
                     || this.preferences.timelineRetentionLimit;
@@ -826,6 +836,9 @@ export class DevToolsWindow {
                 };
                 const isLoweringRetention = (
                     requested.timelineRetentionLimit < previousRetention
+                );
+                const retentionChanged = (
+                    requested.timelineRetentionLimit !== previousRetention
                 );
                 if (
                     isLoweringRetention
@@ -858,18 +871,23 @@ export class DevToolsWindow {
                             throw error;
                         }
                     }
-                } else if (typeof this.store.applyRetentionLimit === 'function') {
+                } else if (
+                    retentionChanged
+                    && typeof this.store.applyRetentionLimit === 'function'
+                ) {
                     pruneResult = await this.store.applyRetentionLimit(
                         requested.timelineRetentionLimit,
                     );
-                } else {
+                } else if (retentionChanged) {
                     this.store.setMaxSnapshotsPerChat?.(
                         requested.timelineRetentionLimit,
                     );
                 }
-                this.storageSummaryGeneration += 1;
-                this.storageSummaryRebuildScheduled = false;
-                this.storageSummaryRefreshPromise = null;
+                if (retentionChanged) {
+                    this.storageSummaryGeneration += 1;
+                    this.storageSummaryRebuildScheduled = false;
+                    this.storageSummaryRefreshPromise = null;
+                }
                 const preferences = this.saveUiPreferences(requested);
                 themeSelect.value = preferences.themeMode;
                 retentionInput.value = String(preferences.timelineRetentionLimit);
@@ -877,7 +895,6 @@ export class DevToolsWindow {
                 syncReadLimit();
                 this.syncOpaqueTheme();
                 this.closeSettings();
-                await this.refresh();
                 globalThis.toastr?.success?.(
                     pruneResult.snapshotCount > 0
                         ? t('settings.savedWithPrune', {
@@ -886,6 +903,7 @@ export class DevToolsWindow {
                         : t('settings.saved'),
                     'ST DevTools',
                 );
+                if (timelineSettingsChanged) this.scheduleSettingsRefresh();
             } catch (error) {
                 console.error('[ST DevTools] Failed to apply storage settings.', error);
                 globalThis.toastr?.error?.(
@@ -894,6 +912,8 @@ export class DevToolsWindow {
                 );
             } finally {
                 apply.disabled = false;
+                apply.textContent = applyLabel;
+                apply.removeAttribute('aria-busy');
             }
         });
 
@@ -905,6 +925,16 @@ export class DevToolsWindow {
         this.timelineRetentionLimitInput = retentionInput;
         this.timelineReadLimitInput = readInput;
         return overlay;
+    }
+
+    scheduleSettingsRefresh() {
+        if (this.settingsRefreshTimer != null) {
+            clearTimeout(this.settingsRefreshTimer);
+        }
+        this.settingsRefreshTimer = setTimeout(() => {
+            this.settingsRefreshTimer = null;
+            void this.refresh();
+        }, 0);
     }
 
     openSettings() {

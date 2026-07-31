@@ -27,7 +27,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 5,
-        extensionVersion: '0.8.11',
+        extensionVersion: '0.8.12',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -422,6 +422,7 @@ let otherTimeline = [
 let temporaryStorage = false;
 let summaryNeedsRebuild = false;
 let darkTheme = false;
+let timelinePageReadCount = 0;
 
 const capture = new EventTarget();
 capture.retrySnapshot = async (snapshot) => {
@@ -472,6 +473,8 @@ const store = {
         return timeline.slice(-limit);
     },
     async getTimelinePage(_chatId, { limit = 100 } = {}) {
+        timelinePageReadCount += 1;
+        document.body.dataset.timelinePageReads = String(timelinePageReadCount);
         const snapshots = timeline.slice(-limit);
         return {
             snapshots,
@@ -546,7 +549,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.11',
+    version: '0.8.12',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

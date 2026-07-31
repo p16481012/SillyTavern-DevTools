@@ -88,6 +88,7 @@ const KO = {
     'settings.themeMode.auto': '실리태번 테마에 맞춤',
     'settings.themeMode.light': '항상 밝게',
     'settings.themeMode.dark': '항상 어둡게',
+    'settings.applying': '적용 중…',
     'settings.timelineRetentionLimit': '채팅별 보관 수',
     'settings.timelineRetentionLimitDescription': '각 채팅 ID에 최신 스냅샷을 최대 몇 개까지 남길지 지정합니다.',
     'settings.timelineRetentionLimitHint': '{min}~{max}개까지 설정할 수 있습니다. 값을 낮추면 모든 채팅에서 한도를 넘는 오래된 스냅샷을 확인 후 영구 삭제합니다.',

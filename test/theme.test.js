@@ -174,7 +174,7 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });
 
-test('v0.8.11 safety and theme controls remain responsive', async () => {
+test('v0.8.12 safety and theme controls remain responsive', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
@@ -215,4 +215,11 @@ test('v0.8.11 safety and theme controls remain responsive', async () => {
     assert.match(ui, /resolvePanelTheme\(/);
     assert.match(ui, /this\.store\.getRetentionPrunePreview/);
     assert.match(ui, /this\.store\.applyRetentionLimit/);
+    assert.match(i18n, /'settings\.applying':/);
+    assert.match(ui, /if \(timelineSettingsChanged\) this\.scheduleSettingsRefresh\(\)/);
+    assert.match(ui, /apply\.removeAttribute\('aria-busy'\)/);
+    const submitStart = ui.indexOf("form.addEventListener('submit'");
+    const submitEnd = ui.indexOf('\n        panel.append', submitStart);
+    const settingsSubmit = ui.slice(submitStart, submitEnd);
+    assert.doesNotMatch(settingsSubmit, /await this\.refresh\(\)/);
 });

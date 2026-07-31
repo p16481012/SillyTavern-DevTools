@@ -1,4 +1,4 @@
-import { migrateSnapshot, migrateTimeline } from './migrations.js';
+import { migrateSnapshot } from './migrations.js';
 
 const INDEX_KEY = 'chat-index';
 const MUTATION_LOCK_KEY = 'storage-mutation';
@@ -144,15 +144,35 @@ function sumEntryBytes(entries) {
     );
 }
 
-function normalizeLegacySnapshots(value) {
-    const { snapshots } = migrateTimeline(value);
+function legacySnapshotRecords(value) {
     const snapshotsById = new Map();
-    for (const snapshot of snapshots) {
-        const normalized = migrateSnapshot(snapshot);
-        if (normalized?.id) snapshotsById.set(normalized.id, normalized);
+    for (const snapshot of Array.isArray(value) ? value : []) {
+        if (
+            snapshot
+            && typeof snapshot === 'object'
+            && typeof snapshot.id === 'string'
+            && snapshot.id
+        ) {
+            snapshotsById.set(snapshot.id, snapshot);
+        }
     }
     return [...snapshotsById.values()]
-        .sort((left, right) => left.timestamp - right.timestamp);
+        .sort((left, right) => (Number(left.timestamp) || 0) - (Number(right.timestamp) || 0));
+}
+
+function legacyRetentionEntry(snapshot) {
+    return {
+        id: snapshot.id,
+        timestamp: Number(snapshot.timestamp) || 0,
+        approximateBytes: null,
+        legacySnapshot: snapshot,
+    };
+}
+
+function retentionEntryBytes(entry) {
+    return Number.isFinite(entry?.approximateBytes)
+        ? Math.max(0, Number(entry.approximateBytes))
+        : approximateJsonBytes(entry?.legacySnapshot);
 }
 
 export class SnapshotStore {
@@ -319,12 +339,25 @@ export class SnapshotStore {
         }
 
         this.mutationRevision += 1;
-        const retained = normalizeLegacySnapshots(legacyStored)
-            .slice(-this.maxSnapshotsPerChat);
+        return this.migrateLegacyTimelineUnlocked(
+            chatId,
+            legacySnapshotRecords(legacyStored),
+            this.maxSnapshotsPerChat,
+        );
+    }
+
+    async migrateLegacyTimelineUnlocked(chatId, legacyRecords, limit) {
+        const indexKey = this.timelineIndexKey(chatId);
+        const legacyKey = this.timelineKey(chatId);
+        const retained = legacyRecords.slice(-normalizeRetentionLimit(
+            limit,
+            this.maxSnapshotsPerChat,
+        ));
         const entries = [];
         let lastYieldAt = Date.now();
 
-        for (const snapshot of retained) {
+        for (const legacySnapshot of retained) {
+            const snapshot = migrateSnapshot(legacySnapshot);
             const bytes = approximateJsonBytes(snapshot);
             await this.write(this.snapshotKey(chatId, snapshot.id), snapshot);
             entries.push(timelineEntry(snapshot, bytes));
@@ -585,9 +618,7 @@ export class SnapshotStore {
         }
         if (container.legacyKey) {
             const stored = await this.read(container.legacyKey, []);
-            return normalizeLegacySnapshots(stored).map((snapshot) => (
-                timelineEntry(snapshot)
-            ));
+            return legacySnapshotRecords(stored).map(legacyRetentionEntry);
         }
         return [];
     }
@@ -599,6 +630,7 @@ export class SnapshotStore {
             let affectedChatCount = 0;
             let snapshotCount = 0;
             let approximateBytes = 0;
+            let lastYieldAt = Date.now();
 
             for (const container of containers) {
                 const entries = await this.retentionEntriesForContainer(container);
@@ -609,7 +641,11 @@ export class SnapshotStore {
                 if (removedEntries.length === 0) continue;
                 affectedChatCount += 1;
                 snapshotCount += removedEntries.length;
-                approximateBytes += sumEntryBytes(removedEntries);
+                approximateBytes += removedEntries.reduce(
+                    (total, entry) => total + retentionEntryBytes(entry),
+                    0,
+                );
+                lastYieldAt = await this.maybeYield(lastYieldAt);
             }
 
             return {
@@ -650,9 +686,30 @@ export class SnapshotStore {
             let approximateBytes = 0;
 
             try {
-                for (const { chatId } of containers) {
+                for (const container of containers) {
+                    const { chatId } = container;
                     const indexKey = this.timelineIndexKey(chatId);
                     await this.withLock(indexKey, async () => {
+                        if (container.legacyKey && !container.indexKey) {
+                            const stored = await this.read(container.legacyKey, []);
+                            const records = legacySnapshotRecords(stored);
+                            const removedRecords = records.slice(
+                                0,
+                                Math.max(0, records.length - limit),
+                            );
+                            if (removedRecords.length === 0) return;
+                            await this.migrateLegacyTimelineUnlocked(chatId, records, limit);
+                            for (const snapshot of removedRecords) {
+                                await this.remove(this.snapshotKey(chatId, snapshot.id));
+                            }
+                            affectedChatCount += 1;
+                            snapshotCount += removedRecords.length;
+                            approximateBytes += removedRecords.reduce(
+                                (total, snapshot) => total + approximateJsonBytes(snapshot),
+                                0,
+                            );
+                            return;
+                        }
                         const index = await this.readTimelineIndexUnlocked(chatId);
                         const removedEntries = index.entries.slice(
                             0,
@@ -850,7 +907,7 @@ export class SnapshotStore {
                 }
             } else if (container.legacyKey) {
                 const stored = await this.read(container.legacyKey, []);
-                const { snapshots } = migrateTimeline(stored);
+                const snapshots = legacySnapshotRecords(stored);
                 if (snapshots.length > 0) {
                     chatCount += 1;
                     snapshotCount += snapshots.length;
