@@ -66,6 +66,56 @@ test('deleting from a missing timeline also cleans a stale chat index', async ()
     assert.deepEqual(await store.getChatIds(), []);
 });
 
+test('timeline pages read only the requested newest snapshot records', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    for (let index = 1; index <= 8; index += 1) {
+        await store.addSnapshot(snapshot(`snapshot-${index}`, 'chat', index));
+    }
+    const read = store.read.bind(store);
+    const snapshotReads = [];
+    store.read = async (key, ...args) => {
+        if (String(key).startsWith('snapshot:v2:')) snapshotReads.push(key);
+        return read(key, ...args);
+    };
+
+    const page = await store.getTimelinePage('chat', { limit: 3 });
+
+    assert.deepEqual(page.snapshots.map(({ id }) => id), [
+        'snapshot-6',
+        'snapshot-7',
+        'snapshot-8',
+    ]);
+    assert.equal(page.totalCount, 8);
+    assert.equal(page.loadedCount, 3);
+    assert.equal(page.limit, 3);
+    assert.equal(snapshotReads.length, 3);
+});
+
+test('adding a snapshot updates its record and lightweight index without reading old records', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('a', 'chat', 1));
+    await store.addSnapshot(snapshot('b', 'chat', 2));
+    const read = store.read.bind(store);
+    const write = store.write.bind(store);
+    const snapshotReads = [];
+    const snapshotWrites = [];
+    store.read = async (key, ...args) => {
+        if (String(key).startsWith('snapshot:v2:')) snapshotReads.push(key);
+        return read(key, ...args);
+    };
+    store.write = async (key, value) => {
+        if (String(key).startsWith('snapshot:v2:')) snapshotWrites.push(key);
+        return write(key, value);
+    };
+
+    await store.addSnapshot(snapshot('c', 'chat', 3));
+
+    assert.deepEqual(snapshotReads, []);
+    assert.deepEqual(snapshotWrites, [store.snapshotKey('chat', 'c')]);
+    assert.equal(store.memory.has(store.timelineKey('chat')), false);
+    assert.equal(store.memory.get(store.timelineIndexKey('chat')).entries.length, 3);
+});
+
 test('bulk deletion removes selected snapshots in one locked batch and keeps the rest ordered', async () => {
     const store = new SnapshotStore({ namespace: 'test' });
     await Promise.all([
@@ -193,6 +243,37 @@ test('fast storage summary never reads snapshot timeline values', async () => {
     assert.equal(summary.chatCount, 2);
     assert.equal(summary.snapshotCount, null);
     assert.equal(timelineReads, 0);
+});
+
+test('v2 summary rebuild reads lightweight indexes without loading snapshot records', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('a', 'chat', 1));
+    await store.addSnapshot(snapshot('b', 'chat', 2));
+    const read = store.read.bind(store);
+    let snapshotReads = 0;
+    store.read = async (key, ...args) => {
+        if (String(key).startsWith('snapshot:v2:')) snapshotReads += 1;
+        return read(key, ...args);
+    };
+
+    const summary = await store.rebuildStorageSummary();
+
+    assert.equal(summary.snapshotCount, 2);
+    assert.equal(snapshotReads, 0);
+});
+
+test('a cached complete summary does not enumerate storage keys', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('a', 'chat', 1));
+    await store.rebuildStorageSummary();
+    store.storageKeys = async () => {
+        throw new Error('key enumeration should not run');
+    };
+
+    const summary = await store.getStorageSummary();
+
+    assert.equal(summary.complete, true);
+    assert.equal(summary.snapshotCount, 1);
 });
 
 test('concurrent summary rebuild requests share one timeline scan', async () => {

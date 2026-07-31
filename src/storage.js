@@ -4,6 +4,10 @@ const INDEX_KEY = 'chat-index';
 const MUTATION_LOCK_KEY = 'storage-mutation';
 const SUMMARY_KEY = 'storage-summary:v1';
 const SUMMARY_VERSION = 1;
+const TIMELINE_INDEX_VERSION = 2;
+const LEGACY_TIMELINE_PREFIX = 'timeline:';
+const TIMELINE_INDEX_PREFIX = 'timeline-index:v2:';
+const SNAPSHOT_PREFIX = 'snapshot:v2:';
 const SUMMARY_YIELD_BUDGET_MS = 8;
 
 function approximateJsonBytes(value) {
@@ -56,16 +60,95 @@ function yieldToMainThread() {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function encodeKeyPart(value) {
+    return encodeURIComponent(String(value ?? ''));
+}
+
+function decodeKeyPart(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
+}
+
+function normalizeTimelineEntry(value) {
+    if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !value.id) {
+        return null;
+    }
+    return {
+        id: value.id,
+        timestamp: Number(value.timestamp) || 0,
+        approximateBytes: Math.max(0, Math.trunc(Number(value.approximateBytes) || 0)),
+    };
+}
+
+function normalizeTimelineIndex(value, chatId) {
+    if (
+        !value
+        || typeof value !== 'object'
+        || value.version !== TIMELINE_INDEX_VERSION
+        || !Array.isArray(value.entries)
+    ) {
+        return null;
+    }
+    const entriesById = new Map();
+    for (const rawEntry of value.entries) {
+        const entry = normalizeTimelineEntry(rawEntry);
+        if (entry) entriesById.set(entry.id, entry);
+    }
+    return {
+        version: TIMELINE_INDEX_VERSION,
+        chatId,
+        entries: [...entriesById.values()]
+            .sort((left, right) => left.timestamp - right.timestamp),
+        updatedAt: Number(value.updatedAt) || null,
+    };
+}
+
+function emptyTimelineIndex(chatId) {
+    return {
+        version: TIMELINE_INDEX_VERSION,
+        chatId,
+        entries: [],
+        updatedAt: Date.now(),
+    };
+}
+
+function timelineEntry(snapshot, approximateBytes = approximateJsonBytes(snapshot)) {
+    return {
+        id: snapshot.id,
+        timestamp: Number(snapshot.timestamp) || 0,
+        approximateBytes,
+    };
+}
+
+function normalizeReadLimit(value, maximum) {
+    if (value == null || value === '') return maximum;
+    const number = Number(value);
+    if (!Number.isFinite(number)) return maximum;
+    return Math.min(maximum, Math.max(1, Math.trunc(number)));
+}
+
+function sumEntryBytes(entries) {
+    return entries.reduce(
+        (total, entry) => total + (Number(entry.approximateBytes) || 0),
+        0,
+    );
+}
+
 export class SnapshotStore {
     constructor({
         namespace,
         maxSnapshotsPerChat = 100,
         summaryYield = yieldToMainThread,
+        migrationYield = yieldToMainThread,
         summaryYieldBudgetMs = SUMMARY_YIELD_BUDGET_MS,
     }) {
         this.namespace = namespace;
         this.maxSnapshotsPerChat = maxSnapshotsPerChat;
         this.summaryYield = summaryYield;
+        this.migrationYield = migrationYield;
         this.summaryYieldBudgetMs = Math.max(0, Number(summaryYieldBudgetMs) || 0);
         this.backend = null;
         this.backendStatus = {
@@ -120,7 +203,31 @@ export class SnapshotStore {
     }
 
     timelineKey(chatId) {
-        return `timeline:${chatId || '__global__'}`;
+        return `${LEGACY_TIMELINE_PREFIX}${chatId || '__global__'}`;
+    }
+
+    timelineIndexKey(chatId) {
+        return `${TIMELINE_INDEX_PREFIX}${encodeKeyPart(chatId || '__global__')}`;
+    }
+
+    snapshotKey(chatId, snapshotId) {
+        return `${SNAPSHOT_PREFIX}${encodeKeyPart(chatId || '__global__')}:${
+            encodeKeyPart(snapshotId)
+        }`;
+    }
+
+    chatIdFromTimelineIndexKey(key) {
+        if (typeof key !== 'string' || !key.startsWith(TIMELINE_INDEX_PREFIX)) {
+            return null;
+        }
+        return decodeKeyPart(key.slice(TIMELINE_INDEX_PREFIX.length));
+    }
+
+    chatIdFromLegacyTimelineKey(key) {
+        if (typeof key !== 'string' || !key.startsWith(LEGACY_TIMELINE_PREFIX)) {
+            return null;
+        }
+        return key.slice(LEGACY_TIMELINE_PREFIX.length);
     }
 
     async read(key, fallback) {
@@ -161,18 +268,85 @@ export class SnapshotStore {
         }
     }
 
-    async readTimelineUnlocked(chatId, { invalidateSummaryOnMigration = true } = {}) {
-        const key = this.timelineKey(chatId);
-        const stored = await this.read(key, []);
-        const { snapshots, changed } = migrateTimeline(stored);
-        if (changed) {
-            await this.write(key, snapshots);
-            if (invalidateSummaryOnMigration) {
-                this.mutationRevision += 1;
-                await this.remove(SUMMARY_KEY);
-            }
+    async maybeYield(lastYieldAt, yieldOperation = this.summaryYield) {
+        if (Date.now() - lastYieldAt < this.summaryYieldBudgetMs) {
+            return lastYieldAt;
         }
-        return snapshots;
+        await yieldOperation();
+        return Date.now();
+    }
+
+    async readTimelineIndexUnlocked(chatId) {
+        const indexKey = this.timelineIndexKey(chatId);
+        const legacyKey = this.timelineKey(chatId);
+        const storedIndex = normalizeTimelineIndex(
+            await this.read(indexKey, null),
+            chatId,
+        );
+        if (storedIndex) {
+            return storedIndex;
+        }
+
+        const legacyStored = await this.read(legacyKey, null);
+        if (!Array.isArray(legacyStored)) {
+            return emptyTimelineIndex(chatId);
+        }
+
+        this.mutationRevision += 1;
+        const { snapshots } = migrateTimeline(legacyStored);
+        const snapshotsById = new Map();
+        for (const snapshot of snapshots) {
+            const normalized = migrateSnapshot(snapshot);
+            if (normalized?.id) snapshotsById.set(normalized.id, normalized);
+        }
+        const retained = [...snapshotsById.values()]
+            .sort((left, right) => left.timestamp - right.timestamp)
+            .slice(-this.maxSnapshotsPerChat);
+        const entries = [];
+        let lastYieldAt = Date.now();
+
+        for (const snapshot of retained) {
+            const bytes = approximateJsonBytes(snapshot);
+            await this.write(this.snapshotKey(chatId, snapshot.id), snapshot);
+            entries.push(timelineEntry(snapshot, bytes));
+            lastYieldAt = await this.maybeYield(lastYieldAt, this.migrationYield);
+        }
+
+        const migratedIndex = {
+            version: TIMELINE_INDEX_VERSION,
+            chatId,
+            entries,
+            updatedAt: Date.now(),
+        };
+        if (entries.length > 0) {
+            await this.write(indexKey, migratedIndex);
+            await this.addChatToIndex(chatId);
+        } else {
+            await this.remove(indexKey);
+            await this.removeChatFromIndex(chatId);
+        }
+        await this.remove(legacyKey);
+        return migratedIndex;
+    }
+
+    async readSnapshotUnlocked(chatId, snapshotId) {
+        const stored = await this.read(this.snapshotKey(chatId, snapshotId), null);
+        if (!stored) return null;
+        return migrateSnapshot(stored);
+    }
+
+    async writeTimelineIndex(chatId, entries) {
+        const key = this.timelineIndexKey(chatId);
+        if (entries.length === 0) {
+            await this.remove(key);
+            return;
+        }
+        await this.write(key, {
+            version: TIMELINE_INDEX_VERSION,
+            chatId,
+            entries,
+            updatedAt: Date.now(),
+        });
     }
 
     async updateCompleteSummary({ chatDelta = 0, snapshotDelta = 0, byteDelta = 0 }) {
@@ -226,40 +400,90 @@ export class SnapshotStore {
     async addSnapshot(snapshot) {
         const normalizedSnapshot = migrateSnapshot(snapshot);
         const chatId = normalizedSnapshot.chatId || '__global__';
-        const key = this.timelineKey(chatId);
+        const indexKey = this.timelineIndexKey(chatId);
         await this.withLock(MUTATION_LOCK_KEY, async () => {
             this.mutationRevision += 1;
-            await this.withLock(key, async () => {
-                const timeline = await this.readTimelineUnlocked(chatId);
-                const next = [...timeline.filter((item) => item.id !== normalizedSnapshot.id), normalizedSnapshot]
+            await this.withLock(indexKey, async () => {
+                const index = await this.readTimelineIndexUnlocked(chatId);
+                const previousEntries = index.entries;
+                const bytes = approximateJsonBytes(normalizedSnapshot);
+                const candidate = timelineEntry(normalizedSnapshot, bytes);
+                const nextEntries = [
+                    ...previousEntries.filter((entry) => entry.id !== candidate.id),
+                    candidate,
+                ]
                     .sort((left, right) => left.timestamp - right.timestamp)
                     .slice(-this.maxSnapshotsPerChat);
-                const retained = new Set(next);
-                const removed = timeline.filter((item) => !retained.has(item));
-                const includesNewSnapshot = retained.has(normalizedSnapshot);
-                const byteDelta = (
-                    (includesNewSnapshot ? approximateJsonBytes(normalizedSnapshot) : 0)
-                    - removed.reduce((total, item) => total + approximateJsonBytes(item), 0)
+                const retainedIds = new Set(nextEntries.map(({ id }) => id));
+                const includesCandidate = retainedIds.has(candidate.id);
+                const removedEntries = previousEntries.filter(
+                    (entry) => !retainedIds.has(entry.id),
                 );
-                await this.write(key, next);
-                await this.addChatToIndex(chatId);
+
+                if (includesCandidate) {
+                    await this.write(
+                        this.snapshotKey(chatId, normalizedSnapshot.id),
+                        normalizedSnapshot,
+                    );
+                }
+                await this.writeTimelineIndex(chatId, nextEntries);
+                for (const entry of removedEntries) {
+                    await this.remove(this.snapshotKey(chatId, entry.id));
+                }
+                if (nextEntries.length > 0) {
+                    await this.addChatToIndex(chatId);
+                } else {
+                    await this.removeChatFromIndex(chatId);
+                }
                 await this.updateCompleteSummary({
-                    chatDelta: timeline.length === 0 && next.length > 0 ? 1 : 0,
-                    snapshotDelta: next.length - timeline.length,
-                    byteDelta,
+                    chatDelta: previousEntries.length === 0 && nextEntries.length > 0 ? 1 : 0,
+                    snapshotDelta: nextEntries.length - previousEntries.length,
+                    byteDelta: sumEntryBytes(nextEntries) - sumEntryBytes(previousEntries),
                 });
             });
         });
         return normalizedSnapshot;
     }
 
-    async getTimeline(chatId) {
-        const key = this.timelineKey(chatId);
-        return this.withLock(key, () => this.readTimelineUnlocked(chatId));
+    async getTimelinePage(chatId, { limit = this.maxSnapshotsPerChat } = {}) {
+        const normalizedChatId = chatId || '__global__';
+        const indexKey = this.timelineIndexKey(normalizedChatId);
+        return this.withLock(MUTATION_LOCK_KEY, () => (
+            this.withLock(indexKey, async () => {
+                const index = await this.readTimelineIndexUnlocked(normalizedChatId);
+                const readLimit = normalizeReadLimit(limit, this.maxSnapshotsPerChat);
+                const selectedEntries = index.entries.slice(-readLimit);
+                const snapshots = (await Promise.all(selectedEntries.map(
+                    (entry) => this.readSnapshotUnlocked(normalizedChatId, entry.id),
+                ))).filter(Boolean);
+                return {
+                    snapshots,
+                    totalCount: index.entries.length,
+                    loadedCount: snapshots.length,
+                    limit: readLimit,
+                };
+            })
+        ));
+    }
+
+    async getTimeline(chatId, options = {}) {
+        return (await this.getTimelinePage(chatId, options)).snapshots;
+    }
+
+    async getSnapshot(chatId, snapshotId) {
+        const normalizedChatId = chatId || '__global__';
+        const indexKey = this.timelineIndexKey(normalizedChatId);
+        return this.withLock(MUTATION_LOCK_KEY, () => (
+            this.withLock(indexKey, async () => {
+                const index = await this.readTimelineIndexUnlocked(normalizedChatId);
+                if (!index.entries.some(({ id }) => id === snapshotId)) return null;
+                return this.readSnapshotUnlocked(normalizedChatId, snapshotId);
+            })
+        ));
     }
 
     async getLatest(chatId) {
-        const timeline = await this.getTimeline(chatId);
+        const timeline = await this.getTimeline(chatId, { limit: 1 });
         return timeline.at(-1) ?? null;
     }
 
@@ -274,31 +498,36 @@ export class SnapshotStore {
             )),
         );
         if (ids.size === 0) return 0;
-        const key = this.timelineKey(chatId);
+        const normalizedChatId = chatId || '__global__';
+        const indexKey = this.timelineIndexKey(normalizedChatId);
         return this.withLock(MUTATION_LOCK_KEY, () => (
-            this.withLock(key, async () => {
+            this.withLock(indexKey, async () => {
                 this.mutationRevision += 1;
-                const timeline = await this.readTimelineUnlocked(chatId);
-                const next = timeline.filter((snapshot) => !ids.has(snapshot.id));
-                const deletedCount = timeline.length - next.length;
-                if (next.length === timeline.length) {
-                    if (timeline.length === 0) await this.removeChatFromIndex(chatId);
+                const index = await this.readTimelineIndexUnlocked(normalizedChatId);
+                const previousEntries = index.entries;
+                const nextEntries = previousEntries.filter((entry) => !ids.has(entry.id));
+                const removedEntries = previousEntries.filter((entry) => ids.has(entry.id));
+                const deletedCount = removedEntries.length;
+                if (deletedCount === 0) {
+                    if (previousEntries.length === 0) {
+                        await this.removeChatFromIndex(normalizedChatId);
+                    }
                     return 0;
                 }
-                const removed = timeline.filter((snapshot) => ids.has(snapshot.id));
-                if (next.length > 0) {
-                    await this.write(key, next);
+
+                await this.writeTimelineIndex(normalizedChatId, nextEntries);
+                for (const entry of removedEntries) {
+                    await this.remove(this.snapshotKey(normalizedChatId, entry.id));
+                }
+                if (nextEntries.length > 0) {
+                    await this.addChatToIndex(normalizedChatId);
                 } else {
-                    await this.remove(key);
-                    await this.removeChatFromIndex(chatId);
+                    await this.removeChatFromIndex(normalizedChatId);
                 }
                 await this.updateCompleteSummary({
-                    chatDelta: next.length === 0 ? -1 : 0,
+                    chatDelta: nextEntries.length === 0 ? -1 : 0,
                     snapshotDelta: -deletedCount,
-                    byteDelta: -removed.reduce(
-                        (total, item) => total + approximateJsonBytes(item),
-                        0,
-                    ),
+                    byteDelta: -sumEntryBytes(removedEntries),
                 });
                 return deletedCount;
             })
@@ -312,46 +541,86 @@ export class SnapshotStore {
         return [...this.memory.keys()];
     }
 
+    timelineContainers(keys) {
+        const containers = new Map();
+        for (const key of keys) {
+            const indexedChatId = this.chatIdFromTimelineIndexKey(key);
+            if (indexedChatId != null) {
+                containers.set(indexedChatId, { chatId: indexedChatId, indexKey: key });
+                continue;
+            }
+            const legacyChatId = this.chatIdFromLegacyTimelineKey(key);
+            if (legacyChatId != null && !containers.has(legacyChatId)) {
+                containers.set(legacyChatId, { chatId: legacyChatId, legacyKey: key });
+            }
+        }
+        return [...containers.values()];
+    }
+
     async clearAll() {
         return this.withLock(MUTATION_LOCK_KEY, async () => {
             this.mutationRevision += 1;
             const keys = await this.storageKeys();
-            const timelineKeys = keys.filter((key) => (
-                typeof key === 'string' && key.startsWith('timeline:')
-            ));
+            const containers = this.timelineContainers(keys);
+            let chatCount = 0;
             let snapshotCount = 0;
-            for (const key of timelineKeys) {
-                await this.withLock(key, async () => {
-                    const stored = await this.read(key, []);
-                    snapshotCount += Array.isArray(stored) ? stored.length : 0;
-                    await this.remove(key);
-                });
+
+            for (const container of containers) {
+                if (container.indexKey) {
+                    const index = normalizeTimelineIndex(
+                        await this.read(container.indexKey, null),
+                        container.chatId,
+                    );
+                    if (index?.entries.length) {
+                        chatCount += 1;
+                        snapshotCount += index.entries.length;
+                    }
+                } else if (container.legacyKey) {
+                    const stored = await this.read(container.legacyKey, []);
+                    const count = Array.isArray(stored) ? stored.length : 0;
+                    if (count > 0) {
+                        chatCount += 1;
+                        snapshotCount += count;
+                    }
+                }
             }
-            await this.withLock(INDEX_KEY, () => this.remove(INDEX_KEY));
-            await this.remove(SUMMARY_KEY);
-            return {
-                chatCount: timelineKeys.length,
-                snapshotCount,
-            };
+
+            const dataKeys = keys.filter((key) => (
+                typeof key === 'string'
+                && (
+                    key.startsWith(LEGACY_TIMELINE_PREFIX)
+                    || key.startsWith(TIMELINE_INDEX_PREFIX)
+                    || key.startsWith(SNAPSHOT_PREFIX)
+                    || key === INDEX_KEY
+                    || key === SUMMARY_KEY
+                )
+            ));
+            for (const key of dataKeys) {
+                await this.remove(key);
+            }
+            return { chatCount, snapshotCount };
         });
     }
 
     async clearTimeline(chatId) {
-        const key = this.timelineKey(chatId);
+        const normalizedChatId = chatId || '__global__';
+        const indexKey = this.timelineIndexKey(normalizedChatId);
         await this.withLock(MUTATION_LOCK_KEY, () => (
-            this.withLock(key, async () => {
+            this.withLock(indexKey, async () => {
                 this.mutationRevision += 1;
-                const timeline = await this.readTimelineUnlocked(chatId);
-                await this.remove(key);
-                await this.removeChatFromIndex(chatId);
-                if (timeline.length > 0) {
+                const index = await this.readTimelineIndexUnlocked(normalizedChatId);
+                const entries = index.entries;
+                await this.remove(indexKey);
+                await this.remove(this.timelineKey(normalizedChatId));
+                for (const entry of entries) {
+                    await this.remove(this.snapshotKey(normalizedChatId, entry.id));
+                }
+                await this.removeChatFromIndex(normalizedChatId);
+                if (entries.length > 0) {
                     await this.updateCompleteSummary({
                         chatDelta: -1,
-                        snapshotDelta: -timeline.length,
-                        byteDelta: -timeline.reduce(
-                            (total, item) => total + approximateJsonBytes(item),
-                            0,
-                        ),
+                        snapshotDelta: -entries.length,
+                        byteDelta: -sumEntryBytes(entries),
                     });
                 }
             })
@@ -366,48 +635,43 @@ export class SnapshotStore {
     }
 
     async getAllTimelines() {
-        const chatIds = await this.getChatIds();
-        const timelines = await Promise.all(chatIds.map(async (chatId) => ({
-            chatId,
-            timeline: await this.getTimeline(chatId),
-        })));
-        return timelines.filter(({ timeline }) => timeline.length > 0);
+        return this.getAllStoredTimelines();
     }
 
     async getAllStoredTimelines() {
-        const keys = await this.storageKeys();
-        const timelineKeys = keys.filter((key) => (
-            typeof key === 'string' && key.startsWith('timeline:')
-        ));
-        const timelines = await Promise.all(timelineKeys.map(async (key) => {
-            const chatId = key.slice('timeline:'.length);
-            const timeline = await this.withLock(
-                key,
-                () => this.readTimelineUnlocked(chatId),
+        const [keys, indexedChatIds] = await Promise.all([
+            this.storageKeys(),
+            this.getChatIds(),
+        ]);
+        const chatIds = new Set(indexedChatIds);
+        for (const { chatId } of this.timelineContainers(keys)) {
+            chatIds.add(chatId);
+        }
+        const timelines = [];
+        for (const chatId of chatIds) {
+            const timeline = await this.getTimeline(
+                chatId,
+                { limit: this.maxSnapshotsPerChat },
             );
-            return { chatId, timeline };
-        }));
-        return timelines.filter(({ timeline }) => timeline.length > 0);
+            if (timeline.length > 0) timelines.push({ chatId, timeline });
+        }
+        return timelines;
     }
 
     async getStorageSummary() {
-        const [keys, storedSummary] = await Promise.all([
-            this.storageKeys(),
-            this.read(SUMMARY_KEY, null),
-        ]);
-        const timelineKeyCount = keys.filter((key) => (
-            typeof key === 'string' && key.startsWith('timeline:')
-        )).length;
-        const summary = normalizeStoredSummary(storedSummary);
-        if (summary && summary.timelineRecordCount === timelineKeyCount) {
+        const storedSummary = normalizeStoredSummary(await this.read(SUMMARY_KEY, null));
+        if (storedSummary) {
             return {
                 ...this.getStatus(),
-                ...summary,
+                ...storedSummary,
                 rebuilding: Boolean(this.summaryRebuildPromise),
                 maxSnapshotsPerChat: this.maxSnapshotsPerChat,
             };
         }
-        if (timelineKeyCount === 0) {
+
+        const keys = await this.storageKeys();
+        const containers = this.timelineContainers(keys);
+        if (containers.length === 0) {
             const empty = emptyStoredSummary();
             return {
                 ...this.getStatus(),
@@ -420,7 +684,7 @@ export class SnapshotStore {
             ...this.getStatus(),
             complete: false,
             rebuilding: Boolean(this.summaryRebuildPromise),
-            chatCount: timelineKeyCount,
+            chatCount: containers.length,
             snapshotCount: null,
             approximateBytes: null,
             maxSnapshotsPerChat: this.maxSnapshotsPerChat,
@@ -430,44 +694,47 @@ export class SnapshotStore {
     async performStorageSummaryRebuild() {
         const revision = this.mutationRevision;
         const keys = await this.storageKeys();
-        const timelineKeys = keys.filter((key) => (
-            typeof key === 'string' && key.startsWith('timeline:')
-        ));
+        const containers = this.timelineContainers(keys);
         let chatCount = 0;
         let snapshotCount = 0;
         let approximateBytes = 0;
         let lastYieldAt = Date.now();
 
-        for (const key of timelineKeys) {
+        for (const container of containers) {
             if (revision !== this.mutationRevision) return this.getStorageSummary();
-            const chatId = key.slice('timeline:'.length);
-            const timeline = await this.withLock(
-                key,
-                () => this.readTimelineUnlocked(
-                    chatId,
-                    { invalidateSummaryOnMigration: false },
-                ),
-            );
-            if (timeline.length === 0) continue;
-            chatCount += 1;
-            snapshotCount += timeline.length;
-            for (const snapshot of timeline) {
-                approximateBytes += approximateJsonBytes(snapshot);
-                if (Date.now() - lastYieldAt >= this.summaryYieldBudgetMs) {
-                    await this.summaryYield();
-                    lastYieldAt = Date.now();
-                    if (revision !== this.mutationRevision) {
-                        return this.getStorageSummary();
+            if (container.indexKey) {
+                const index = normalizeTimelineIndex(
+                    await this.read(container.indexKey, null),
+                    container.chatId,
+                );
+                if (index?.entries.length) {
+                    chatCount += 1;
+                    snapshotCount += index.entries.length;
+                    approximateBytes += sumEntryBytes(index.entries);
+                }
+            } else if (container.legacyKey) {
+                const stored = await this.read(container.legacyKey, []);
+                const { snapshots } = migrateTimeline(stored);
+                if (snapshots.length > 0) {
+                    chatCount += 1;
+                    snapshotCount += snapshots.length;
+                    for (const snapshot of snapshots) {
+                        approximateBytes += approximateJsonBytes(snapshot);
+                        lastYieldAt = await this.maybeYield(lastYieldAt);
+                        if (revision !== this.mutationRevision) {
+                            return this.getStorageSummary();
+                        }
                     }
                 }
             }
+            lastYieldAt = await this.maybeYield(lastYieldAt);
         }
 
         const summary = {
             version: SUMMARY_VERSION,
             complete: true,
             chatCount,
-            timelineRecordCount: timelineKeys.length,
+            timelineRecordCount: containers.length,
             snapshotCount,
             approximateBytes,
             updatedAt: Date.now(),

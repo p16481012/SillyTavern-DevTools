@@ -85,6 +85,38 @@ test('a delayed refresh for chat A cannot overwrite a newer chat B timeline', as
     assert.deepEqual(devTools.timeline.map(({ id }) => id), ['b']);
 });
 
+test('refresh uses the saved snapshot read limit and keeps the retained total', async () => {
+    globalThis.localStorage = memoryLocalStorage();
+    localStorage.setItem(
+        'st-devtools:preferences:v1',
+        JSON.stringify({ timelineReadLimit: 7 }),
+    );
+    const calls = [];
+    const devTools = new DevToolsWindow({
+        getContext: () => ({ chatId: 'chat-a' }),
+        store: {
+            async getTimelinePage(chatId, options) {
+                calls.push([chatId, options]);
+                return {
+                    snapshots: Array.from(
+                        { length: 7 },
+                        (_, index) => snapshot(`recent-${index}`, chatId, index),
+                    ),
+                    totalCount: 42,
+                };
+            },
+        },
+        capture: { addEventListener() {} },
+        version: 'test',
+    });
+    devTools.render = () => {};
+
+    assert.equal(await devTools.refresh(), true);
+    assert.deepEqual(calls, [['chat-a', { limit: 7 }]]);
+    assert.equal(devTools.timeline.length, 7);
+    assert.equal(devTools.timelineTotalCount, 42);
+});
+
 test('timeline refresh is not blocked by a slow all-chat storage summary', async () => {
     const current = { chatId: 'chat-a' };
     const pendingSummary = deferred();

@@ -6,6 +6,7 @@ import {
     findExactRanges,
     findNormalizedRanges,
     findTemplateRanges,
+    finalizeSnapshot,
     flattenPrompt,
     searchSnapshot,
     serializeSnapshot,
@@ -375,6 +376,38 @@ test('buildSources includes processed character prompt fields', () => {
 test('snapshot ids are stable for identical inputs at the same timestamp', () => {
     const payload = [{ role: 'user', content: 'same' }];
     assert.equal(createSnapshotId(1234, payload), createSnapshotId(1234, payload));
+});
+
+test('snapshot finalization counts identical text only once', async () => {
+    const payload = [{ role: 'user', content: 'same prompt text' }];
+    const countedTexts = [];
+    const result = await finalizeSnapshot({
+        contextState: {
+            chatId: 'chat',
+            character: {},
+            characterFields: {},
+            personaDescription: '',
+            authorsNote: '',
+            extensionPrompts: {},
+            configuredPrompts: [],
+            maxContext: 4096,
+        },
+        payload,
+        promptType: 'chat-completion',
+        generationType: 'normal',
+        activatedLore: [],
+        extensionVersion: 'test',
+        tokenCounter: async (text) => {
+            countedTexts.push(text);
+            return String(text).length;
+        },
+    });
+
+    assert.equal(
+        countedTexts.filter((text) => text === result.finalText).length,
+        1,
+    );
+    assert.equal(result.stats.totalTokens, result.finalText.length);
 });
 
 test('searchSnapshot supports literal and regex searches', () => {

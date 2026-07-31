@@ -46,6 +46,13 @@ import {
     searchSnapshotSafely,
 } from './search-runtime.js';
 import { snapshotExportPreview } from './export-preview.js';
+import {
+    DEFAULT_UI_PREFERENCES,
+    MAX_TIMELINE_READ_LIMIT,
+    MIN_TIMELINE_READ_LIMIT,
+    UI_PREFERENCES_KEY,
+    normalizeUiPreferences,
+} from './preferences.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -57,6 +64,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     COMPARISON_POLICY_SETTINGS_KEY,
     LAST_TAB_KEY,
     GEOMETRY_KEY,
+    UI_PREFERENCES_KEY,
 ];
 const COMPARISON_MODES = ['alternative', 'ignore', 'normal'];
 const COMPARISON_TARGETS = ['configured', 'all'];
@@ -80,6 +88,26 @@ function element(tag, options = {}) {
     if (options.title) node.title = options.title;
     if (options.type) node.type = options.type;
     return node;
+}
+
+function attachLazyDetailsContent(details, createContent) {
+    let mounted = false;
+    const mount = () => {
+        if (mounted) return;
+        const content = createContent();
+        if (content) details.appendChild(content);
+        mounted = true;
+    };
+    details.__stDevToolsMountContent = mount;
+    details.addEventListener('toggle', () => {
+        if (details.open) mount();
+    });
+    if (details.open) mount();
+    return details;
+}
+
+function mountDetailsContent(details) {
+    details?.__stDevToolsMountContent?.();
 }
 
 function proseElement(tag, text, options = {}) {
@@ -483,6 +511,7 @@ export class DevToolsWindow {
         this.window = null;
         this.content = null;
         this.timeline = [];
+        this.timelineTotalCount = 0;
         this.selectedId = null;
         this.selectedTimelineIds = new Set();
         this.timelineSelectionChatId = null;
@@ -505,6 +534,7 @@ export class DevToolsWindow {
             complete: false,
             rebuilding: false,
         };
+        this.preferences = this.loadUiPreferences();
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
@@ -517,6 +547,11 @@ export class DevToolsWindow {
         };
         this.timelineSnapshotsOpen = false;
         this.previouslyFocused = null;
+        this.settingsPreviouslyFocused = null;
+        this.settingsOverlay = null;
+        this.settingsPanel = null;
+        this.timelineReadLimitInput = null;
+        this.primaryRegions = [];
         this.storageErrors = [];
         this.importedDiagnostics = null;
         this.diagnosticImportError = null;
@@ -533,6 +568,196 @@ export class DevToolsWindow {
         return this.timeline.find((snapshot) => snapshot.id === this.selectedId)
             ?? this.timeline.at(-1)
             ?? null;
+    }
+
+    async readTimelinePage(chatId) {
+        const limit = this.preferences.timelineReadLimit;
+        if (typeof this.store.getTimelinePage === 'function') {
+            const page = await this.store.getTimelinePage(chatId, { limit });
+            const snapshots = Array.isArray(page?.snapshots) ? page.snapshots : [];
+            return {
+                snapshots,
+                loadedCount: snapshots.length,
+                totalCount: Math.max(
+                    snapshots.length,
+                    Number.isFinite(page?.totalCount)
+                        ? Math.trunc(page.totalCount)
+                        : snapshots.length,
+                ),
+                limit,
+            };
+        }
+        const timeline = await this.store.getTimeline(chatId, { limit });
+        const snapshots = Array.isArray(timeline) ? timeline.slice(-limit) : [];
+        return {
+            snapshots,
+            loadedCount: snapshots.length,
+            totalCount: Array.isArray(timeline) ? timeline.length : snapshots.length,
+            limit,
+        };
+    }
+
+    loadUiPreferences() {
+        try {
+            const stored = JSON.parse(localStorage.getItem(UI_PREFERENCES_KEY) ?? 'null');
+            return normalizeUiPreferences(stored ?? DEFAULT_UI_PREFERENCES);
+        } catch {
+            return normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+        }
+    }
+
+    saveUiPreferences(value) {
+        this.preferences = normalizeUiPreferences(value);
+        try {
+            localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify(this.preferences));
+        } catch {
+            // The current browser may not allow persistent local storage.
+        }
+        return this.preferences;
+    }
+
+    buildSettingsPanel() {
+        const overlay = element('div', { className: 'st-devtools-settings-overlay' });
+        overlay.hidden = true;
+        overlay.addEventListener('pointerdown', (event) => {
+            if (event.target === overlay) this.closeSettings();
+        });
+
+        const panel = element('section', { className: 'st-devtools-settings-panel' });
+        panel.tabIndex = -1;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'st-devtools-settings-title');
+
+        const heading = element('div', { className: 'st-devtools-settings-header' });
+        const titleGroup = element('div');
+        const title = element('h2', {
+            text: t('settings.title'),
+        });
+        title.id = 'st-devtools-settings-title';
+        titleGroup.append(
+            title,
+            proseElement('p', t('settings.description')),
+        );
+        const close = element('button', {
+            className: 'menu_button',
+            title: t('action.cancel'),
+            type: 'button',
+        });
+        close.setAttribute('aria-label', t('action.cancel'));
+        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
+        close.addEventListener('click', () => this.closeSettings());
+        heading.append(titleGroup, close);
+
+        const form = element('form', { className: 'st-devtools-settings-form' });
+        const field = element('div', { className: 'st-devtools-settings-field' });
+        const label = element('label');
+        label.htmlFor = 'st-devtools-settings-timeline-limit';
+        label.appendChild(element('strong', { text: t('settings.timelineReadLimit') }));
+        const description = proseElement(
+            'span',
+            t('settings.timelineReadLimitDescription'),
+            { className: 'st-devtools-settings-description' },
+        );
+        description.id = 'st-devtools-settings-timeline-limit-description';
+        const input = element('input');
+        input.id = 'st-devtools-settings-timeline-limit';
+        input.type = 'number';
+        input.min = String(MIN_TIMELINE_READ_LIMIT);
+        input.max = String(MAX_TIMELINE_READ_LIMIT);
+        input.step = '1';
+        input.inputMode = 'numeric';
+        input.required = true;
+        input.value = String(this.preferences.timelineReadLimit);
+        input.setAttribute(
+            'aria-describedby',
+            'st-devtools-settings-timeline-limit-description ' +
+            'st-devtools-settings-timeline-limit-hint',
+        );
+        const hint = proseElement(
+            'small',
+            t('settings.timelineReadLimitHint', {
+                min: MIN_TIMELINE_READ_LIMIT,
+                max: MAX_TIMELINE_READ_LIMIT,
+            }),
+        );
+        hint.id = 'st-devtools-settings-timeline-limit-hint';
+        field.append(label, description, input, hint);
+
+        const actions = element('div', { className: 'st-devtools-settings-actions' });
+        const reset = element('button', {
+            className: 'menu_button',
+            text: t('action.resetSettings'),
+            type: 'button',
+        });
+        reset.addEventListener('click', () => {
+            input.value = String(DEFAULT_UI_PREFERENCES.timelineReadLimit);
+            input.focus();
+        });
+        const cancel = element('button', {
+            className: 'menu_button',
+            text: t('action.cancel'),
+            type: 'button',
+        });
+        cancel.addEventListener('click', () => this.closeSettings());
+        const apply = element('button', {
+            className: 'menu_button',
+            text: t('action.applySettings'),
+            type: 'submit',
+        });
+        actions.append(reset, cancel, apply);
+        form.append(field, actions);
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const preferences = this.saveUiPreferences({
+                timelineReadLimit: input.value,
+            });
+            input.value = String(preferences.timelineReadLimit);
+            this.closeSettings();
+            await this.refresh();
+            globalThis.toastr?.success?.(t('settings.saved'), 'ST DevTools');
+        });
+
+        panel.append(heading, form);
+        overlay.appendChild(panel);
+        this.settingsOverlay = overlay;
+        this.settingsPanel = panel;
+        this.timelineReadLimitInput = input;
+        return overlay;
+    }
+
+    openSettings() {
+        if (!this.settingsOverlay || !this.settingsPanel) return;
+        this.settingsPreviouslyFocused = document.activeElement;
+        this.timelineReadLimitInput.value = String(this.preferences.timelineReadLimit);
+        this.window.setAttribute('aria-modal', 'false');
+        for (const region of this.primaryRegions) {
+            region.inert = true;
+            region.setAttribute('aria-hidden', 'true');
+        }
+        this.settingsOverlay.hidden = false;
+        queueMicrotask(() => {
+            this.timelineReadLimitInput?.focus();
+            this.timelineReadLimitInput?.select();
+        });
+    }
+
+    closeSettings({ restoreFocus = true } = {}) {
+        if (!this.settingsOverlay || this.settingsOverlay.hidden) return;
+        this.settingsOverlay.hidden = true;
+        this.window.setAttribute('aria-modal', 'true');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (
+            restoreFocus
+            && this.settingsPreviouslyFocused?.isConnected
+            && typeof this.settingsPreviouslyFocused.focus === 'function'
+        ) {
+            this.settingsPreviouslyFocused.focus();
+        }
+        this.settingsPreviouslyFocused = null;
     }
 
     loadRuleSettings() {
@@ -567,6 +792,7 @@ export class DevToolsWindow {
     }
 
     close() {
+        this.closeSettings({ restoreFocus: false });
         if (this.root) {
             this.root.hidden = true;
         }
@@ -599,13 +825,21 @@ export class DevToolsWindow {
         );
 
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
+        const settings = element('button', {
+            className: 'menu_button',
+            title: t('action.settings'),
+            type: 'button',
+        });
+        settings.setAttribute('aria-label', t('action.settings'));
+        settings.appendChild(element('i', { className: 'fa-solid fa-gear' }));
+        settings.addEventListener('click', () => this.openSettings());
         const refresh = element('button', { className: 'menu_button', title: t('action.refresh'), type: 'button' });
         refresh.appendChild(element('i', { className: 'fa-solid fa-rotate' }));
         refresh.addEventListener('click', () => this.refresh());
         const close = element('button', { className: 'menu_button', title: t('action.close'), type: 'button' });
         close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
         close.addEventListener('click', () => this.close());
-        headerActions.append(refresh, close);
+        headerActions.append(settings, refresh, close);
         header.append(title, headerActions);
 
         const tabList = element('nav', { className: 'st-devtools-tabs' });
@@ -623,7 +857,13 @@ export class DevToolsWindow {
 
         this.content = element('main', { className: 'st-devtools-content' });
         this.content.setAttribute('role', 'tabpanel');
-        this.window.append(header, tabList, this.content);
+        this.primaryRegions = [header, tabList, this.content];
+        this.window.append(
+            header,
+            tabList,
+            this.content,
+            this.buildSettingsPanel(),
+        );
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
         this.syncOpaqueTheme();
@@ -713,7 +953,16 @@ export class DevToolsWindow {
         if (snapshot.chatId === this.currentChatId()) {
             const alreadyPresent = this.timeline.some((item) => item.id === snapshot.id);
             this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
-                .sort((left, right) => left.timestamp - right.timestamp);
+                .sort((left, right) => left.timestamp - right.timestamp)
+                .slice(-this.preferences.timelineReadLimit);
+            if (!alreadyPresent) {
+                const maximum = Number(this.store.maxSnapshotsPerChat)
+                    || MAX_TIMELINE_READ_LIMIT;
+                this.timelineTotalCount = Math.min(
+                    maximum,
+                    Math.max(this.timeline.length, this.timelineTotalCount + 1),
+                );
+            }
             this.pruneTimelineSelection();
             if (!alreadyPresent) this.selectedId = snapshot.id;
         }
@@ -773,11 +1022,12 @@ export class DevToolsWindow {
     } = {}) {
         const requestId = ++this.refreshRequestId;
         try {
-            const timeline = await this.store.getTimeline(chatId);
+            const page = await this.readTimelinePage(chatId);
             if (requestId !== this.refreshRequestId || chatId !== this.currentChatId()) {
                 return false;
             }
-            this.timeline = timeline;
+            this.timeline = page.snapshots;
+            this.timelineTotalCount = page.totalCount;
             this.pruneTimelineSelection();
             if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
                 this.selectedId = this.timeline.at(-1)?.id ?? null;
@@ -990,6 +1240,10 @@ export class DevToolsWindow {
             manual: false,
             preview: false,
         };
+        this.preferences = normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+        if (this.timelineReadLimitInput) {
+            this.timelineReadLimitInput.value = String(this.preferences.timelineReadLimit);
+        }
         this.importedDiagnostics = null;
         this.diagnosticImportError = null;
         return deletedCount;
@@ -1009,7 +1263,10 @@ export class DevToolsWindow {
 
     focusableElements() {
         if (!this.window) return [];
-        return [...this.window.querySelectorAll(
+        const scope = this.settingsOverlay && !this.settingsOverlay.hidden
+            ? this.settingsPanel
+            : this.window;
+        return [...scope.querySelectorAll(
             'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
             'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
         )].filter((node) => (
@@ -1025,7 +1282,11 @@ export class DevToolsWindow {
         if (!this.root || this.root.hidden) return;
         if (event.key === 'Escape') {
             event.preventDefault();
-            this.close();
+            if (this.settingsOverlay && !this.settingsOverlay.hidden) {
+                this.closeSettings();
+            } else {
+                this.close();
+            }
             return;
         }
         if (event.key !== 'Tab') return;
@@ -1039,7 +1300,10 @@ export class DevToolsWindow {
         const first = focusable[0];
         const last = focusable.at(-1);
         const active = document.activeElement;
-        if (!this.window.contains(active)) {
+        const focusScope = this.settingsOverlay && !this.settingsOverlay.hidden
+            ? this.settingsPanel
+            : this.window;
+        if (!focusScope.contains(active)) {
             event.preventDefault();
             (event.shiftKey ? last : first).focus();
         } else if (event.shiftKey && active === first) {
@@ -1304,70 +1568,73 @@ export class DevToolsWindow {
                 }
                 summary.append(heading, badges);
 
-                const body = element('div', { className: 'st-devtools-source-body' });
-                if (source.type !== 'final') {
-                    const metadata = element('div', { className: 'st-devtools-source-meta' });
-                    const attribution = element('span', {
-                        className: 'st-devtools-source-attribution',
-                    });
-                    attribution.append(
-                        element('strong', {
-                            text: `${t('explorer.attributionLabel')}: ${attributionDisplayLabel(source.attribution)}`,
-                        }),
-                        proseElement(
-                            'small',
-                            t(`explorer.attribution.${source.attribution}`),
-                        ),
-                    );
-                    metadata.appendChild(attribution);
-                    if (
-                        source.attribution === 'template'
-                        && Number.isFinite(source.provenance?.confidence)
-                    ) {
-                        metadata.appendChild(element('span', {
-                            className: 'st-devtools-badge st-devtools-provenance-confidence',
-                            text: t('provenance.confidence', {
-                                count: Math.round(source.provenance.confidence * 100),
+                details.appendChild(summary);
+                attachLazyDetailsContent(details, () => {
+                    const body = element('div', { className: 'st-devtools-source-body' });
+                    if (source.type !== 'final') {
+                        const metadata = element('div', { className: 'st-devtools-source-meta' });
+                        const attribution = element('span', {
+                            className: 'st-devtools-source-attribution',
+                        });
+                        attribution.append(
+                            element('strong', {
+                                text: `${t('explorer.attributionLabel')}: ${attributionDisplayLabel(source.attribution)}`,
                             }),
-                            title: source.provenance.method ?? 'macro-template',
-                        }));
-                    }
-                    if (multimodalLabels) {
-                        metadata.appendChild(element('span', {
-                            className: 'st-devtools-badge st-devtools-multimodal-method',
-                            text: multimodalLabels.method,
-                        }));
-                    }
-                    if (source.ranges?.length) {
-                        metadata.appendChild(element('span', {
-                            className: 'st-devtools-badge',
-                            text: t('explorer.finalLocation', { count: source.ranges.length }),
-                        }));
-                    }
-                    body.appendChild(metadata);
-                    if (source.ranges?.length) {
-                        const actions = element('div', {
-                            className: 'st-devtools-source-actions',
-                        });
-                        const jump = element('button', {
-                            className: 'menu_button st-devtools-range-jump',
-                            text: t('action.jumpToFinal'),
-                            type: 'button',
-                        });
-                        jump.setAttribute(
-                            'aria-label',
-                            `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`,
+                            proseElement(
+                                'small',
+                                t(`explorer.attribution.${source.attribution}`),
+                            ),
                         );
-                        jump.addEventListener('click', () => this.jumpToFinalRange(source.id));
-                        actions.appendChild(jump);
-                        body.appendChild(actions);
+                        metadata.appendChild(attribution);
+                        if (
+                            source.attribution === 'template'
+                            && Number.isFinite(source.provenance?.confidence)
+                        ) {
+                            metadata.appendChild(element('span', {
+                                className: 'st-devtools-badge st-devtools-provenance-confidence',
+                                text: t('provenance.confidence', {
+                                    count: Math.round(source.provenance.confidence * 100),
+                                }),
+                                title: source.provenance.method ?? 'macro-template',
+                            }));
+                        }
+                        if (multimodalLabels) {
+                            metadata.appendChild(element('span', {
+                                className: 'st-devtools-badge st-devtools-multimodal-method',
+                                text: multimodalLabels.method,
+                            }));
+                        }
+                        if (source.ranges?.length) {
+                            metadata.appendChild(element('span', {
+                                className: 'st-devtools-badge',
+                                text: t('explorer.finalLocation', { count: source.ranges.length }),
+                            }));
+                        }
+                        body.appendChild(metadata);
+                        if (source.ranges?.length) {
+                            const actions = element('div', {
+                                className: 'st-devtools-source-actions',
+                            });
+                            const jump = element('button', {
+                                className: 'menu_button st-devtools-range-jump',
+                                text: t('action.jumpToFinal'),
+                                type: 'button',
+                            });
+                            jump.setAttribute(
+                                'aria-label',
+                                `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`,
+                            );
+                            jump.addEventListener('click', () => this.jumpToFinalRange(source.id));
+                            actions.appendChild(jump);
+                            body.appendChild(actions);
+                        }
                     }
-                }
-                const pre = source.type === 'final'
-                    ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
-                    : element('pre', { text: source.content });
-                body.appendChild(pre);
-                details.append(summary, body);
+                    const pre = source.type === 'final'
+                        ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
+                        : element('pre', { text: source.content });
+                    body.appendChild(pre);
+                    return body;
+                });
                 if (source.type !== 'final' && source.ranges?.length) {
                     details.addEventListener('pointerenter', () => this.highlightSourceMapping([source.id]));
                     details.addEventListener('pointerleave', () => this.clearSourceMapping());
@@ -1465,6 +1732,7 @@ export class DevToolsWindow {
         if (!finalCard) return;
         finalCard.closest('.st-devtools-source-group')?.setAttribute('open', '');
         finalCard.open = true;
+        mountDetailsContent(finalCard);
         const range = [...this.window.querySelectorAll('.st-devtools-final-range')]
             .find((node) => this.rangeSourceIds(node).includes(sourceId));
         if (!range) return;
@@ -1479,6 +1747,7 @@ export class DevToolsWindow {
         if (!card) return;
         card.closest('.st-devtools-source-group')?.setAttribute('open', '');
         card.open = true;
+        mountDetailsContent(card);
         this.highlightSourceMapping([sourceId]);
         card.querySelector('summary')?.focus({ preventScroll: true });
         card.scrollIntoView({ block: 'center', behavior: 'auto' });
@@ -1525,6 +1794,7 @@ export class DevToolsWindow {
         for (const card of cards) {
             card.closest('.st-devtools-source-group')?.setAttribute('open', '');
             card.open = true;
+            mountDetailsContent(card);
             card.classList.add('rule-focus');
         }
         this.highlightSourceMapping(sourceIds);
@@ -1598,6 +1868,7 @@ export class DevToolsWindow {
         if (finalCard) {
             finalCard.closest('.st-devtools-source-group')?.setAttribute('open', '');
             finalCard.open = true;
+            mountDetailsContent(finalCard);
         }
         const matches = this.highlightFinalEvidence(finalRanges);
         const first = matches[0];
@@ -1618,7 +1889,12 @@ export class DevToolsWindow {
         this.pruneTimelineSelection();
         page.appendChild(element('p', {
             className: 'st-devtools-section-intro',
-            text: t('snapshot.retained', { count: this.timeline.length }),
+            text: this.timelineTotalCount > this.timeline.length
+                ? t('snapshot.loadedSubset', {
+                    loaded: this.timeline.length,
+                    total: this.timelineTotalCount,
+                })
+                : t('snapshot.loadedAll', { count: this.timeline.length }),
         }));
         page.appendChild(this.renderStorageOverview());
 
@@ -1727,7 +2003,7 @@ export class DevToolsWindow {
             return page;
         }
 
-        page.appendChild(this.renderGrowthChart(analyses));
+        page.appendChild(this.renderGrowthChart(analyses, this.timelineTotalCount));
         const list = element('div', { className: 'st-devtools-timeline' });
         for (const analysis of [...analyses].reverse()) {
             const { snapshot, previous, tokenDelta, lore } = analysis;
@@ -1767,7 +2043,9 @@ export class DevToolsWindow {
                 className: `st-devtools-change-pill${tokenDelta > 0 ? ' increased' : tokenDelta < 0 ? ' decreased' : ''}`,
                 text: previous
                     ? t('timeline.tokenDelta', { delta: formatDelta(tokenDelta) })
-                    : t('timeline.firstSnapshot'),
+                    : this.timelineTotalCount > this.timeline.length
+                        ? t('timeline.firstLoadedSnapshot')
+                        : t('timeline.firstSnapshot'),
             }));
             if (previous) {
                 if (lore.activated.length) {
@@ -1828,7 +2106,12 @@ export class DevToolsWindow {
             element('strong', { text: t('timeline.snapshotsTitle') }),
             element('span', {
                 className: 'st-devtools-disclosure-count',
-                text: t('timeline.snapshotCount', { count: analyses.length }),
+                text: this.timelineTotalCount > analyses.length
+                    ? t('timeline.loadedSnapshotCount', {
+                        loaded: analyses.length,
+                        total: this.timelineTotalCount,
+                    })
+                    : t('timeline.snapshotCount', { count: analyses.length }),
             }),
         );
         const selectionToolbar = this.renderTimelineSelectionToolbar();
@@ -2014,15 +2297,32 @@ export class DevToolsWindow {
             type: 'button',
         });
         button.disabled = this.timeline.length === 0;
-        button.addEventListener('click', () => {
-            const extension = format === 'markdown' ? 'md' : format;
-            const mime = format === 'json' ? 'application/json' : 'text/markdown';
-            const date = new Date().toISOString().replaceAll(':', '-');
-            downloadText(
-                `st-devtools-timeline-diagnostics-${date}.${extension}`,
-                serializeTimelineDiagnostics(this.timeline, format),
-                mime,
-            );
+        button.addEventListener('click', async () => {
+            const errorId = `export-current:${format}`;
+            try {
+                const chatId = this.currentChatId();
+                const maximum = Number(this.store.maxSnapshotsPerChat)
+                    || MAX_TIMELINE_READ_LIMIT;
+                const timeline = this.timelineTotalCount > this.timeline.length
+                    ? await this.store.getTimeline(chatId, { limit: maximum })
+                    : this.timeline;
+                const extension = format === 'markdown' ? 'md' : format;
+                const mime = format === 'json' ? 'application/json' : 'text/markdown';
+                const date = new Date().toISOString().replaceAll(':', '-');
+                downloadText(
+                    `st-devtools-timeline-diagnostics-${date}.${extension}`,
+                    serializeTimelineDiagnostics(timeline, format),
+                    mime,
+                );
+                this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
+            } catch (error) {
+                this.addStorageError({
+                    id: errorId,
+                    error,
+                    retry: null,
+                });
+                globalThis.toastr?.error?.(t('storage.exportCurrentFailed'), 'ST DevTools');
+            }
         });
         return button;
     }
@@ -2141,6 +2441,7 @@ export class DevToolsWindow {
             const result = await this.store.clearAll();
             const localSettingCount = this.clearLocalData();
             this.timeline = [];
+            this.timelineTotalCount = 0;
             this.selectedId = null;
             this.selectedTimelineIds.clear();
             this.storageSummary = {
@@ -2188,6 +2489,7 @@ export class DevToolsWindow {
             await this.store.clearTimeline(chatId);
             if (chatId === this.currentChatId()) {
                 this.timeline = [];
+                this.timelineTotalCount = 0;
                 this.selectedId = null;
                 this.selectedTimelineIds.clear();
             }
@@ -2221,11 +2523,7 @@ export class DevToolsWindow {
                 return false;
             }
             if (chatId === this.currentChatId()) {
-                this.timeline = this.timeline.filter((item) => item.id !== snapshot.id);
-                this.selectedTimelineIds.delete(snapshot.id);
-                if (this.selectedId === snapshot.id) {
-                    this.selectedId = this.timeline.at(-1)?.id ?? null;
-                }
+                await this.refresh({ throwOnError: true, chatId });
             }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
             this.render();
@@ -2271,13 +2569,15 @@ export class DevToolsWindow {
         const errorId = 'delete:selected';
         try {
             const deletedCount = await this.store.deleteSnapshots(chatId, ids);
-            const timelineAfterDelete = await this.store.getTimeline(chatId);
-            const remainingCount = timelineAfterDelete.filter(({ id }) => idSet.has(id)).length;
+            const pageAfterDelete = await this.readTimelinePage(chatId);
+            const remainingCount = pageAfterDelete.snapshots
+                .filter(({ id }) => idSet.has(id)).length;
             if (remainingCount > 0) {
                 throw new Error(t('storage.deleteIncomplete', { count: remainingCount }));
             }
             if (chatId === this.currentChatId()) {
-                this.timeline = timelineAfterDelete;
+                this.timeline = pageAfterDelete.snapshots;
+                this.timelineTotalCount = pageAfterDelete.totalCount;
                 this.selectedTimelineIds = new Set(
                     [...this.selectedTimelineIds].filter((id) => !idSet.has(id)),
                 );
@@ -2308,7 +2608,7 @@ export class DevToolsWindow {
         }
     }
 
-    renderGrowthChart(analyses) {
+    renderGrowthChart(analyses, retainedCount = analyses.length) {
         const figure = element('figure', { className: 'st-devtools-growth' });
         const visibleAnalyses = analyses.slice(-GROWTH_CHART_POINT_LIMIT);
         const values = visibleAnalyses.map(
@@ -2330,7 +2630,7 @@ export class DevToolsWindow {
         const points = values.map(pointFor);
         const chartDescription = t('timeline.growthDescription', {
             count: visibleAnalyses.length,
-            total: analyses.length,
+            total: retainedCount,
         });
 
         const caption = element('figcaption');
@@ -2344,7 +2644,7 @@ export class DevToolsWindow {
             element('span', {
                 text: t('timeline.growthWindow', {
                     count: visibleAnalyses.length,
-                    total: analyses.length,
+                    total: retainedCount,
                 }),
             }),
             element('span', {
@@ -2530,20 +2830,47 @@ export class DevToolsWindow {
             t('diff.fullPromptDescription'),
         ));
         fullDiffSummary.appendChild(fullDiffHeading);
-        fullDiff.append(fullDiffSummary, diffOutput);
+        fullDiff.appendChild(fullDiffSummary);
+        attachLazyDetailsContent(fullDiff, () => diffOutput);
         const sourceSection = element('section', { className: 'st-devtools-diff-section' });
         const loreSection = element('section', { className: 'st-devtools-diff-section' });
-        const renderDiff = () => {
-            const base = this.timeline.find((snapshot) => snapshot.id === baseSelect.select.value);
-            const compare = this.timeline.find((snapshot) => snapshot.id === compareSelect.select.value);
+        let selectionRevision = 0;
+        let renderedFullDiffRevision = -1;
+        let selectedBase = null;
+        let selectedCompare = null;
+        const renderFullDiff = () => {
+            mountDetailsContent(fullDiff);
+            if (
+                renderedFullDiffRevision === selectionRevision
+                || !selectedBase
+                || !selectedCompare
+            ) return;
             diffOutput.replaceChildren();
+            this.appendDiffMarkup(
+                diffOutput,
+                selectedBase.finalText,
+                selectedCompare.finalText,
+            );
+            renderedFullDiffRevision = selectionRevision;
+        };
+        fullDiff.addEventListener('toggle', () => {
+            if (fullDiff.open) renderFullDiff();
+        });
+        const renderDiff = () => {
+            selectedBase = this.timeline.find(
+                (snapshot) => snapshot.id === baseSelect.select.value,
+            );
+            selectedCompare = this.timeline.find(
+                (snapshot) => snapshot.id === compareSelect.select.value,
+            );
+            selectionRevision += 1;
             sourceSection.replaceChildren();
             loreSection.replaceChildren();
-            if (!base || !compare) return;
+            if (!selectedBase || !selectedCompare) return;
 
-            this.appendDiffMarkup(diffOutput, base.finalText, compare.finalText);
-            this.renderSourceChanges(sourceSection, base, compare);
-            this.renderLoreChanges(loreSection, base, compare);
+            this.renderSourceChanges(sourceSection, selectedBase, selectedCompare);
+            this.renderLoreChanges(loreSection, selectedBase, selectedCompare);
+            if (fullDiff.open) renderFullDiff();
         };
         baseSelect.select.addEventListener('change', renderDiff);
         compareSelect.select.addEventListener('change', renderDiff);
@@ -2598,25 +2925,28 @@ export class DevToolsWindow {
                     text: t('diff.tokenDelta', { delta: formatDelta(change.tokenDelta) }),
                 }),
             );
-            const content = element('pre');
-            if (change.status === 'added') {
-                content.appendChild(element('span', {
-                    className: 'diff-added',
-                    text: change.after?.content ?? '',
-                }));
-            } else if (change.status === 'removed') {
-                content.appendChild(element('span', {
-                    className: 'diff-removed',
-                    text: change.before?.content ?? '',
-                }));
-            } else {
-                this.appendDiffMarkup(
-                    content,
-                    change.before?.content ?? '',
-                    change.after?.content ?? '',
-                );
-            }
-            card.append(summary, content);
+            card.appendChild(summary);
+            attachLazyDetailsContent(card, () => {
+                const content = element('pre');
+                if (change.status === 'added') {
+                    content.appendChild(element('span', {
+                        className: 'diff-added',
+                        text: change.after?.content ?? '',
+                    }));
+                } else if (change.status === 'removed') {
+                    content.appendChild(element('span', {
+                        className: 'diff-removed',
+                        text: change.before?.content ?? '',
+                    }));
+                } else {
+                    this.appendDiffMarkup(
+                        content,
+                        change.before?.content ?? '',
+                        change.after?.content ?? '',
+                    );
+                }
+                return content;
+            });
             list.appendChild(card);
         }
         section.appendChild(list);
@@ -2827,12 +3157,12 @@ export class DevToolsWindow {
             t('context.requestSettings'),
             t('context.requestSettingsDescription'),
         ));
-        settingsDetails.append(
-            settingsSummary,
+        settingsDetails.appendChild(settingsSummary);
+        attachLazyDetailsContent(settingsDetails, () => (
             element('pre', {
                 text: JSON.stringify(snapshot.request?.settings ?? {}, null, 2),
-            }),
-        );
+            })
+        ));
         const requestDetails = element('details', {
             className: 'st-devtools-context-details st-devtools-disclosure',
         });
@@ -2841,12 +3171,12 @@ export class DevToolsWindow {
             t('context.requestBody'),
             t('context.requestBodyDescription'),
         ));
-        requestDetails.append(
-            requestSummary,
+        requestDetails.appendChild(requestSummary);
+        attachLazyDetailsContent(requestDetails, () => (
             snapshot.request?.body
                 ? element('pre', { text: JSON.stringify(snapshot.request.body, null, 2) })
-                : proseElement('p', t('context.notCaptured')),
-        );
+                : proseElement('p', t('context.notCaptured'))
+        ));
         const payloadDetails = element('details', {
             className: 'st-devtools-context-details st-devtools-disclosure',
         });
@@ -2855,15 +3185,15 @@ export class DevToolsWindow {
             t('context.promptPayload'),
             t('context.promptPayloadDescription'),
         ));
-        payloadDetails.append(
-            payloadSummary,
+        payloadDetails.appendChild(payloadSummary);
+        attachLazyDetailsContent(payloadDetails, () => (
             element('pre', {
                 className: 'st-devtools-context-payload',
                 text: snapshot.promptType === 'chat-completion'
                     ? JSON.stringify(snapshot.payload, null, 2)
                     : snapshot.finalText,
-            }),
-        );
+            })
+        ));
         page.append(
             coreStats,
             captureCard,
@@ -3941,6 +4271,7 @@ export class DevToolsWindow {
                         if (!source) return;
                         source.closest('.st-devtools-source-group')?.setAttribute('open', '');
                         source.open = true;
+                        mountDetailsContent(source);
                         source.scrollIntoView({ block: 'center' });
                         source.classList.add('search-focus');
                         setTimeout(() => source?.classList.remove('search-focus'), 1500);

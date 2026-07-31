@@ -54,7 +54,68 @@ test('timeline reads persist one-time schema migration', async () => {
 
     const timeline = await store.getTimeline('chat');
     assert.equal(timeline[0].schemaVersion, 5);
-    assert.equal(store.memory.get(store.timelineKey('chat'))[0].schemaVersion, 5);
+    assert.equal(store.memory.has(store.timelineKey('chat')), false);
+    assert.equal(
+        store.memory.get(store.timelineIndexKey('chat')).version,
+        2,
+    );
+    assert.equal(
+        store.memory.get(store.snapshotKey('chat', 'legacy')).schemaVersion,
+        5,
+    );
+});
+
+test('an interrupted timeline layout migration keeps the legacy record for retry', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const legacyKey = store.timelineKey('chat');
+    const indexKey = store.timelineIndexKey('chat');
+    store.memory.set(legacyKey, [legacySnapshot()]);
+    const write = store.write.bind(store);
+    let failIndexWrite = true;
+    store.write = async (key, value) => {
+        if (key === indexKey && failIndexWrite) {
+            throw new Error('simulated index failure');
+        }
+        return write(key, value);
+    };
+
+    await assert.rejects(store.getTimeline('chat'), /simulated index failure/);
+    assert.equal(store.memory.has(legacyKey), true);
+    assert.equal(store.memory.has(indexKey), false);
+
+    failIndexWrite = false;
+    const timeline = await store.getTimeline('chat');
+    assert.deepEqual(timeline.map(({ id }) => id), ['legacy']);
+    assert.equal(store.memory.has(legacyKey), false);
+});
+
+test('timeline layout migration and clearAll cannot resurrect cleared records', async () => {
+    let migrationStarted;
+    let releaseMigration;
+    const started = new Promise((resolve) => {
+        migrationStarted = resolve;
+    });
+    const held = new Promise((resolve) => {
+        releaseMigration = resolve;
+    });
+    const store = new SnapshotStore({
+        namespace: 'test',
+        summaryYieldBudgetMs: 0,
+        migrationYield: async () => {
+            migrationStarted();
+            await held;
+        },
+    });
+    store.memory.set(store.timelineKey('chat'), [legacySnapshot()]);
+
+    const reading = store.getTimeline('chat');
+    await started;
+    const clearing = store.clearAll();
+    releaseMigration();
+
+    assert.deepEqual((await reading).map(({ id }) => id), ['legacy']);
+    assert.deepEqual(await clearing, { chatCount: 1, snapshotCount: 1 });
+    assert.deepEqual(await store.storageKeys(), []);
 });
 
 test('v4 request captures gain lifecycle defaults without losing request data', () => {

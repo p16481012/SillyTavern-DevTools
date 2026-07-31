@@ -976,12 +976,19 @@ export async function finalizeSnapshot({
         requestBodyAvailable: false,
         fallback: true,
     });
-    const count = async (text) => {
-        try {
-            return Number(await tokenCounter(text)) || 0;
-        } catch {
-            return Math.ceil(new TextEncoder().encode(text).length / 3.35);
+    const tokenCountsByText = new Map();
+    const count = (text) => {
+        const content = String(text ?? '');
+        if (!tokenCountsByText.has(content)) {
+            tokenCountsByText.set(content, (async () => {
+                try {
+                    return Number(await tokenCounter(content)) || 0;
+                } catch {
+                    return Math.ceil(new TextEncoder().encode(content).length / 3.35);
+                }
+            })());
         }
+        return tokenCountsByText.get(content);
     };
 
     const tokenCounts = await Promise.all(sources.map((source) => count(source.content)));
