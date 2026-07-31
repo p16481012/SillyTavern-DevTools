@@ -1,13 +1,59 @@
-# v0.10.1 사용자 실사용 체크리스트
+# v0.11.0 사용자 실사용 체크리스트
 
-v0.10.1은 generation별 상관관계, 로컬 usage 추정, 사용자 가격 override와 스키마 v7 개인정보 경계를 추가합니다. 아래 항목은 실제 SillyTavern 이벤트·채팅 메시지·IndexedDB·브라우저 UI에서 확인해야 하는 검토 절차입니다. 공식 SillyTavern 공개 이벤트에는 provider response usage와 대응 provider request ID가 없으므로, 기본 설치에서 provider 보고 usage가 나타나는 것을 성공 조건으로 삼지 않습니다.
+v0.11.0은 기본값이 꺼진 선택적 AI Semantic Inspector를 추가합니다. 아래 항목은 실제 SillyTavern의 현재 provider/model, `generateRaw`, 채팅 캡처, IndexedDB와 브라우저 UI에서 확인해야 하는 검토 절차입니다. AI 검사는 선택한 full snapshot의 프롬프트 원문을 현재 provider에 보낼 수 있고 취소가 이미 시작된 계산·과금을 되돌린다고 보장하지 않으므로, 비밀이나 실제 개인정보가 없는 테스트 프롬프트와 작은 응답 상한을 사용하세요. 메모리 cache도 전체 raw 요청/응답과 전용 source/quote 필드는 보관하지 않지만 AI가 원문 표현을 반복한 title·summary·rationale를 TTL 동안 유지할 수 있습니다.
 
 ## 시작 전
 
-- [ ] ST DevTools 제목에 `v0.10.1`이 표시된다.
+- [ ] ST DevTools 제목에 `v0.11.0`이 표시된다.
 - [ ] 중요한 스냅샷은 먼저 `전체 원문 백업`으로 내려받아 공유되지 않는 위치에 보관한다.
-- [ ] lifecycle·가격·복원 검사는 실제 보관분과 분리한 테스트 채팅 또는 테스트 브라우저 프로필에서 한다.
+- [ ] AI·lifecycle·가격·복원 검사는 실제 보관분과 분리한 테스트 채팅 또는 테스트 브라우저 프로필에서 한다.
 - [ ] SillyTavern 버전, 브라우저, Chat/Text Completion, 선택 source와 model을 기록한다.
+- [ ] 실제 API key·개인정보·비공개 캐릭터 설정이 없는 짧은 테스트 프롬프트와 감당 가능한 사용자 가격 override를 준비한다.
+
+## 기본 OFF·개인정보 모드
+
+- [ ] 업데이트 직후 설정의 `선택적 AI 의미 검사 사용`이 꺼져 있고 규칙 검사 탭에서 AI 호출을 바로 실행할 수 없다.
+- [ ] AI 설정이 꺼져 있어도 기존 정적 Rule Inspector finding·클러스터·검토 판정은 정상 표시된다.
+- [ ] 설정에서 AI 검사를 켜고 응답 상한을 저장한 뒤에만 선택 UI가 나타나며 처음에는 finding·cluster가 하나도 체크되지 않는다.
+- [ ] `원문 제거본`과 `메타데이터만` 스냅샷에서는 full 원문을 복원하거나 AI 준비를 시도하지 않고 전체 원문 전용 안내를 표시한다.
+- [ ] 개인정보 모드 메타데이터가 없던 구버전 기록을 v7로 이전해도 AI 검사가 원문 보존 상태를 추측하지 않고 차단되며, 업데이트 뒤 `전체 원문` 모드에서 새로 만든 테스트 스냅샷은 선택할 수 있다.
+- [ ] full 스냅샷으로 돌아오면 사용자가 직접 대상을 선택할 수 있지만 이전 개인정보 모드의 선택·결과를 재사용하지 않는다.
+
+## 대상 선택·정확한 전송 미리보기
+
+- [ ] 정적 finding 또는 지시 cluster 하나를 체크하기 전에는 `전송 내용 미리보기` 버튼이 비활성화되어 있다.
+- [ ] 대상을 체크하면 선택 수가 맞고, 다른 스냅샷으로 바꾸거나 해당 finding이 사라지면 끊어진 선택이 자동으로 제거된다.
+- [ ] 미리보기의 `전송할 소스` 이름과 원문이 선택 대상의 실제 source card와 문자 단위로 같으며 요약본·일부 preview·최종 전체 프롬프트로 바뀌지 않는다.
+- [ ] closure 밖 source, 비활성·실제 요청 미포함·대안 제외 source가 전송 목록에 섞이지 않고 제외 목록에 이유와 함께 표시된다.
+- [ ] 현재 SillyTavern 연결에서 확인한 provider/model이 표시된다. model을 확인하지 못한 경우 임의 model·비용을 만들지 않고 미확인 상태를 그대로 표시한다.
+- [ ] 입력 토큰은 예상치, 응답 토큰은 설정한 상한으로 구분되고 상한이 비용 상한이라고 설명하지 않는다.
+- [ ] provider·model이 정확히 일치하는 사용자 가격 override가 있을 때만 비용을 표시하고, 불일치·부분 identity·복수 통화에는 비용을 추측하지 않는다.
+
+## 호출별 동의·취소·재시도
+
+- [ ] 미리보기를 열 때마다 동의 체크가 선택 해제되어 있고 체크하기 전에는 실행 확인 버튼이 비활성화되어 있다.
+- [ ] 모달의 취소·닫기·바깥 영역·Escape로 나가면 provider 호출이나 AI 결과가 생기지 않고 원래 버튼으로 focus가 돌아온다.
+- [ ] 다시 미리보기를 열거나 오류 뒤 `새 미리보기로 다시 시도`를 누르면 이전 동의를 기억하지 않고 현재 provider/model·원문으로 다시 준비한다.
+- [ ] 동의 뒤 실행 중 `검사 취소`를 누르면 늦게 도착한 결과가 화면·cache에 반영되지 않는다.
+- [ ] 취소 안내가 이미 시작된 provider 계산·전송·과금까지 물리적으로 중단했다고 주장하지 않는다.
+- [ ] 미리보기를 연 뒤 SillyTavern의 provider/model을 바꾼 경우 이전 준비를 다른 연결로 보내지 않고 identity 변경 오류로 실패한다.
+
+## AI 제안·정적 결과 불변
+
+- [ ] 정상 응답은 `AI 제안 — 자동 적용되지 않음`이라는 별도 영역에 제목·요약·판단 이유·신뢰도와 접힌 검증 근거로 표시된다.
+- [ ] AI 제안을 받아도 기존 정적 finding 수·심각도, 유효/오탐 판정, 항상 무시, 비교 정책과 audit log가 바뀌지 않는다.
+- [ ] AI 결과 카드에는 자동 수정·판정 적용·정책 저장 버튼이 없고 SillyTavern 원본 프롬프트·캐릭터·생성 설정도 바뀌지 않는다.
+- [ ] 잘못된 JSON, 알 수 없는 source/atom/relation ID 또는 원문과 다른 quote를 반환하는 provider 응답은 일부 카드로 표시하지 않고 전체 오류로 처리한다.
+- [ ] 스냅샷·선택 대상을 바꾸면 이전 선택과 맞지 않는 AI 결과가 남지 않고, 새로고침하면 선택·AI 결과·memory cache가 사라진다.
+- [ ] AI가 title·summary·rationale에 입력 원문 표현을 반복할 수 있으므로 메모리 cache를 익명화·비밀 제거 기능으로 오해하지 않는다.
+
+## 자기 캡처·동시 generation
+
+- [ ] AI 검사를 한 번 실행해도 그 semantic prompt 자체가 타임라인의 일반 채팅 스냅샷으로 추가되지 않는다.
+- [ ] 가능하면 AI 검사와 일반 사용자 generation을 겹쳐 실행해 일반 generation의 snapshot·lore·lifecycle이 사라지거나 AI 내용과 섞이지 않는지 확인한다.
+- [ ] 식별자 없는 동시 요청을 구분할 수 없는 상황에서는 다른 pending generation을 임의 소비하지 않고 미연결·실패 상태로 닫힌다.
+- [ ] 명시적인 공개 ID로 연결되는 정상 사용자 generation은 AI 검사와 겹쳐도 정확한 자기 snapshot에 연결된다.
+- [ ] 취소·timeout 직후 재시도하면 오래된 nonce나 늦은 AI 응답이 새 실행의 결과·snapshot으로 재사용되지 않는다.
 
 ## 단일 generation lifecycle
 
@@ -69,6 +115,9 @@ v0.10.1은 generation별 상관관계, 로컬 usage 추정, 사용자 가격 ove
 ## 모바일·좁은 화면 UI
 
 - [ ] 약 430px 폭에서 설정의 가격 항목 추가·삭제·단가·통화·기준일 입력이 가로로 잘리거나 패널 밖으로 나가지 않는다.
+- [ ] AI 대상 선택·실행·취소 버튼과 긴 source 이름·결과 제목이 한 글자씩 세로로 쪼개지거나 패널 밖으로 나가지 않는다.
+- [ ] AI 동의 모달의 provider/model 표, 전체 source 원문, 제외 이유, 동의 체크와 취소·실행 버튼을 가로 스크롤 없이 확인할 수 있다.
+- [ ] AI 동의 모달에서 Tab·Shift+Tab focus가 모달 밖으로 빠지지 않고 Escape 뒤 원래 실행 버튼으로 돌아온다.
 - [ ] 컨텍스트 usage 카드의 네 토큰 항목, 상태, 비용·출처·기준일이 겹치지 않고 긴 model/provider 이름이 안전하게 줄바꿈된다.
 - [ ] capability matrix를 펼치고 닫을 수 있으며 도움말이 화면 경계를 벗어나지 않는다.
 - [ ] 가격 설정 오류 뒤 적용 버튼이 영구 비활성화되지 않고 수정·취소·재진입이 가능하다.
@@ -80,9 +129,10 @@ v0.10.1은 generation별 상관관계, 로컬 usage 추정, 사용자 가격 ove
 - [ ] 단일/동시 generation, Chat/Text Completion, 선택 source·model과 lifecycle 순서를 기록한다.
 - [ ] usage 문제는 상태, 화면에 표시된 source event, 입력·출력 값의 존재 여부만 기록한다.
 - [ ] 가격 문제는 실제 금액 대신 exact/mismatch/multi-currency 중 어떤 경우인지와 통화 코드만 기록한다.
+- [ ] AI 문제는 기본 설정 상태, 선택 target 종류·개수, full/redacted/metadata, preview identity 상태와 안정된 `SEMANTIC_*` 오류 code만 기록한다.
 - [ ] 이전·복원 문제는 원본 snapshot schema, privacy mode, merge/replace와 오류 code만 기록한다.
-- [ ] prompt 원문·API key·raw request/response ID·전체 archive·IndexedDB raw 값은 이슈에 첨부하지 않는다.
+- [ ] prompt 원문·AI preview/response·API key·raw request/response ID·전체 archive·IndexedDB raw 값은 이슈에 첨부하지 않는다.
 
-## 다음 버전
+## 다음 버전 방향
 
-v0.11.0은 기본 꺼짐 상태에서 사용자가 고른 로컬 finding·cluster만 호출별 동의 후 전송하고, 엄격한 근거 검증을 통과한 결과를 정적 검사와 분리해 보여 주는 선택적 AI Semantic Inspector를 계획하고 있습니다. 아직 v0.10.1의 완료 기능이 아닙니다.
+v0.12.0은 새 대형 편집 기능보다 익명화 평가 corpus, AI 제안·근거 품질 회귀, provider 호환성과 모바일·접근성 품질을 보강하고 향후 코치마크·워크스루를 위한 온보딩 기반을 정리하는 방향입니다. 세부 범위는 이 체크리스트의 v0.11.0 대규모 검토 결과 뒤 확정합니다.

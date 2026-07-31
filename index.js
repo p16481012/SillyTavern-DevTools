@@ -4,15 +4,19 @@ import {
     UI_PREFERENCES_KEY,
     V1_UI_PREFERENCES_KEY,
     V2_UI_PREFERENCES_KEY,
+    V3_UI_PREFERENCES_KEY,
     legacyUiPreferencesForExistingData,
     readUiPreferencesFromStorage,
 } from './src/preferences.js';
 import { applyAutomaticRetentionMaintenance } from './src/retention-maintenance.js';
+import { SemanticCaptureGate } from './src/semantic-capture-gate.js';
+import { SemanticInspector } from './src/semantic-inspector.js';
+import { SemanticProviderAdapter } from './src/semantic-provider-adapter.js';
 import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.10.1';
+const VERSION = '0.11.0';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',
@@ -35,6 +39,7 @@ async function preserveLegacyRetentionForExistingData(store) {
     try {
         if (
             localStorage.getItem(UI_PREFERENCES_KEY) != null
+            || localStorage.getItem(V3_UI_PREFERENCES_KEY) != null
             || localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
             || localStorage.getItem(V1_UI_PREFERENCES_KEY) != null
         ) {
@@ -138,11 +143,27 @@ async function initialize() {
         preferences: currentPreferences(),
     });
 
+    let semanticCaptureGate = null;
+    let semanticInspector = null;
+    try {
+        semanticCaptureGate = new SemanticCaptureGate();
+        const semanticProviderAdapter = new SemanticProviderAdapter({
+            getContext: () => globalThis.SillyTavern.getContext(),
+            captureGate: semanticCaptureGate,
+        });
+        semanticInspector = new SemanticInspector({
+            adapter: semanticProviderAdapter,
+        });
+    } catch {
+        console.warn('[ST DevTools] Optional semantic inspector is unavailable.');
+    }
+
     const capture = new CaptureController({
         getContext: () => globalThis.SillyTavern.getContext(),
         store,
         version: VERSION,
         getCaptureMode: () => currentPreferences().captureMode,
+        semanticCaptureGate,
     });
     let retentionMaintenancePending = false;
     let retentionMaintenanceDirty = false;
@@ -172,6 +193,7 @@ async function initialize() {
         store,
         capture,
         version: VERSION,
+        semanticInspector,
     });
 
     capture.start();

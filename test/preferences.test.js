@@ -8,6 +8,7 @@ import {
     MAX_TIMELINE_READ_LIMIT,
     MAX_TIMELINE_RETENTION_LIMIT,
     migrateLegacyUiPreferences,
+    migrateV3UiPreferences,
     migrateV1UiPreferences,
     migrateV2UiPreferences,
     legacyUiPreferencesForExistingData,
@@ -27,6 +28,8 @@ test('retention and read limits use separate defaults and clamp to supported ran
         retentionMaxBytes: 0,
         captureMode: 'full',
         themeMode: 'auto',
+        semanticInspectorEnabled: false,
+        semanticResponseTokenCap: 512,
     });
     assert.deepEqual(normalizeUiPreferences({
         timelineRetentionLimit: 12.9,
@@ -38,6 +41,8 @@ test('retention and read limits use separate defaults and clamp to supported ran
         retentionMaxBytes: 0,
         captureMode: 'full',
         themeMode: 'auto',
+        semanticInspectorEnabled: false,
+        semanticResponseTokenCap: 512,
     });
     assert.deepEqual(normalizeUiPreferences({
         timelineRetentionLimit: 999,
@@ -49,6 +54,8 @@ test('retention and read limits use separate defaults and clamp to supported ran
         retentionMaxBytes: 0,
         captureMode: 'full',
         themeMode: 'auto',
+        semanticInspectorEnabled: false,
+        semanticResponseTokenCap: 512,
     });
     assert.equal(
         normalizeUiPreferences({
@@ -87,10 +94,23 @@ test('v0.8.9 read preferences retain the legacy 100 snapshot storage cap', () =>
         retentionMaxBytes: 0,
         captureMode: 'full',
         themeMode: 'auto',
+        semanticInspectorEnabled: false,
+        semanticResponseTokenCap: 512,
     });
 });
 
-test('v2 and v1 preferences migrate non-destructively to v3 defaults', () => {
+test('v3, v2 and v1 preferences migrate non-destructively to v4 defaults', () => {
+    assert.deepEqual(migrateV3UiPreferences({
+        timelineRetentionLimit: 42,
+        semanticInspectorEnabled: true,
+        semanticResponseTokenCap: 768,
+    }), {
+        ...DEFAULT_UI_PREFERENCES,
+        timelineRetentionLimit: 42,
+        timelineReadLimit: 20,
+        semanticInspectorEnabled: true,
+        semanticResponseTokenCap: 768,
+    });
     assert.deepEqual(migrateV2UiPreferences({
         timelineRetentionLimit: 81,
         timelineReadLimit: 17,
@@ -102,6 +122,8 @@ test('v2 and v1 preferences migrate non-destructively to v3 defaults', () => {
         retentionMaxBytes: 0,
         captureMode: 'full',
         themeMode: 'dark',
+        semanticInspectorEnabled: false,
+        semanticResponseTokenCap: 512,
     });
     assert.deepEqual(migrateV1UiPreferences({
         timelineReadLimit: 9,
@@ -113,6 +135,8 @@ test('v2 and v1 preferences migrate non-destructively to v3 defaults', () => {
         retentionMaxBytes: 0,
         captureMode: 'full',
         themeMode: 'light',
+        semanticInspectorEnabled: false,
+        semanticResponseTokenCap: 512,
     });
 });
 

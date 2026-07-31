@@ -1,16 +1,16 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.10.1 코드 기준으로 남은 기능을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.11.0 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.10.1은 캡처한 요청을 읽기 전용으로 탐색·비교하고, 명시적인 지시를 원자 구조로 보존한 뒤 실제 충돌 쌍과 클러스터를 검사합니다. 전체·프리셋·캐릭터·채팅 정책 프로필, 재사용 그룹 동작, 이름 규칙과 수동 지정으로 비교군을 구조화하며, 사용자가 검사 결과를 판정·숨김·범위별 무시하고 정책 변경 전후를 검토할 수 있습니다.
+v0.11.0은 캡처한 요청을 읽기 전용으로 탐색·비교하고, 명시적인 지시를 원자 구조로 보존한 뒤 실제 충돌 쌍과 클러스터를 검사합니다. 전체·프리셋·캐릭터·채팅 정책 프로필, 재사용 그룹 동작, 이름 규칙과 수동 지정으로 비교군을 구조화하며, 사용자가 검사 결과를 판정·숨김·범위별 무시하고 정책 변경 전후를 검토할 수 있습니다.
 
 스키마 v7은 v6의 구조 provenance에 정규화된 usage·비용 출처와 correlation 개인정보 경계를 추가합니다. generation별 불투명 bounded ledger가 prompt·request·lore·lifecycle·usage를 격리하고, 같은 공개 ID가 양쪽에 있을 때만 정확히 연결합니다. 요청 호환용 FIFO는 response usage에 재사용하지 않습니다. 이전 레코드는 읽을 때 한 번만 v7으로 다시 저장하며, raw correlation ID를 제거하고 `hadCorrelationId`만 남긴 채 손상 레코드는 원본을 보존합니다.
 
 저장은 기간·채팅별 개수·전체 대략적 용량 정책과 무결성 진단을 지원합니다. 대형 목록은 가상 렌더링하고 검색·diff·규칙 분석은 Worker와 메모리 cache를 사용합니다. 새 캡처는 전체 원문·원문 제거본·메타데이터 모드를 선택할 수 있으며, 안전 공유·혼합 privacy archive 병합/교체·진단 보고서 비교가 추가되었습니다.
 
-아직 Rule Inspector는 자연어 의미 전체를 이해하지 않습니다. 조건·예외·말투·정체성·안전·메모리·실제 우선순위와 같은 판단을 확장하려면 AI 연결보다 먼저 구조화된 로컬 근거가 필요합니다.
+선택적 AI Semantic Inspector는 사용자가 직접 고른 정적 finding·cluster의 로컬 근거만 매 호출 동의 후 현재 provider에 보냅니다. 엄격한 JSON·근거 offset 검증을 통과한 제안도 정적 결과와 분리하며 자동 수정·판정·정책 변경에는 사용하지 않습니다. 따라서 v0.11.0도 자연어 의미 전체나 프롬프트 품질을 보증하지 않습니다.
 
 ## v0.8.7 — 안정성·보안 하드닝 · 완료
 
@@ -166,50 +166,37 @@ v0.10.0에 예정했던 저장 레코드 분리와 렌더 지연·계산 재사�
 
 provider 서버가 후처리한 최종 HTTP packet과 내부 upstream은 공개 hook 또는 별도 companion 없이는 확정하지 않습니다.
 
-## v0.11.0 — 선택적 AI Semantic Inspector · 예정
+## v0.11.0 — 선택적 AI Semantic Inspector · 완료
 
-- 로컬 정책과 Rule V3가 좁힌 후보만 사용자가 눌렀을 때 분석
-- 전송할 원문·제외 항목·provider·model·예상 입력 토큰·비용 사전 확인
-- provider 중립 adapter와 구조화 JSON 결과
-- source·atom ID와 근거 substring 검증, 알 수 없는 ID 거부
-- timeout·취소·retry와 snapshot·policy·model hash cache
-- prompt injection을 포함할 수 있는 프롬프트 원문을 비신뢰 입력으로 처리
-- 정적 결과와 분리된 `AI 제안` 표시, 자동 수정 금지
-- AI 자체 호출이 새 스냅샷으로 다시 캡처되지 않도록 skip tag 또는 캡처 억제 범위
+- 신규·기존 사용자 모두 기본 OFF이며 설정에서 직접 켜고 finding·cluster를 수동 선택해야만 준비
+- `full` 스냅샷만 허용하고 redacted·metadata는 UI와 코어 양쪽에서 fail-closed
+- 선택 대상의 source·atom·relation closure만 구성하고 정확한 전체 원문·제외 소스/이유·현재 provider/model·예상 입력·응답 상한·정확 일치 사용자 가격표 비용을 사전 표시
+- 미리보기마다 선택 해제되는 호출별 1회 동의, 취소 no-send와 retry의 새 준비·미리보기·동의
+- 공개 `getContext().generateRaw()` 전용 adapter와 준비·전송 사이 provider/model identity 변경 거부
+- strict JSON field/size/depth/ID 검증과 모든 evidence offset·quote의 실제 source substring 일치 확인
+- 정적 결과와 분리된 `AI 제안 — 자동 적용되지 않음`, 자동 수정·판정·항상 무시·정책 변경 금지
+- 전체 raw prompt·provider response와 전용 source content·evidence quote 필드는 보관하지 않되, 원문 표현을 반복할 수 있는 정규화 제안 텍스트는 제한된 TTL 동안 유지하는 memory-only digest cache
+- 논리적 timeout·취소와 늦은 결과 폐기. 이미 시작된 provider 계산을 강제 중단한다고 주장하지 않음
+- prompt 유형·원문 exact match의 nonce ticket 호출과 exact duplicate를 이용한 self-capture 억제, TTL·용량 제한과 모호한 동시 id-less 요청의 fail-closed
+- 실제 코어·strict validator·cache에 결정적 fake adapter를 주입하고 provider/network를 호출하지 않는 성공·오류·취소 샌드박스
 
-AI는 그룹·포함 여부·프롬프트 순서를 다시 추측하지 않습니다. `검사 가능 소스 → 사용자 정책 → 로컬 원자·후보 → 선택적 AI → 근거 검증` 순서를 유지합니다.
+AI는 그룹·포함 여부·프롬프트 순서를 다시 추측하지 않습니다. `검사 가능 소스 → 사용자 정책 → 로컬 원자·후보 → 사용자 선택·전송 동의 → 선택적 AI → 근거 검증` 순서를 유지합니다.
 
-사용자 검토: 전송 동의, 비용, 설명 품질과 오탐을 대규모로 확인합니다.
+사용자 검토: 실제 provider별 미리보기 identity, 비용, 취소 한계, 설명 품질과 오탐을 v0.11.0 체크리스트로 확인합니다.
 
-## v0.12.0 — Prompt Playground MVP
+## v0.12.0 — 평가·품질·온보딩 기반 · 예정
 
-- 스냅샷 복제본만 임시 편집
-- 토큰·diff·Rule Inspector 재실행
-- reset·discard와 patch export
-- SillyTavern 실제 프롬프트·설정에는 쓰지 않는 경계
-- AI 수정안도 미리보기 제안으로만 표시하고 사용자가 수동 채택
+v0.12.0은 새 대형 편집 기능보다 v0.11.0의 실제 품질을 측정하고 설명 가능성을 높이는 방향으로 진행합니다.
 
-사용자 검토: 원본 불변성과 폐기·초기화 동작을 대규모로 확인합니다.
+- 익명화 평가 corpus와 AI 제안 유용성·오탐·근거 정확성 회귀 기준
+- provider 호환성, 오류 분류, 성능·접근성·모바일 품질 보강
+- 기능 구조가 안정된 뒤 코치마크·워크스루를 만들 수 있는 용어·진입점·다시 보기·건너뛰기 기반 정리
 
-## v0.12.x — 고급 분석 도구
+세부 범위는 v0.11.0 대규모 사용자 검토 결과로 확정합니다.
 
-한 버전에 모두 묶지 않고 각각 독립 beta로 진행합니다.
+## 장기 후보 · 버전 미정
 
-1. Prompt Dependency Graph
-2. Lore Trigger Simulator
-3. Extension Debug Panel
-
-Lore Trigger Simulator와 신뢰할 수 있는 dead lore 판정은 전체 lore 정의·trigger·비활성 상태의 읽기 전용 캡처 및 개인정보 동의가 선행되어야 합니다.
-
-## v0.13.0 — 코치마크와 워크스루
-
-정보 구조가 안정된 뒤 다음 세 가지 짧은 과정부터 제공합니다.
-
-- 첫 스냅샷과 캡처 경계 확인
-- 두 스냅샷 비교
-- Rule Inspector 비교 정책 설정
-
-모바일·키보드·screen reader, 건너뛰기·다시 보기·초기화와 로컬 완료 상태를 지원하며 사용 추적 telemetry는 기본으로 두지 않습니다.
+Prompt Playground, Prompt Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 코치마크·워크스루는 평가·개인정보·원본 불변·접근성 경계가 확인된 뒤 각각 독립적으로 계획합니다.
 
 ## v1.0.0 — 안정화
 

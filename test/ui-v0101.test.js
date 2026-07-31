@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { DEFAULT_UI_PREFERENCES, normalizeUiPreferences } from '../src/preferences.js';
+import {
+    DEFAULT_UI_PREFERENCES,
+    UI_PREFERENCES_KEY,
+    normalizeUiPreferences,
+} from '../src/preferences.js';
 import {
     PRICING_OVERRIDE_SCHEMA_VERSION,
     normalizePricingOverrides,
@@ -10,7 +14,7 @@ import {
 import { DevToolsWindow } from '../src/ui.js';
 
 const PRICING_KEY = 'st-devtools:pricing-overrides:v1';
-const PREFERENCES_KEY = 'st-devtools:ui-preferences:v3';
+const PREFERENCES_KEY = UI_PREFERENCES_KEY;
 
 function catalog(entries = []) {
     return normalizePricingOverrides({

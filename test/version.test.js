@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const expectedVersion = '0.10.1';
+const expectedVersion = '0.11.0';
 
 test('manifest, package and runtime versions stay aligned', () => {
     const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));

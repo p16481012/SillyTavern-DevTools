@@ -169,7 +169,7 @@ test('refresh migrates v0.8.9 read settings without lowering retention', async (
     assert.deepEqual(retentionLimits, [100]);
     assert.equal(localStorage.getItem('st-devtools:preferences:v1'), null);
     assert.deepEqual(
-        JSON.parse(localStorage.getItem('st-devtools:preferences:v3')),
+        JSON.parse(localStorage.getItem('st-devtools:preferences:v4')),
         {
             timelineRetentionLimit: 100,
             timelineReadLimit: 7,
@@ -177,6 +177,8 @@ test('refresh migrates v0.8.9 read settings without lowering retention', async (
             retentionMaxBytes: 0,
             captureMode: 'full',
             themeMode: 'auto',
+            semanticInspectorEnabled: false,
+            semanticResponseTokenCap: 512,
         },
     );
 });

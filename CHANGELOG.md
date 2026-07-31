@@ -1,5 +1,41 @@
 # 변경 기록
 
+## 0.11.0 - 2026-07-31
+
+### 선택적 AI 의미 검사
+
+- 기본값이 꺼진 `AI 의미 검사` 설정과 64~2,048 범위의 응답 토큰 상한 추가
+- 정적 finding·지시 클러스터를 사용자가 직접 고르기 전에는 실행 버튼이 활성화되지 않고 아무 대상도 자동 선택하지 않도록 구현
+- 매 호출 전에 선택 대상 closure의 정확한 전체 원문, 제외 소스와 이유, 현재 provider/model identity, 예상 입력 토큰, 응답 상한과 정확히 일치한 사용자 가격 override 비용을 표시하는 전용 미리보기 추가
+- 미리보기마다 선택 해제로 초기화되는 1회 동의 체크를 추가하고, 취소 시 provider 호출 0회·재시도 시 새 준비/미리보기/동의를 보장
+- `원문 제거본`·`메타데이터만` 스냅샷은 준비 전에 차단하고 전체 원문 스냅샷만 허용
+- 개인정보 메타데이터 없이 v7로 이전된 구버전 기록도 과거 원문 보존 상태를 추측하지 않고 차단하며 새 전체 원문 스냅샷 재캡처 안내
+
+### 요청·응답 안전 경계
+
+- 선택 finding·cluster에서 실제로 연결된 source·atom·relation만 closure로 구성하고 비활성·미포함·대안 제외·대화/최종 소스를 제외 이유와 함께 분리
+- 필수 source에 민감 토큰이 있으면 offset을 바꾸는 부분 정제 대신 요청 전체를 실패로 닫도록 구현
+- prompt 원문을 비신뢰 인용 데이터로 선언하고 버전·필드·크기·깊이·노드 수가 제한된 JSON 한 개만 허용
+- 알 수 없는 target/source/atom/relation ID, 추가 필드, Markdown wrapper, 잘못된 evidence 범위 또는 실제 source substring과 다른 quote가 하나라도 있으면 응답 전체를 폐기
+- 검증된 결과를 `AI 제안 — 자동 적용되지 않음` 영역에만 표시하고 정적 finding·검토 판정·비교 정책·항상 무시·SillyTavern 원본을 변경하지 않도록 분리
+
+### Provider adapter·캡처 억제·메모리 경계
+
+- SillyTavern 공개 `getContext().generateRaw()`만 호출하는 provider adapter와 현재 provider/model identity의 준비·전송 직전 재확인 추가
+- identity가 준비 뒤 바뀌면 실패로 닫고, provider만 확인되는 partial 상태는 모델·비용을 추측하지 않은 채 미리보기에 그대로 표시
+- AI prompt와 prompt 유형이 정확히 일치하는 nonce ticket 호출 및 exact duplicate만 자기 캡처에서 제외하고 TTL·용량·identity 소비 규칙을 적용
+- 동시에 식별자 없는 사용자 요청과 AI 요청을 안전하게 구분하지 못하면 어느 pending 요청에도 추측 연결하지 않는 fail-closed 경로 추가
+- 메모리 전용 digest cache는 전체 raw prompt·전체 raw provider response와 전용 source content·evidence quote 필드를 저장하지 않고 검증된 offset의 quote를 현재 준비 원문에서 다시 구성. 다만 title·summary·rationale 같은 정규화 제안 텍스트가 모델이 반복한 원문 표현을 포함할 가능성은 있음
+- 취소·시간 제한 뒤 늦은 provider 결과를 폐기하는 논리적 취소를 적용. 이미 시작된 provider 계산 자체를 강제로 중단하거나 과금을 되돌리지는 않음
+
+### UI·샌드박스·검증
+
+- AI 선택·결과 상태와 정적 검사 컨트롤을 분리하고 선택 변경·사라진 대상에 남은 AI 결과를 폐기
+- 전용 동의 모달에 Escape, 포커스 트랩·복원, 430px 이하 원문/버튼 오버플로 방어 적용
+- 실제 `SemanticInspector` 준비·엄격 검증·메모리 cache에 결정적 fake adapter만 주입하는 성공·오류·취소 샌드박스 추가. 실제 provider·네트워크 호출은 0회
+- 기본 OFF·설정 V3→V4 이전, full-only 준비, 동의 취소 no-send, retry 재동의, logical cancel, strict response/evidence, self-capture·동시성 경계를 자동 회귀 검증
+- 전체 자동 테스트 483개와 JavaScript 파일 104개의 문법 검사 통과
+
 ## 0.10.1 - 2026-07-31
 
 ### Generation 상관관계와 lifecycle

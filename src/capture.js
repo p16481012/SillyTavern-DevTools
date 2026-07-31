@@ -286,6 +286,7 @@ export class CaptureController extends EventTarget {
         settingsWaitMs = DEFAULT_SETTINGS_WAIT_MS,
         getCaptureMode = () => 'full',
         generationLedger = null,
+        semanticCaptureGate = null,
     }) {
         super();
         this.getContext = getContext;
@@ -294,9 +295,22 @@ export class CaptureController extends EventTarget {
         this.settingsWaitMs = settingsWaitMs;
         this.getCaptureMode = getCaptureMode;
         this.started = false;
+        this.semanticCaptureGate = semanticCaptureGate;
         this.generationLedger = generationLedger ?? new GenerationLedger({
             sessionTimeoutMs: Math.max(120_000, settingsWaitMs * 4),
         });
+    }
+
+    semanticCaptureDecision(phase, promptType, payload) {
+        try {
+            return this.semanticCaptureGate?.decide({
+                phase,
+                promptType,
+                payload,
+            }) ?? 'allow';
+        } catch {
+            return 'allow';
+        }
     }
 
     start() {
@@ -363,6 +377,15 @@ export class CaptureController extends EventTarget {
             if (data?.dryRun || !Array.isArray(data?.chat)) {
                 return;
             }
+            if (
+                this.semanticCaptureDecision(
+                    'prompt',
+                    'chat-completion',
+                    data.chat,
+                ) !== 'allow'
+            ) {
+                return;
+            }
             this.enqueueCapture('chat-completion', data.chat, {
                 correlationId: extractRequestCorrelationId(data),
             });
@@ -374,6 +397,15 @@ export class CaptureController extends EventTarget {
             }
             const current = this.getContext();
             if (current.mainApi === 'openai') {
+                return;
+            }
+            if (
+                this.semanticCaptureDecision(
+                    'prompt',
+                    'text-completion',
+                    data.prompt,
+                ) !== 'allow'
+            ) {
                 return;
             }
             this.enqueueCapture('text-completion', data.prompt, {
@@ -493,6 +525,17 @@ export class CaptureController extends EventTarget {
         acceptPending = null,
     ) {
         const requestCorrelationId = extractRequestCorrelationId(mutableRequestBody);
+        const semanticDecision = this.semanticCaptureDecision(
+            'request',
+            promptType,
+            mutableRequestBody,
+        );
+        if (
+            semanticDecision === 'suppress'
+            || (semanticDecision === 'ambiguous' && !requestCorrelationId)
+        ) {
+            return;
+        }
         const claim = this.generationLedger.claimRequest({
             promptType,
             publicId: requestCorrelationId,

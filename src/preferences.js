@@ -1,8 +1,9 @@
-export const UI_PREFERENCES_KEY = 'st-devtools:preferences:v3';
+export const UI_PREFERENCES_KEY = 'st-devtools:preferences:v4';
+export const V3_UI_PREFERENCES_KEY = 'st-devtools:preferences:v3';
 export const V2_UI_PREFERENCES_KEY = 'st-devtools:preferences:v2';
 export const V1_UI_PREFERENCES_KEY = 'st-devtools:preferences:v1';
 // Kept for callers that only know about one previous preference version.
-export const LEGACY_UI_PREFERENCES_KEY = V2_UI_PREFERENCES_KEY;
+export const LEGACY_UI_PREFERENCES_KEY = V3_UI_PREFERENCES_KEY;
 export const MIN_TIMELINE_READ_LIMIT = 1;
 export const MAX_TIMELINE_READ_LIMIT = 5_000;
 export const MIN_TIMELINE_RETENTION_LIMIT = 1;
@@ -11,6 +12,9 @@ export const LEGACY_TIMELINE_RETENTION_LIMIT = 100;
 export const MIN_RETENTION_MAX_AGE_DAYS = 1;
 export const MAX_RETENTION_MAX_AGE_DAYS = 3_650;
 export const MAX_RETENTION_MAX_BYTES = 2_147_483_648;
+export const MIN_SEMANTIC_RESPONSE_TOKEN_CAP = 64;
+export const MAX_SEMANTIC_RESPONSE_TOKEN_CAP = 2_048;
+export const DEFAULT_SEMANTIC_RESPONSE_TOKEN_CAP = 512;
 export const PANEL_THEME_MODES = Object.freeze(['auto', 'light', 'dark']);
 export const SNAPSHOT_CAPTURE_MODES = Object.freeze([
     'full',
@@ -24,6 +28,8 @@ export const DEFAULT_UI_PREFERENCES = Object.freeze({
     retentionMaxBytes: 0,
     captureMode: 'full',
     themeMode: 'auto',
+    semanticInspectorEnabled: false,
+    semanticResponseTokenCap: DEFAULT_SEMANTIC_RESPONSE_TOKEN_CAP,
 });
 
 function clampInteger(value, fallback, minimum, maximum) {
@@ -76,6 +82,13 @@ export function normalizeUiPreferences(value = {}) {
     const captureMode = SNAPSHOT_CAPTURE_MODES.includes(requestedCaptureMode)
         ? requestedCaptureMode
         : DEFAULT_UI_PREFERENCES.captureMode;
+    const semanticInspectorEnabled = value?.semanticInspectorEnabled === true;
+    const semanticResponseTokenCap = clampInteger(
+        value?.semanticResponseTokenCap,
+        DEFAULT_UI_PREFERENCES.semanticResponseTokenCap,
+        MIN_SEMANTIC_RESPONSE_TOKEN_CAP,
+        MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
+    );
     return {
         timelineRetentionLimit,
         timelineReadLimit,
@@ -83,7 +96,13 @@ export function normalizeUiPreferences(value = {}) {
         retentionMaxBytes,
         captureMode,
         themeMode,
+        semanticInspectorEnabled,
+        semanticResponseTokenCap,
     };
+}
+
+export function migrateV3UiPreferences(value = {}) {
+    return normalizeUiPreferences(value);
 }
 
 export function migrateV2UiPreferences(value = {}) {
@@ -113,6 +132,8 @@ export function readUiPreferencesFromStorage(storage = globalThis.localStorage) 
     };
     const current = read(UI_PREFERENCES_KEY);
     if (current) return normalizeUiPreferences(current);
+    const v3 = read(V3_UI_PREFERENCES_KEY);
+    if (v3) return migrateV3UiPreferences(v3);
     const v2 = read(V2_UI_PREFERENCES_KEY);
     if (v2) return migrateV2UiPreferences(v2);
     const v1 = read(V1_UI_PREFERENCES_KEY);

@@ -1,4 +1,4 @@
-# v0.10.1 기술 구현 현황
+# v0.11.0 기술 구현 현황
 
 ## 구현 완료
 
@@ -78,6 +78,25 @@
 - 확정·후보·근거 부족 판정, 유효·오탐·범위별 항상 무시·세션 숨김과 로컬 감사 기록
 - 탐색기·타임라인·프롬프트/로어북 diff·컨텍스트·검색·진단 내보내기와 모바일·키보드 UI
 
+### 선택적 AI Semantic Inspector
+
+- `st-devtools:preferences:v4`의 기본 OFF opt-in과 64~2,048 범위의 응답 토큰 상한
+- 사용자가 직접 선택한 정적 finding·지시 cluster만 준비하고 아무 대상도 자동 선택하지 않는 UI
+- full snapshot만 허용하며 redacted·metadata v7 입력은 UI와 core 모두 준비 전에 거부
+- 개인정보 메타데이터 없이 v7로 지연 이전된 과거 기록도 원문 보존 상태를 추측하지 않고 AI 준비 전에 거부하며, AI 검사는 새 full snapshot 재캡처 필요
+- target에서 실제 active source·atom·relation closure를 계산하고 closure 밖 source는 label·제외 이유만 preview에 표시
+- closure에 필요한 source의 정확한 전체 content, 제외 목록, provider/model identity, 입력 토큰 추정, 응답 상한과 exact user override 비용 preview
+- 필수 source에 민감 토큰이 있으면 offset을 바꾸는 부분 redaction 대신 요청 전체를 거부
+- 미리보기마다 선택 해제되는 호출별 1회 동의, 취소 시 provider call 0회와 retry의 새 prepare/preview/consent
+- 공개 `getContext().generateRaw()`만 사용하는 provider adapter와 준비·inspect 사이 identity 변경 fail-closed
+- provider만 확인되는 partial identity는 model·비용을 추측하지 않고, provider identity 자체가 unavailable이면 unsupported
+- protocol·필드·크기·깊이·노드·허용 enum·known ID를 검사하는 strict JSON response validator
+- 모든 evidence의 source ID·start/end·quote가 전송 source의 정확한 substring인지 검증하고 하나라도 틀리면 전체 response 거부
+- 정적 finding·review·policy·ignore와 분리된 memory-only `AI 제안`, 자동 적용·수정·판정 기능 없음
+- protocol/provider/model/cap/prompt digest 기반 bounded memory cache. 전체 raw prompt·provider response와 전용 source content·evidence quote 필드는 비저장이지만 정규화 제안 텍스트는 TTL 동안 유지
+- exact prompt/prompt type의 nonce identity ticket 호출과 exact duplicate를 이용한 self-capture gate, TTL·capacity와 모호한 동시 id-less 요청 fail-closed
+- logical timeout·cancel 이후 늦은 결과 폐기와 retry별 새 nonce. 이미 시작된 provider 계산 자체의 강제 중단은 보장하지 않음
+
 ## 검증 범위
 
 ### 릴리스 전 자동 검증 대상
@@ -92,6 +111,10 @@
 - 캡처 모드별 UI 기능 차단, 설정 preview-first 순서와 origin quota/확장 추정치 구분
 - ledger의 동시 generation·ID 충돌·FIFO 경계·unlinked usage와 atomic snapshot update
 - usage·pricing 상한·정규형·정확 일치와 v1~v6→v7 개인정보 이전
+- AI 기본 OFF·V3→V4 설정 이전, full-only와 secret-bearing required source의 fail-closed
+- target closure·정확한 preview·현재 identity 재확인, strict JSON/known-ID/evidence offset 검증과 memory-only cache
+- 동의 취소 no-send, retry 새 동의, logical timeout·abort와 늦은 결과 폐기
+- nonce gate identity-exact consume·TTL·capacity·exact duplicate 억제, explicit-ID 정상 요청 보존과 모호한 id-less 동시성 fail-closed
 
 ### 릴리스 전 결정적 UI 샌드박스 검토 대상
 
@@ -100,8 +123,10 @@
 - 저장 실패·임시 메모리·요약 재계산·테마 전환 fixture와 진단 가져오기 성공/거부 상태
 - mixed privacy fixture를 사용하는 archive·safe share·진단 비교 조작 경로
 - usage 상태·비용 출처·capability matrix, 가격 override 추가·삭제·재로드와 모바일 배치
+- 실제 `SemanticInspector`·strict validator·memory cache에 결정적 fake adapter를 주입한 AI preview·동의·성공·오류·취소
+- `semanticCore=true`, validated result count와 provider/network call 0회 dataset으로 샌드박스 경계 확인
 
-샌드박스는 가짜 저장 backend와 fixture를 사용합니다. 실제 SillyTavern 이벤트, 사용자의 IndexedDB, 브라우저 비공개 모드와 provider 응답을 대신 검증하지 않습니다.
+샌드박스는 가짜 저장 backend와 결정적 semantic adapter를 사용합니다. Semantic Inspector 코어의 closure·preview·strict response/evidence 검증·memory cache는 실제 구현을 통과하지만 SillyTavern의 실제 `generateRaw`, 사용자의 IndexedDB, 브라우저 비공개 모드와 provider 응답 품질·과금은 대신 검증하지 않습니다.
 
 ### 실제 SillyTavern에서 사용자 확인이 필요한 것
 
@@ -112,6 +137,10 @@
 - 실제 provider/model별 구조 provenance, 선택 소스, assistant prefill과 캡처 lifecycle 정확성
 - 단일·동시 generation에서 `MESSAGE_RECEIVED` 출력 추정이 다른 스냅샷에 섞이지 않는지
 - 가격 override의 provider·model·currency 정확 일치, 불일치와 복수 통화 산정 불가 상태
+- AI 설정의 기본 OFF, full snapshot 선택, 실제 현재 provider/model preview와 매 호출 선택 해제 동의
+- 동의 취소 시 요청이 발생하지 않고 성공 결과가 정적 finding·review·policy를 바꾸지 않는지
+- 실제 provider별 JSON schema 지원·오류 code·응답 상한과 취소 뒤 provider 계산/청구의 실제 동작
+- AI 호출 중 일반 generation을 겹쳤을 때 AI self-capture가 생기거나 일반 generation의 snapshot이 사라지지 않는지
 
 ## 부분 구현 또는 알려진 경계
 
@@ -145,25 +174,28 @@
 - 조건·예외의 논리 관계, 말투·정체성·안전·메모리 의미 충돌과 실제 우선순위 승자는 아직 판정하지 않습니다.
 - v0.9.1 이전 스냅샷에는 프리셋·캐릭터·채팅 범위 지문이 없고 v0.9.2 이전 스냅샷에는 구조 provenance가 없습니다.
 
+### AI Semantic Inspector
+
+- AI 검사는 full snapshot의 선택된 closure 원문을 현재 provider에 전송하는 기능입니다. redacted·metadata에서 사용할 수 없고 일반 개인정보 익명화 도구가 아닙니다.
+- partial identity는 provider만 표시하고 model·비용을 추측하지 않습니다. identity unavailable 또는 준비 뒤 identity 변경은 fail-closed이며 다른 provider/model로 자동 fallback하지 않습니다.
+- 입력 토큰은 로컬 추정이고 응답 상한은 비용 상한과 같지 않습니다. 사용자 가격 override 비용도 실제 provider 청구를 보증하지 않습니다.
+- AbortSignal과 timeout은 호출자에게 논리적으로 취소를 제공하고 늦은 결과를 버리지만, 공개 `generateRaw()`가 이미 시작한 provider 계산·전송·과금을 물리적으로 중단한다고 보장하지 않습니다.
+- self-capture nonce gate는 호출별 ticket의 AI prompt·prompt type exact match와 그 semantic 호출의 exact duplicate만 제외합니다. 모호한 id-less 동시 요청은 fail-closed이므로 일부 capture가 미연결 상태로 남을 수 있지만 다른 pending 요청을 추측 소비하지 않습니다.
+- AI 결과와 선택은 메모리 전용이며 새로고침하면 사라집니다. cache는 전체 raw prompt·provider response와 전용 `source.content`·`evidence.quote` 필드를 저장하지 않지만 title·summary·rationale 같은 정규화 제안 텍스트는 TTL 동안 유지하고 모델이 반복한 원문 표현을 포함할 수 있습니다. 영구 결과 이력·감사 로그 또는 익명화 경계가 아닙니다.
+- strict schema와 evidence offset 검증은 응답이 준비된 원문을 정확히 인용했는지 확인하는 경계입니다. 제안의 사실성·유용성·안전성 또는 자연어 의미 판단의 정확도를 보증하지 않습니다.
+
 ## 아직 미구현
 
-### v0.11.0 예정
+### v0.12.0 방향
 
-- 기본 꺼짐 상태의 선택적 AI Semantic Inspector
-- 사용자가 선택한 로컬 finding/cluster만 대상으로 하는 호출별 전송 동의와 provider·model·토큰·비용 미리보기
-- provider 중립 adapter와 엄격한 구조화 결과 계약
-- source·atom·relation ID와 정확한 quote offset 검증, 알 수 없는 근거가 하나라도 있으면 전체 제안 거부
-- 정적 결과와 분리된 AI 제안, 자동 수정·정책 변경·항상 무시 금지
-- raw 요청/응답을 남기지 않는 digest cache와 AI 호출의 신뢰된 단일 사용 캡처 억제
+- 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
+- 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
+- 정보 구조가 안정된 뒤 코치마크·워크스루를 구현할 수 있는 용어·진입점·건너뛰기·다시 보기 기반
 
-### 이후 범위
-
-- Prompt Playground의 임시 편집·재조립·실시간 diff·폐기
-- Prompt Dependency Graph, Lore Trigger Simulator, Extension Debug Panel
-- 문장 재배열을 포함하는 fuzzy provenance와 지원 범위를 넓힌 멀티모달 추정
-- 정보 구조 안정화 뒤 코치마크·단계별 워크스루
+세부 기능은 v0.11.0 사용자 검토 결과 뒤 확정합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.11.0에서 전송 동의·근거 검증·캡처 억제를 갖춘 선택적 AI 분석을 추가합니다.
-2. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 체크리스트로 별도 확인합니다.
+1. v0.11.0의 실제 provider별 동의·identity·취소·self-capture와 제안 품질을 사용자 체크리스트로 확인합니다.
+2. v0.12.0에서 평가 corpus·품질 회귀·온보딩 기반을 보강합니다.
+3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

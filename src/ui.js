@@ -91,17 +91,20 @@ import {
 import { compareDiagnosticReports } from './diagnostic-compare.js';
 import {
     DEFAULT_UI_PREFERENCES,
+    MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
     MAX_RETENTION_MAX_AGE_DAYS,
     MAX_RETENTION_MAX_BYTES,
     MAX_TIMELINE_RETENTION_LIMIT,
     MAX_TIMELINE_READ_LIMIT,
     MIN_TIMELINE_RETENTION_LIMIT,
     MIN_TIMELINE_READ_LIMIT,
+    MIN_SEMANTIC_RESPONSE_TOKEN_CAP,
     PANEL_THEME_MODES,
     SNAPSHOT_CAPTURE_MODES,
     UI_PREFERENCES_KEY,
     V1_UI_PREFERENCES_KEY,
     V2_UI_PREFERENCES_KEY,
+    V3_UI_PREFERENCES_KEY,
     normalizeUiPreferences,
     readUiPreferencesFromStorage,
 } from './preferences.js';
@@ -142,6 +145,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
+    V3_UI_PREFERENCES_KEY,
     V2_UI_PREFERENCES_KEY,
     V1_UI_PREFERENCES_KEY,
 ];
@@ -658,11 +662,13 @@ export class DevToolsWindow {
         analysisTimeoutMs = DEFAULT_ANALYSIS_TIMEOUT_MS,
         analysisCache = null,
         analysisRuntime = null,
+        semanticInspector = null,
     }) {
         this.getContext = getContext;
         this.store = store;
         this.capture = capture;
         this.version = version;
+        this.semanticInspector = semanticInspector;
         this.root = null;
         this.window = null;
         this.content = null;
@@ -758,7 +764,27 @@ export class DevToolsWindow {
         this.retentionMaxAgeDaysInput = null;
         this.retentionMaxBytesMiBInput = null;
         this.captureModeInput = null;
+        this.semanticInspectorEnabledInput = null;
+        this.semanticResponseTokenCapInput = null;
         this.resetPricingEditor = null;
+        this.semanticInspectionState = {
+            snapshotId: null,
+            analysisRevision: this.analysisRevision,
+            targetIds: new Set(),
+            status: 'idle',
+            result: null,
+            errorCode: null,
+            sequence: 0,
+            controller: null,
+        };
+        this.semanticInspectorHost = null;
+        this.semanticConsentOverlay = null;
+        this.semanticConsentPanel = null;
+        this.semanticConsentBody = null;
+        this.semanticConsentCheckbox = null;
+        this.semanticConsentConfirmButton = null;
+        this.semanticConsentPreviouslyFocused = null;
+        this.semanticConsentResolve = null;
         this.storageToolsStatus = null;
         this.diagnosticCompareFiles = [];
         this.primaryRegions = [];
@@ -792,6 +818,12 @@ export class DevToolsWindow {
             this.analysisCache.clear();
         } else {
             this.analysisRevision += 1;
+        }
+        if (
+            this.semanticInspectionState
+            && this.semanticInspectionState.analysisRevision !== this.analysisRevision
+        ) {
+            this.invalidateSemanticInspectionOutcome(this.semanticInspectionState);
         }
         for (const controller of this.analysisControllers) {
             controller.abort();
@@ -1298,7 +1330,8 @@ export class DevToolsWindow {
                 current = null;
             }
             const hasLegacy = (
-                localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
+                localStorage.getItem(V3_UI_PREFERENCES_KEY) != null
+                || localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
                 || localStorage.getItem(V1_UI_PREFERENCES_KEY) != null
             );
             if (!current && hasLegacy) {
@@ -1306,6 +1339,7 @@ export class DevToolsWindow {
                     UI_PREFERENCES_KEY,
                     JSON.stringify(preferences),
                 );
+                localStorage.removeItem(V3_UI_PREFERENCES_KEY);
                 localStorage.removeItem(V2_UI_PREFERENCES_KEY);
                 localStorage.removeItem(V1_UI_PREFERENCES_KEY);
             }
@@ -1341,6 +1375,7 @@ export class DevToolsWindow {
             storage = globalThis.localStorage;
             backup = new Map([
                 [UI_PREFERENCES_KEY, storage.getItem(UI_PREFERENCES_KEY)],
+                [V3_UI_PREFERENCES_KEY, storage.getItem(V3_UI_PREFERENCES_KEY)],
                 [V2_UI_PREFERENCES_KEY, storage.getItem(V2_UI_PREFERENCES_KEY)],
                 [V1_UI_PREFERENCES_KEY, storage.getItem(V1_UI_PREFERENCES_KEY)],
                 [PRICING_OVERRIDES_KEY, storage.getItem(PRICING_OVERRIDES_KEY)],
@@ -1355,10 +1390,12 @@ export class DevToolsWindow {
             ) {
                 throw new Error('settings-storage-write-not-observed');
             }
+            storage.removeItem(V3_UI_PREFERENCES_KEY);
             storage.removeItem(V2_UI_PREFERENCES_KEY);
             storage.removeItem(V1_UI_PREFERENCES_KEY);
             if (
-                storage.getItem(V2_UI_PREFERENCES_KEY) !== null
+                storage.getItem(V3_UI_PREFERENCES_KEY) !== null
+                || storage.getItem(V2_UI_PREFERENCES_KEY) !== null
                 || storage.getItem(V1_UI_PREFERENCES_KEY) !== null
             ) {
                 throw new Error('settings-storage-remove-not-observed');
@@ -1744,6 +1781,65 @@ export class DevToolsWindow {
             }),
         );
 
+        const semanticField = element('div', {
+            className: 'st-devtools-settings-field st-devtools-semantic-settings',
+        });
+        semanticField.appendChild(explainedTitle(
+            t('settings.semanticTitle'),
+            t('settings.semanticDescription'),
+        ));
+        const semanticToggleLabel = element('label', {
+            className: 'st-devtools-semantic-toggle',
+        });
+        const semanticToggle = element('input');
+        semanticToggle.type = 'checkbox';
+        semanticToggle.checked = this.preferences.semanticInspectorEnabled;
+        semanticToggleLabel.append(
+            semanticToggle,
+            element('span', { text: t('settings.semanticEnabled') }),
+        );
+        const semanticCapLabel = element('label', {
+            className: 'st-devtools-semantic-cap',
+        });
+        semanticCapLabel.appendChild(element('span', {
+            text: t('settings.semanticResponseCap'),
+        }));
+        const semanticCapInput = element('input');
+        semanticCapInput.type = 'number';
+        semanticCapInput.min = String(MIN_SEMANTIC_RESPONSE_TOKEN_CAP);
+        semanticCapInput.max = String(MAX_SEMANTIC_RESPONSE_TOKEN_CAP);
+        semanticCapInput.step = '1';
+        semanticCapInput.inputMode = 'numeric';
+        semanticCapInput.required = true;
+        semanticCapInput.value = String(
+            this.preferences.semanticResponseTokenCap,
+        );
+        semanticCapLabel.appendChild(semanticCapInput);
+        const semanticCapHint = proseElement('small', t(
+            'settings.semanticResponseCapHint',
+            {
+                min: MIN_SEMANTIC_RESPONSE_TOKEN_CAP,
+                max: MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
+            },
+        ));
+        const syncSemanticSettings = () => {
+            semanticCapInput.disabled = !semanticToggle.checked;
+            semanticCapLabel.classList.toggle(
+                'is-disabled',
+                semanticCapInput.disabled,
+            );
+        };
+        semanticToggle.addEventListener('change', syncSemanticSettings);
+        syncSemanticSettings();
+        semanticField.append(
+            semanticToggleLabel,
+            semanticCapLabel,
+            semanticCapHint,
+            proseElement('small', t('settings.semanticPrivacyWarning'), {
+                className: 'st-devtools-settings-privacy-note',
+            }),
+        );
+
         const readField = element('div', { className: 'st-devtools-settings-field' });
         const readLabel = element('label');
         readLabel.htmlFor = 'st-devtools-settings-timeline-limit';
@@ -1806,6 +1902,11 @@ export class DevToolsWindow {
                 DEFAULT_UI_PREFERENCES.retentionMaxBytes / MEBIBYTE,
             );
             captureSelect.value = DEFAULT_UI_PREFERENCES.captureMode;
+            semanticToggle.checked = DEFAULT_UI_PREFERENCES.semanticInspectorEnabled;
+            semanticCapInput.value = String(
+                DEFAULT_UI_PREFERENCES.semanticResponseTokenCap,
+            );
+            syncSemanticSettings();
             pricingEditor.resetEntries([]);
             syncReadLimit();
             retentionInput.focus();
@@ -1829,6 +1930,7 @@ export class DevToolsWindow {
             byteField,
             readField,
             captureField,
+            semanticField,
             pricingEditor.details,
             actions,
         );
@@ -1847,6 +1949,8 @@ export class DevToolsWindow {
                 retentionMaxAgeDays: ageInput.value,
                 retentionMaxBytes: Number(byteInput.value) * MEBIBYTE,
                 captureMode: captureSelect.value,
+                semanticInspectorEnabled: semanticToggle.checked,
+                semanticResponseTokenCap: semanticCapInput.value,
             });
             const retentionPolicy = {
                 maxSnapshotsPerChat: requested.timelineRetentionLimit,
@@ -1864,6 +1968,12 @@ export class DevToolsWindow {
             const timelineSettingsChanged = (
                 retentionPolicyChanged
                 || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
+            );
+            const semanticSettingsChanged = (
+                requested.semanticInspectorEnabled
+                    !== previousPreferences.semanticInspectorEnabled
+                || requested.semanticResponseTokenCap
+                    !== previousPreferences.semanticResponseTokenCap
             );
             try {
                 let requestedPricingOverrides;
@@ -1976,6 +2086,14 @@ export class DevToolsWindow {
                     preferences.retentionMaxBytes / MEBIBYTE,
                 ));
                 captureSelect.value = preferences.captureMode;
+                semanticToggle.checked = preferences.semanticInspectorEnabled;
+                semanticCapInput.value = String(
+                    preferences.semanticResponseTokenCap,
+                );
+                syncSemanticSettings();
+                if (semanticSettingsChanged) {
+                    this.resetSemanticInspectionForSettingsChange(preferences);
+                }
                 pricingEditor.resetEntries(this.pricingOverrides.entries);
                 syncReadLimit();
                 this.syncOpaqueTheme();
@@ -2001,6 +2119,7 @@ export class DevToolsWindow {
                     'ST DevTools',
                 );
                 if (timelineSettingsChanged) this.scheduleSettingsRefresh();
+                else if (semanticSettingsChanged) this.render();
             } catch (error) {
                 this.pendingPricingOverrides = null;
                 console.error('[ST DevTools] Failed to apply storage settings.', error);
@@ -2028,6 +2147,8 @@ export class DevToolsWindow {
         this.retentionMaxAgeDaysInput = ageInput;
         this.retentionMaxBytesMiBInput = byteInput;
         this.captureModeInput = captureSelect;
+        this.semanticInspectorEnabledInput = semanticToggle;
+        this.semanticResponseTokenCapInput = semanticCapInput;
         this.resetPricingEditor = () => {
             pricingEditor.details.open = false;
             pricingEditor.resetEntries(this.pricingOverrides.entries);
@@ -2539,6 +2660,20 @@ export class DevToolsWindow {
             this.preferences.retentionMaxBytes / MEBIBYTE,
         ));
         this.captureModeInput.value = this.preferences.captureMode;
+        this.semanticInspectorEnabledInput.checked = (
+            this.preferences.semanticInspectorEnabled
+        );
+        this.semanticResponseTokenCapInput.value = String(
+            this.preferences.semanticResponseTokenCap,
+        );
+        this.semanticResponseTokenCapInput.disabled = (
+            !this.preferences.semanticInspectorEnabled
+        );
+        this.semanticResponseTokenCapInput.closest('.st-devtools-semantic-cap')
+            ?.classList.toggle(
+                'is-disabled',
+                this.semanticResponseTokenCapInput.disabled,
+            );
         this.resetPricingEditor?.();
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
@@ -2568,6 +2703,289 @@ export class DevToolsWindow {
             this.settingsPreviouslyFocused.focus();
         }
         this.settingsPreviouslyFocused = null;
+    }
+
+    buildSemanticConsentDialog() {
+        const overlay = element('div', {
+            className: 'st-devtools-semantic-consent-overlay',
+        });
+        overlay.hidden = true;
+        overlay.addEventListener('pointerdown', (event) => {
+            if (event.target === overlay) this.closeSemanticConsent(false);
+        });
+        const panel = element('section', {
+            className: 'st-devtools-semantic-consent-panel',
+        });
+        panel.tabIndex = -1;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute(
+            'aria-labelledby',
+            'st-devtools-semantic-consent-title',
+        );
+
+        const header = element('header', {
+            className: 'st-devtools-semantic-consent-header',
+        });
+        const title = element('h2', {
+            text: t('semantic.consentTitle'),
+        });
+        title.id = 'st-devtools-semantic-consent-title';
+        const close = element('button', {
+            className: 'menu_button',
+            title: t('action.cancel'),
+            type: 'button',
+        });
+        close.setAttribute('aria-label', t('action.cancel'));
+        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
+        close.addEventListener('click', () => this.closeSemanticConsent(false));
+        header.append(title, close);
+
+        const body = element('div', {
+            className: 'st-devtools-semantic-consent-body',
+        });
+        const consent = element('label', {
+            className: 'st-devtools-semantic-consent-check',
+        });
+        const checkbox = element('input');
+        checkbox.type = 'checkbox';
+        consent.append(
+            checkbox,
+            element('span', { text: t('semantic.consentCheckbox') }),
+        );
+        const actions = element('div', {
+            className: 'st-devtools-semantic-consent-actions',
+        });
+        const cancel = element('button', {
+            className: 'menu_button',
+            text: t('action.cancel'),
+            type: 'button',
+        });
+        cancel.addEventListener('click', () => this.closeSemanticConsent(false));
+        const confirm = element('button', {
+            className: 'menu_button',
+            text: t('semantic.consentSend'),
+            type: 'button',
+        });
+        confirm.disabled = true;
+        confirm.addEventListener('click', () => {
+            if (checkbox.checked) this.closeSemanticConsent(true);
+        });
+        checkbox.addEventListener('change', () => {
+            confirm.disabled = !checkbox.checked;
+        });
+        actions.append(cancel, confirm);
+        panel.append(
+            header,
+            body,
+            proseElement('p', t('semantic.consentWarning'), {
+                className: 'st-devtools-semantic-consent-warning',
+            }),
+            consent,
+            actions,
+        );
+        overlay.appendChild(panel);
+        this.semanticConsentOverlay = overlay;
+        this.semanticConsentPanel = panel;
+        this.semanticConsentBody = body;
+        this.semanticConsentCheckbox = checkbox;
+        this.semanticConsentConfirmButton = confirm;
+        return overlay;
+    }
+
+    semanticPreviewCostText(cost) {
+        if (
+            !cost
+            || cost.priceSource !== 'user-override'
+            || !['catalog-estimate', 'lower-bound'].includes(cost.status)
+            || !Number.isFinite(cost.amount)
+            || typeof cost.currency !== 'string'
+        ) {
+            return t('semantic.costUnavailable');
+        }
+        return t('semantic.costValue', {
+            amount: Number(cost.amount).toLocaleString('ko-KR', {
+                maximumFractionDigits: 12,
+            }),
+            currency: cost.currency,
+            status: t(`context.costStatus.${cost.status}`),
+        });
+    }
+
+    renderSemanticConsentPreview(preview = {}) {
+        const content = element('div', {
+            className: 'st-devtools-semantic-preview',
+        });
+        const metadata = element('dl', {
+            className: 'st-devtools-semantic-preview-meta',
+        });
+        const appendMetadata = (labelKey, value) => {
+            metadata.append(
+                element('dt', { text: t(labelKey) }),
+                element('dd', { text: value ?? t('common.unknown') }),
+            );
+        };
+        appendMetadata(
+            'semantic.previewIdentityStatus',
+            translatedValue(
+                `semantic.identity.${preview?.providerIdentity?.status}`,
+                preview?.providerIdentity?.status ?? t('common.unknown'),
+            ),
+        );
+        appendMetadata(
+            'semantic.previewProvider',
+            providerDisplayLabel(preview.provider),
+        );
+        appendMetadata(
+            'semantic.previewModel',
+            preview.model ?? t('common.unknown'),
+        );
+        appendMetadata(
+            'semantic.previewInputTokens',
+            Number.isFinite(preview.inputTokenEstimate)
+                ? t('snapshot.tokens', {
+                    count: Number(preview.inputTokenEstimate)
+                        .toLocaleString('ko-KR'),
+                })
+                : t('common.unknown'),
+        );
+        appendMetadata(
+            'semantic.previewResponseCap',
+            t('snapshot.tokens', {
+                count: Number(preview.responseTokenCap || 0)
+                    .toLocaleString('ko-KR'),
+            }),
+        );
+        appendMetadata(
+            'semantic.previewCost',
+            this.semanticPreviewCostText(preview.cost),
+        );
+        content.appendChild(metadata);
+
+        const included = Array.isArray(preview.includedSources)
+            ? preview.includedSources
+            : [];
+        const includedSection = element('section', {
+            className: 'st-devtools-semantic-preview-sources',
+        });
+        includedSection.appendChild(element('h3', {
+            text: t('semantic.includedSources', { count: included.length }),
+        }));
+        for (const source of included) {
+            const card = element('article', {
+                className: 'st-devtools-semantic-preview-source',
+            });
+            card.append(
+                element('strong', {
+                    text: source?.label ?? source?.id ?? t('common.unknown'),
+                }),
+                element('small', {
+                    text: t('semantic.sourceBytes', {
+                        count: normalizedCount(source?.bytes),
+                    }),
+                }),
+                element('pre', {
+                    text: typeof source?.content === 'string'
+                        ? source.content
+                        : t('semantic.previewContentUnavailable'),
+                }),
+            );
+            includedSection.appendChild(card);
+        }
+        if (included.length === 0) {
+            includedSection.appendChild(proseElement(
+                'p',
+                t('semantic.noIncludedSources'),
+            ));
+        }
+
+        const excluded = Array.isArray(preview.excludedSources)
+            ? preview.excludedSources
+            : [];
+        const excludedSection = element('section', {
+            className: 'st-devtools-semantic-preview-excluded',
+        });
+        excludedSection.appendChild(element('h3', {
+            text: t('semantic.excludedSources', { count: excluded.length }),
+        }));
+        const excludedList = element('ul');
+        for (const source of excluded) {
+            excludedList.appendChild(element('li', {
+                text: t('semantic.excludedSource', {
+                    name: source?.label ?? source?.id ?? t('common.unknown'),
+                    reason: translatedValue(
+                        `semantic.exclusion.${source?.reason}`,
+                        source?.reason ?? t('common.unknown'),
+                    ),
+                }),
+            }));
+        }
+        if (excluded.length === 0) {
+            excludedList.appendChild(element('li', {
+                text: t('common.none'),
+            }));
+        }
+        excludedSection.appendChild(excludedList);
+        content.append(includedSection, excludedSection);
+        return content;
+    }
+
+    requestSemanticConsent(preview) {
+        if (!this.semanticConsentOverlay || !this.semanticConsentPanel) {
+            return Promise.resolve(false);
+        }
+        if (
+            !Array.isArray(preview?.includedSources)
+            || preview.includedSources.length === 0
+            || preview.includedSources.some(
+                (source) => typeof source?.content !== 'string',
+            )
+        ) {
+            return Promise.resolve(false);
+        }
+        if (this.semanticConsentResolve) this.closeSemanticConsent(false);
+        this.semanticConsentPreviouslyFocused = document.activeElement;
+        this.semanticConsentCheckbox.checked = false;
+        this.semanticConsentConfirmButton.disabled = true;
+        this.semanticConsentBody.replaceChildren(
+            this.renderSemanticConsentPreview(preview),
+        );
+        this.window.setAttribute('aria-modal', 'false');
+        for (const region of this.primaryRegions) {
+            region.inert = true;
+            region.setAttribute('aria-hidden', 'true');
+        }
+        this.semanticConsentOverlay.hidden = false;
+        queueMicrotask(() => this.semanticConsentCheckbox?.focus());
+        return new Promise((resolve) => {
+            this.semanticConsentResolve = resolve;
+        });
+    }
+
+    closeSemanticConsent(approved = false, { restoreFocus = true } = {}) {
+        if (!this.semanticConsentOverlay || this.semanticConsentOverlay.hidden) {
+            return;
+        }
+        const resolve = this.semanticConsentResolve;
+        this.semanticConsentResolve = null;
+        this.semanticConsentOverlay.hidden = true;
+        this.semanticConsentBody?.replaceChildren();
+        this.semanticConsentCheckbox.checked = false;
+        this.semanticConsentConfirmButton.disabled = true;
+        this.window.setAttribute('aria-modal', 'true');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (
+            restoreFocus
+            && this.semanticConsentPreviouslyFocused?.isConnected
+            && typeof this.semanticConsentPreviouslyFocused.focus === 'function'
+        ) {
+            this.semanticConsentPreviouslyFocused.focus();
+        }
+        this.semanticConsentPreviouslyFocused = null;
+        resolve?.(Boolean(approved));
     }
 
     loadRuleSettings() {
@@ -2613,6 +3031,8 @@ export class DevToolsWindow {
     close() {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
+        this.closeSemanticConsent(false, { restoreFocus: false });
+        this.cancelSemanticInspection();
         this.closeSettings({ restoreFocus: false });
         if (this.root) {
             this.root.hidden = true;
@@ -2684,6 +3104,7 @@ export class DevToolsWindow {
             tabList,
             this.content,
             this.buildSettingsPanel(),
+            this.buildSemanticConsentDialog(),
         );
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
@@ -3075,6 +3496,9 @@ export class DevToolsWindow {
     }
 
     clearLocalData() {
+        this.resetSemanticInspectionForSettingsChange({
+            semanticInspectorEnabled: false,
+        });
         this.invalidateAnalysisState();
         this.analysisCache.clear();
         let deletedCount = 0;
@@ -3129,6 +3553,17 @@ export class DevToolsWindow {
                 this.preferences.timelineRetentionLimit,
             );
         }
+        if (this.semanticInspectorEnabledInput) {
+            this.semanticInspectorEnabledInput.checked = (
+                this.preferences.semanticInspectorEnabled
+            );
+        }
+        if (this.semanticResponseTokenCapInput) {
+            this.semanticResponseTokenCapInput.value = String(
+                this.preferences.semanticResponseTokenCap,
+            );
+            this.semanticResponseTokenCapInput.disabled = true;
+        }
         this.importedDiagnostics = null;
         this.diagnosticImportError = null;
         return deletedCount;
@@ -3148,9 +3583,12 @@ export class DevToolsWindow {
 
     focusableElements() {
         if (!this.window) return [];
-        const scope = this.settingsOverlay && !this.settingsOverlay.hidden
-            ? this.settingsPanel
-            : this.window;
+        const scope = this.semanticConsentOverlay
+            && !this.semanticConsentOverlay.hidden
+            ? this.semanticConsentPanel
+            : this.settingsOverlay && !this.settingsOverlay.hidden
+                ? this.settingsPanel
+                : this.window;
         return [...scope.querySelectorAll(
             'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
             'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
@@ -3167,7 +3605,12 @@ export class DevToolsWindow {
         if (!this.root || this.root.hidden) return;
         if (event.key === 'Escape') {
             event.preventDefault();
-            if (this.settingsOverlay && !this.settingsOverlay.hidden) {
+            if (
+                this.semanticConsentOverlay
+                && !this.semanticConsentOverlay.hidden
+            ) {
+                this.closeSemanticConsent(false);
+            } else if (this.settingsOverlay && !this.settingsOverlay.hidden) {
                 this.closeSettings();
             } else {
                 this.close();
@@ -3185,9 +3628,12 @@ export class DevToolsWindow {
         const first = focusable[0];
         const last = focusable.at(-1);
         const active = document.activeElement;
-        const focusScope = this.settingsOverlay && !this.settingsOverlay.hidden
-            ? this.settingsPanel
-            : this.window;
+        const focusScope = this.semanticConsentOverlay
+            && !this.semanticConsentOverlay.hidden
+            ? this.semanticConsentPanel
+            : this.settingsOverlay && !this.settingsOverlay.hidden
+                ? this.settingsPanel
+                : this.window;
         if (!focusScope.contains(active)) {
             event.preventDefault();
             (event.shiftKey ? last : first).focus();
@@ -8363,6 +8809,607 @@ export class DevToolsWindow {
         return details;
     }
 
+    resetSemanticInspectionState(snapshotId = null) {
+        const previous = this.semanticInspectionState;
+        previous?.controller?.abort();
+        this.closeSemanticConsent(false);
+        this.semanticInspectionState = {
+            snapshotId,
+            analysisRevision: this.analysisRevision,
+            targetIds: new Set(),
+            status: 'idle',
+            result: null,
+            errorCode: null,
+            sequence: (previous?.sequence ?? 0) + 1,
+            controller: null,
+        };
+        this.refreshSemanticInspectorHost();
+    }
+
+    invalidateSemanticInspectionOutcome(state = this.semanticInspectionState) {
+        if (!state) return;
+        state.sequence += 1;
+        state.controller?.abort();
+        state.controller = null;
+        state.analysisRevision = this.analysisRevision;
+        state.status = 'idle';
+        state.result = null;
+        state.errorCode = null;
+        this.closeSemanticConsent(false);
+    }
+
+    clearSemanticInspectorCache() {
+        try {
+            return this.semanticInspector?.clearCache?.() === true;
+        } catch {
+            return false;
+        }
+    }
+
+    resetSemanticInspectionForSettingsChange(preferences = this.preferences) {
+        this.cancelSemanticInspection();
+        this.resetSemanticInspectionState();
+        if (!preferences?.semanticInspectorEnabled) {
+            this.clearSemanticInspectorCache();
+        }
+    }
+
+    semanticSnapshotSupportsInspection(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+            return false;
+        }
+        const schemaVersion = snapshot?.schemaVersion;
+        if (
+            schemaVersion != null
+            && (
+                !Number.isSafeInteger(schemaVersion)
+                || schemaVersion < 1
+                || schemaVersion > 7
+            )
+        ) {
+            return false;
+        }
+        const privacy = snapshot.privacy;
+        if (privacy == null) return schemaVersion !== 7;
+        return typeof privacy === 'object'
+            && !Array.isArray(privacy)
+            && privacy.mode === 'full';
+    }
+
+    semanticTargetHasClosure(target, kind) {
+        if (!target || typeof target !== 'object') return false;
+        if (Array.isArray(target.sourceIds) && target.sourceIds.length > 0) {
+            return true;
+        }
+        if (Array.isArray(target.atomIds) && target.atomIds.length > 0) {
+            return true;
+        }
+        if (kind === 'cluster') {
+            return Array.isArray(target.relationIds)
+                && target.relationIds.length > 0;
+        }
+        return typeof target.relationId === 'string'
+            && target.relationId.length > 0;
+    }
+
+    ensureSemanticInspectionSnapshot(snapshot) {
+        if (this.semanticInspectionState.snapshotId !== snapshot?.id) {
+            this.resetSemanticInspectionState(snapshot?.id ?? null);
+        } else if (
+            this.semanticInspectionState.analysisRevision !== this.analysisRevision
+        ) {
+            this.invalidateSemanticInspectionOutcome(this.semanticInspectionState);
+        }
+        return this.semanticInspectionState;
+    }
+
+    refreshSemanticInspectorHost() {
+        if (
+            this.semanticInspectorHost?.isConnected
+            && typeof this.semanticInspectorHost.__stDevToolsSemanticRefresh
+                === 'function'
+        ) {
+            this.semanticInspectorHost.__stDevToolsSemanticRefresh();
+        }
+    }
+
+    cancelSemanticInspection() {
+        const state = this.semanticInspectionState;
+        if (!state) return;
+        const active = ['preparing', 'awaiting-consent', 'running']
+            .includes(state.status);
+        if (!active) return;
+        state.sequence += 1;
+        state.controller?.abort();
+        state.controller = null;
+        state.status = 'cancelled';
+        state.result = null;
+        state.errorCode = null;
+        this.closeSemanticConsent(false);
+        this.refreshSemanticInspectorHost();
+    }
+
+    async startSemanticInspection(snapshot, analysis) {
+        const state = this.ensureSemanticInspectionSnapshot(snapshot);
+        if (
+            !this.preferences.semanticInspectorEnabled
+            || !this.semanticSnapshotSupportsInspection(snapshot)
+            || typeof this.semanticInspector?.prepare !== 'function'
+            || typeof this.semanticInspector?.inspect !== 'function'
+            || state.targetIds.size === 0
+        ) {
+            return null;
+        }
+        state.controller?.abort();
+        const sequence = state.sequence + 1;
+        state.sequence = sequence;
+        state.status = 'preparing';
+        state.result = null;
+        state.errorCode = null;
+        state.controller = null;
+        state.analysisRevision = this.analysisRevision;
+        const analysisRevision = state.analysisRevision;
+        this.refreshSemanticInspectorHost();
+        try {
+            const prepared = await this.semanticInspector.prepare({
+                snapshot,
+                analysis,
+                targetIds: [...state.targetIds],
+                provider: snapshotProvider(snapshot),
+                model: snapshot?.model ?? null,
+                responseTokenCap: this.preferences.semanticResponseTokenCap,
+                pricingOverrides: this.pricingOverrides,
+            });
+            if (
+                sequence !== state.sequence
+                || state.snapshotId !== snapshot?.id
+                || state.analysisRevision !== analysisRevision
+            ) {
+                return null;
+            }
+            state.status = 'awaiting-consent';
+            this.refreshSemanticInspectorHost();
+            const approved = await this.requestSemanticConsent(
+                prepared?.preview ?? {},
+            );
+            if (
+                sequence !== state.sequence
+                || state.snapshotId !== snapshot?.id
+                || state.analysisRevision !== analysisRevision
+            ) {
+                return null;
+            }
+            if (!approved) {
+                state.status = 'cancelled';
+                this.refreshSemanticInspectorHost();
+                return null;
+            }
+            const controller = new AbortController();
+            state.controller = controller;
+            state.status = 'running';
+            this.refreshSemanticInspectorHost();
+            const result = await this.semanticInspector.inspect(prepared, {
+                signal: controller.signal,
+            });
+            if (
+                sequence !== state.sequence
+                || controller.signal.aborted
+                || state.snapshotId !== snapshot?.id
+                || state.analysisRevision !== analysisRevision
+            ) {
+                return null;
+            }
+            state.controller = null;
+            state.status = 'complete';
+            state.result = result;
+            state.errorCode = null;
+            this.refreshSemanticInspectorHost();
+            return result;
+        } catch (error) {
+            if (sequence !== state.sequence) return null;
+            state.controller = null;
+            const errorCode = String(error?.code ?? '');
+            if (
+                errorCode === 'SEMANTIC_ABORTED'
+                || error?.name === 'AbortError'
+            ) {
+                state.status = 'cancelled';
+                state.errorCode = null;
+            } else {
+                state.status = 'error';
+                state.errorCode = /^[A-Z0-9_]{1,64}$/u.test(errorCode)
+                    ? errorCode
+                    : 'SEMANTIC_PROVIDER_ERROR';
+            }
+            state.result = null;
+            this.refreshSemanticInspectorHost();
+            return null;
+        }
+    }
+
+    renderSemanticSuggestions(result) {
+        const section = element('section', {
+            className: 'st-devtools-semantic-results',
+        });
+        section.append(
+            element('h3', { text: t('semantic.resultTitle') }),
+            proseElement('p', t('semantic.resultDescription')),
+        );
+        const suggestions = Array.isArray(result?.suggestions)
+            ? result.suggestions
+            : [];
+        if (suggestions.length === 0) {
+            section.appendChild(proseElement('p', t('semantic.noSuggestions')));
+            return section;
+        }
+        const list = element('div', {
+            className: 'st-devtools-semantic-result-list',
+        });
+        for (const suggestion of suggestions) {
+            const card = element('article', {
+                className: 'st-devtools-semantic-result-card',
+            });
+            const header = element('header');
+            header.append(
+                element('span', {
+                    className: `st-devtools-rule-severity severity-${
+                        suggestion?.severity ?? 'info'
+                    }`,
+                    text: translatedValue(
+                        `rules.severity.${suggestion?.severity}`,
+                        suggestion?.severity ?? t('common.unknown'),
+                    ),
+                }),
+                element('strong', {
+                    text: suggestion?.title
+                        ?? suggestion?.category
+                        ?? t('semantic.suggestion'),
+                }),
+            );
+            card.append(
+                header,
+                proseElement(
+                    'p',
+                    suggestion?.summary ?? t('semantic.suggestionNoSummary'),
+                ),
+            );
+            if (typeof suggestion?.rationale === 'string') {
+                const rationale = element('section', {
+                    className: 'st-devtools-semantic-rationale',
+                });
+                rationale.append(
+                    element('strong', { text: t('semantic.rationale') }),
+                    proseElement('p', suggestion.rationale),
+                );
+                card.appendChild(rationale);
+            }
+            const metadata = element('div', {
+                className: 'st-devtools-semantic-result-meta',
+            });
+            if (Number.isFinite(suggestion?.confidence)) {
+                metadata.appendChild(element('small', {
+                    text: t('semantic.suggestionConfidence', {
+                        count: Math.round(suggestion.confidence * 100),
+                    }),
+                }));
+            }
+            const targets = Array.isArray(suggestion?.targetIds)
+                ? suggestion.targetIds
+                : [];
+            if (targets.length > 0) {
+                metadata.appendChild(element('small', {
+                    text: t('semantic.suggestionTargets', {
+                        count: targets.length,
+                    }),
+                }));
+            }
+            if (metadata.childElementCount > 0) card.appendChild(metadata);
+            const evidenceItems = Array.isArray(suggestion?.evidence)
+                ? suggestion.evidence
+                : [];
+            if (evidenceItems.length > 0) {
+                const evidence = element('details', {
+                    className: 'st-devtools-semantic-evidence st-devtools-disclosure',
+                });
+                const evidenceSummary = element('summary');
+                evidenceSummary.append(
+                    element('strong', { text: t('semantic.evidence') }),
+                    element('span', {
+                        className: 'st-devtools-disclosure-count',
+                        text: String(evidenceItems.length),
+                    }),
+                );
+                const evidenceList = element('div', {
+                    className: 'st-devtools-semantic-evidence-list',
+                });
+                for (const item of evidenceItems) {
+                    const evidenceCard = element('article');
+                    evidenceCard.append(
+                        element('small', {
+                            text: t('semantic.evidenceLocation', {
+                                source: item?.sourceId ?? t('common.unknown'),
+                                start: normalizedCount(item?.start),
+                                end: normalizedCount(item?.end),
+                            }),
+                        }),
+                        element('pre', {
+                            text: typeof item?.quote === 'string'
+                                ? item.quote
+                                : t('common.unknown'),
+                        }),
+                    );
+                    evidenceList.appendChild(evidenceCard);
+                }
+                evidence.append(evidenceSummary, evidenceList);
+                card.appendChild(evidence);
+            }
+            list.appendChild(card);
+        }
+        section.appendChild(list);
+        return section;
+    }
+
+    renderSemanticInspector(snapshot, analysis, findings) {
+        const state = this.ensureSemanticInspectionSnapshot(snapshot);
+        const clusters = Array.isArray(analysis?.instructions?.clusters)
+            ? analysis.instructions.clusters
+            : [];
+        const semanticFindings = findings.filter(
+            (finding) => this.semanticTargetHasClosure(finding, 'finding'),
+        );
+        const semanticClusters = clusters.filter(
+            (cluster) => this.semanticTargetHasClosure(cluster, 'cluster'),
+        );
+        const availableTargetIds = new Set([
+            ...semanticFindings.map((finding) => `finding:${finding.id}`),
+            ...semanticClusters.map((cluster) => `cluster:${cluster.id}`),
+        ]);
+        let prunedSelection = false;
+        for (const targetId of state.targetIds) {
+            if (!availableTargetIds.has(targetId)) {
+                state.targetIds.delete(targetId);
+                prunedSelection = true;
+            }
+        }
+        if (prunedSelection) this.invalidateSemanticInspectionOutcome(state);
+        const section = element('section', {
+            className: 'st-devtools-semantic-inspector',
+        });
+        const heading = element('header', {
+            className: 'st-devtools-semantic-heading',
+        });
+        heading.append(
+            explainedTitle(
+                t('semantic.title'),
+                t('semantic.description'),
+                { tag: 'h3', titleTag: 'span' },
+            ),
+            element('span', {
+                className: 'st-devtools-semantic-optional',
+                text: t('semantic.optional'),
+            }),
+        );
+        section.appendChild(heading);
+        if (!this.semanticSnapshotSupportsInspection(snapshot)) {
+            section.appendChild(proseElement(
+                'p',
+                t('semantic.fullSnapshotOnly'),
+            ));
+            return section;
+        }
+        if (!this.preferences.semanticInspectorEnabled) {
+            section.appendChild(proseElement(
+                'p',
+                t('semantic.disabledDescription'),
+            ));
+            return section;
+        }
+        if (
+            typeof this.semanticInspector?.prepare !== 'function'
+            || typeof this.semanticInspector?.inspect !== 'function'
+        ) {
+            section.appendChild(proseElement(
+                'p',
+                t('semantic.unavailableDescription'),
+            ));
+            return section;
+        }
+
+        const selection = element('div', {
+            className: 'st-devtools-semantic-selection',
+        });
+        selection.appendChild(proseElement(
+            'p',
+            t('semantic.selectionDescription'),
+        ));
+        const inputs = [];
+        const targetLabel = (targetId, title, metadata) => {
+            const label = element('label', {
+                className: 'st-devtools-semantic-target',
+            });
+            const input = element('input');
+            input.type = 'checkbox';
+            input.checked = state.targetIds.has(targetId);
+            input.dataset.semanticTargetId = targetId;
+            input.addEventListener('change', () => {
+                if (input.checked) state.targetIds.add(targetId);
+                else state.targetIds.delete(targetId);
+                this.invalidateSemanticInspectionOutcome(state);
+                section.__stDevToolsSemanticRefresh?.();
+            });
+            label.append(
+                input,
+                element('span', { text: title }),
+                element('small', { text: metadata }),
+            );
+            inputs.push(input);
+            return label;
+        };
+
+        const findingDetails = element('details', {
+            className: 'st-devtools-semantic-targets st-devtools-disclosure',
+        });
+        const findingSummary = element('summary');
+        findingSummary.append(
+            element('strong', { text: t('semantic.findingTargets') }),
+            element('span', {
+                className: 'st-devtools-disclosure-count',
+                text: String(semanticFindings.length),
+            }),
+        );
+        const findingList = element('div', {
+            className: 'st-devtools-semantic-target-list',
+        });
+        for (const finding of semanticFindings) {
+            findingList.appendChild(targetLabel(
+                `finding:${finding.id}`,
+                finding.title,
+                t('semantic.findingMeta', {
+                    severity: t(`rules.severity.${finding.severity}`),
+                    determination: finding.determination
+                        ? t(`rules.determination.${finding.determination}`)
+                        : t('common.unknown'),
+                }),
+            ));
+        }
+        if (semanticFindings.length === 0) {
+            findingList.appendChild(proseElement(
+                'p',
+                t('semantic.noFindingTargets'),
+            ));
+        }
+        findingDetails.append(findingSummary, findingList);
+
+        const clusterDetails = element('details', {
+            className: 'st-devtools-semantic-targets st-devtools-disclosure',
+        });
+        const clusterSummary = element('summary');
+        clusterSummary.append(
+            element('strong', { text: t('semantic.clusterTargets') }),
+            element('span', {
+                className: 'st-devtools-disclosure-count',
+                text: String(semanticClusters.length),
+            }),
+        );
+        const clusterList = element('div', {
+            className: 'st-devtools-semantic-target-list',
+        });
+        for (const cluster of semanticClusters) {
+            clusterList.appendChild(targetLabel(
+                `cluster:${cluster.id}`,
+                translatedValue(
+                    `rules.setting.${cluster.category}`,
+                    cluster.category,
+                ),
+                t('semantic.clusterMeta', {
+                    atoms: cluster.atomIds?.length ?? 0,
+                    relations: cluster.relationIds?.length ?? 0,
+                }),
+            ));
+        }
+        if (semanticClusters.length === 0) {
+            clusterList.appendChild(proseElement(
+                'p',
+                t('semantic.noClusterTargets'),
+            ));
+        }
+        clusterDetails.append(clusterSummary, clusterList);
+        selection.append(findingDetails, clusterDetails);
+
+        const controls = element('div', {
+            className: 'st-devtools-semantic-controls',
+        });
+        const selectedCount = element('span');
+        const run = element('button', {
+            className: 'menu_button',
+            text: t('semantic.run'),
+            type: 'button',
+        });
+        run.addEventListener('click', () => {
+            void this.startSemanticInspection(snapshot, analysis);
+        });
+        controls.append(selectedCount, run);
+        const dynamic = element('div', {
+            className: 'st-devtools-semantic-state',
+        });
+        dynamic.setAttribute('aria-live', 'polite');
+        section.append(selection, controls, dynamic);
+
+        const refresh = () => {
+            const busy = ['preparing', 'awaiting-consent', 'running']
+                .includes(state.status);
+            for (const input of inputs) input.disabled = busy;
+            selectedCount.textContent = t('semantic.selectedCount', {
+                count: state.targetIds.size,
+            });
+            run.disabled = busy || state.targetIds.size === 0;
+            dynamic.replaceChildren();
+            if (state.status === 'preparing') {
+                dynamic.appendChild(proseElement(
+                    'p',
+                    t('semantic.preparing'),
+                ));
+            } else if (state.status === 'awaiting-consent') {
+                dynamic.appendChild(proseElement(
+                    'p',
+                    t('semantic.awaitingConsent'),
+                ));
+            } else if (state.status === 'running') {
+                dynamic.appendChild(proseElement(
+                    'p',
+                    t('semantic.running'),
+                ));
+            } else if (state.status === 'cancelled') {
+                dynamic.appendChild(proseElement(
+                    'p',
+                    t('semantic.cancelled'),
+                ));
+            } else if (state.status === 'error') {
+                const errorText = translatedValue(
+                    `semantic.error.${state.errorCode}`,
+                    t('semantic.error.generic'),
+                );
+                const error = proseElement('p', errorText, {
+                    className: 'is-error',
+                });
+                error.setAttribute('role', 'alert');
+                const retry = element('button', {
+                    className: 'menu_button',
+                    text: t('semantic.retry'),
+                    type: 'button',
+                });
+                retry.addEventListener('click', () => {
+                    void this.startSemanticInspection(snapshot, analysis);
+                });
+                dynamic.append(error, retry);
+            } else if (state.status === 'complete') {
+                dynamic.appendChild(
+                    this.renderSemanticSuggestions(state.result),
+                );
+            } else {
+                dynamic.appendChild(proseElement(
+                    'p',
+                    t('semantic.ready'),
+                ));
+            }
+            if (busy) {
+                const cancel = element('button', {
+                    className: 'menu_button',
+                    text: t('semantic.cancelRun'),
+                    type: 'button',
+                });
+                cancel.addEventListener('click', () => {
+                    this.cancelSemanticInspection();
+                });
+                dynamic.appendChild(cancel);
+            }
+        };
+        section.__stDevToolsSemanticRefresh = refresh;
+        this.semanticInspectorHost = section;
+        refresh();
+        return section;
+    }
+
     renderRules(snapshot, providedAnalysis = undefined) {
         const page = element('div', { className: 'st-devtools-page' });
         page.append(
@@ -8451,6 +9498,11 @@ export class DevToolsWindow {
         );
         page.appendChild(this.renderComparisonAnalysis(snapshot, analysis?.comparison));
         page.appendChild(this.renderInstructionModel(analysis?.instructions));
+        page.appendChild(this.renderSemanticInspector(
+            snapshot,
+            analysis,
+            findings,
+        ));
         const counts = findings.reduce((result, item) => {
             if (Object.prototype.hasOwnProperty.call(result, item.severity)) {
                 result[item.severity] += 1;

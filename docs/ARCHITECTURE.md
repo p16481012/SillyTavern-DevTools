@@ -1,10 +1,12 @@
 # 아키텍처
 
-이 문서는 v0.10.1의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드와 Worker·가상 목록 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.11.0의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
 ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이벤트 payload를 수정하지 않습니다. Prompt-ready 리스너는 캡처 대기 항목을 만들고 즉시 반환합니다. 요청 설정 객체는 같은 이벤트의 동기적 후속 변경이 반영될 수 있도록 리스너 반환 직후 복제하며, 토큰 계산과 IndexedDB 쓰기는 이벤트 처리 흐름 밖에서 실행됩니다.
+
+선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 별도의 공개 `getContext().generateRaw()`를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 ## 캡처 파이프라인
 
@@ -158,6 +160,37 @@ v6 새 캡처는 최종 문자열 범위와 별도로 payload 안의 실제 구�
 현재 비교 범주 ID는 `language`, `format`, `role`, `directives`, `duplicates`입니다. 컨텍스트 사용률, 대형 소스, 명시적인 이전 지시 무시 문구처럼 한 소스 또는 스냅샷 전체를 검사하는 규칙은 그룹 내부 비교 제외와 별개입니다.
 
 V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecords`, 관련 `sourceIds`와 최종 텍스트의 `finalRanges`, `method`, 수치 `confidence`를 함께 반환합니다. 규칙 활성화와 수치 임계값은 버전이 지정된 브라우저 localStorage 키에 저장하며 스냅샷 스키마에는 포함하지 않습니다.
+
+### 선택적 AI Semantic Inspector 경계
+
+v0.11.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v4`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다.
+
+처리 흐름은 다음과 같습니다.
+
+1. UI가 개인정보 모드가 `full`인 현재 스냅샷과 사용자가 직접 체크한 `finding:<id>` 또는 `cluster:<id>`만 `SemanticInspector.prepare()`에 전달합니다. redacted·metadata v7 스냅샷은 코어에서도 다시 거부합니다.
+2. `SemanticInspector`는 adapter의 현재 identity를 동기적으로 읽습니다. provider를 확인할 수 없는 `unavailable`은 지원하지 않는 상태로 실패하고, provider만 확인되는 `partial`은 model과 비용을 추측하지 않은 채 그대로 유지합니다.
+3. `semantic-inspector.js`가 target을 실제 로컬 finding/cluster에 연결하고 source·atom·relation closure를 계산합니다. 활성 상태·실제 요청 포함·대안 제외·분석 capability·금지된 final/chat-history 유형을 검사하며, closure 밖 소스는 정확한 label과 제외 이유만 미리보기에 남깁니다.
+4. closure에 필요한 source는 일부를 조용히 생략하거나 자르지 않습니다. source별·선택 전체·요청 전체 상한을 넘거나 필수 source에서 민감 토큰을 발견하면 준비 전체를 `SEMANTIC_INVALID_INPUT`으로 실패시켜 quote offset을 바꾸는 부분 정제를 금지합니다.
+5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한과 정확히 일치한 사용자 가격 override 비용을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
+6. 전송 직전에 adapter identity를 다시 읽어 준비 시점과 달라졌으면 실패로 닫습니다. 같은 요청 digest의 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출합니다.
+7. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. 모든 evidence의 `start`·`end`와 `quote`가 해당 source content의 정확한 slice여야 하며 하나라도 실패하면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
+8. 통과한 결과는 `origin: ai`와 요청 digest를 가진 별도 `AI 제안`으로만 반환합니다. UI에는 정적 finding 카드와 다른 영역으로 렌더링하며 정적 finding, 판정·무시, 비교 정책, 원본 프롬프트를 갱신하는 컨트롤을 두지 않습니다.
+
+관련 모듈의 경계는 다음과 같습니다.
+
+| 모듈 | 책임 | 변경하거나 저장하지 않는 것 |
+|---|---|---|
+| `semantic-inspector.js` | target closure, 정확한 전송 preview, bounded prompt, strict JSON/evidence 검증, memory cache | SillyTavern 원본, 정적 finding/review/policy, 전체 raw prompt·provider response의 영구 저장 |
+| `semantic-provider-adapter.js` | 공개 `getContext().generateRaw()` 호출, identity 판독, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code | 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
+| `semantic-capture-gate.js` | 호출별 nonce identity ticket, prompt·prompt type exact match, 같은 semantic 호출의 exact duplicate 억제, TTL·용량·identity-exact 소비·해제 | 모든 생성의 전역 캡처 중단, 모호한 요청의 임의 연결 |
+| `capture.js` 연동 | AI request와 정확히 일치한 settings/data event 및 그 duplicate만 자기 캡처에서 제외 | 동시에 진행되는 일반 사용자 generation의 정상 캡처 |
+| `ui.js` | 기본 OFF 설정, 수동 선택, 매 호출 미리보기·동의, 취소·재시도, 별도 결과 표시 | 동의 저장, 자동 대상 선택·자동 수정·정책 변경 |
+
+`SemanticInspectorMemoryCache`의 key는 protocol·provider identity·응답 상한·bounded prompt를 포함한 digest입니다. 값에는 전체 raw prompt·전체 raw provider response와 전용 `source.content`·`evidence.quote` 필드를 넣지 않고 검증된 ID·offset과 title·summary·rationale 같은 정규화 제안 텍스트를 제한된 LRU/TTL로 보관합니다. 모델이 제안 텍스트 안에 입력 원문의 표현을 반복할 가능성까지 제거하지는 않으므로 이 cache는 익명화 경계가 아닙니다. cache hit의 evidence quote는 현재 준비 source의 검증된 offset에서 다시 구성하며 새로고침하면 cache 전체가 사라집니다.
+
+취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 `generateRaw()`에는 provider 계산을 강제로 중단하는 별도 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
+
+AI prompt와 동시에 식별자 없는 일반 사용자 요청이 도착해 어느 요청인지 안전하게 구분할 수 없으면 gate와 기존 generation ledger 모두 임의 FIFO 연결을 하지 않습니다. explicit public ID가 있는 정상 사용자 요청은 그대로 정확 연결합니다. 이 fail-closed 경계는 AI 호출을 숨기기 위해 다른 사용자의 capture를 소비하는 것을 막습니다.
 
 ### 정책 V2 모듈 경계
 

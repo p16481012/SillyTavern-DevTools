@@ -11,6 +11,10 @@ import {
     DEFAULT_UI_PREFERENCES,
     UI_PREFERENCES_KEY,
 } from '../src/preferences.js';
+import {
+    SemanticInspector,
+    SemanticInspectorMemoryCache,
+} from '../src/semantic-inspector.js';
 
 const fixtureParameters = new URLSearchParams(globalThis.location?.search ?? '');
 
@@ -55,7 +59,16 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.10.1',
+        extensionVersion: '0.11.0',
+        privacy: {
+            schemaVersion: 1,
+            mode: 'full',
+            digestAlgorithm: 'SHA-256',
+            rawPromptContentIncluded: true,
+            rawChatIdIncluded: true,
+            rawRequestIdIncluded: true,
+            originalSchemaVersion: 7,
+        },
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -1204,6 +1217,142 @@ const context = {
     getCurrentChatId: () => 'sandbox',
     chatId: 'sandbox',
 };
+let semanticFixtureMode = 'success';
+const semanticFixtureStats = {
+    prepareCount: 0,
+    inspectCount: 0,
+    adapterGenerateCount: 0,
+    abortCount: 0,
+    networkCallCount: 0,
+    validatedResultCount: 0,
+};
+function semanticFixtureDelay(milliseconds, signal) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const cleanup = () => signal?.removeEventListener('abort', onAbort);
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve();
+        };
+        const timer = setTimeout(finish, milliseconds);
+        const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            cleanup();
+            semanticFixtureStats.abortCount += 1;
+            reject(Object.assign(new Error('sandbox semantic abort'), {
+                code: 'SEMANTIC_ABORTED',
+            }));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (signal?.aborted) onAbort();
+    });
+}
+function semanticRequestFromPrompt(prompt) {
+    const marker = '\nINPUT_JSON:\n';
+    const markerIndex = prompt.indexOf(marker);
+    if (markerIndex < 0) {
+        throw Object.assign(new Error('sandbox semantic prompt marker missing'), {
+            code: 'SEMANTIC_INVALID_RESPONSE',
+        });
+    }
+    return JSON.parse(prompt.slice(markerIndex + marker.length));
+}
+const sandboxSemanticAdapter = {
+    identity() {
+        return {
+            status: 'available',
+            provider: 'claude',
+            model: 'claude-sonnet-4',
+        };
+    },
+    async generate({ prompt, signal }) {
+        semanticFixtureStats.adapterGenerateCount += 1;
+        document.body.dataset.semanticAdapterGenerateCount = String(
+            semanticFixtureStats.adapterGenerateCount,
+        );
+        document.body.dataset.semanticNetworkCallCount = '0';
+        await semanticFixtureDelay(
+            semanticFixtureMode === 'slow' ? 10_000 : 350,
+            signal,
+        );
+        if (semanticFixtureMode === 'error') {
+            throw Object.assign(new Error('sandbox semantic provider error'), {
+                code: 'SEMANTIC_PROVIDER_ERROR',
+            });
+        }
+        const request = semanticRequestFromPrompt(prompt);
+        const target = request.targets[0];
+        const source = request.sources[0];
+        const quote = source.content.slice(
+            0,
+            Math.min(32, source.content.length),
+        );
+        return JSON.stringify({
+            version: 1,
+            suggestions: [{
+                targetIds: [target.targetId],
+                category: 'interaction',
+                severity: 'info',
+                title: '선택 항목의 의미 관계 검토 제안',
+                summary: '선택한 정적 검사 대상을 의미 수준에서 다시 검토했습니다.',
+                rationale: '전송 미리보기에 표시된 원문과 정적 분석 관계만 근거로 사용했습니다.',
+                confidence: 0.93,
+                sourceIds: [source.id],
+                atomIds: [],
+                relationIds: [],
+                evidence: [{
+                    sourceId: source.id,
+                    start: 0,
+                    end: quote.length,
+                    quote,
+                }],
+            }],
+        });
+    },
+};
+const sandboxSemanticCache = new SemanticInspectorMemoryCache();
+class SandboxSemanticInspector extends SemanticInspector {
+    async prepare(options) {
+        semanticFixtureStats.prepareCount += 1;
+        const prepared = await super.prepare(options);
+        document.body.dataset.semanticState = 'preview-ready';
+        document.body.dataset.semanticPrepareCount = String(
+            semanticFixtureStats.prepareCount,
+        );
+        document.body.dataset.semanticRequestDigest = prepared.requestDigest;
+        return prepared;
+    }
+
+    async inspect(prepared, { signal }) {
+        semanticFixtureStats.inspectCount += 1;
+        document.body.dataset.semanticState = 'running';
+        document.body.dataset.semanticInspectCount = String(
+            semanticFixtureStats.inspectCount,
+        );
+        try {
+            const result = await super.inspect(prepared, { signal });
+            semanticFixtureStats.validatedResultCount += 1;
+            document.body.dataset.semanticState = 'complete';
+            document.body.dataset.semanticValidatedResultCount = String(
+                semanticFixtureStats.validatedResultCount,
+            );
+            return result;
+        } catch (error) {
+            document.body.dataset.semanticState = error?.code === 'SEMANTIC_ABORTED'
+                ? 'cancelled'
+                : 'error';
+            throw error;
+        }
+    }
+}
+const sandboxSemanticInspector = new SandboxSemanticInspector({
+    adapter: sandboxSemanticAdapter,
+    cache: sandboxSemanticCache,
+});
 const sandboxPricingKey = 'st-devtools:pricing-overrides:v1';
 if (localStorage.getItem(sandboxPricingKey) == null) {
     localStorage.setItem(sandboxPricingKey, JSON.stringify({
@@ -1219,18 +1368,20 @@ if (localStorage.getItem(sandboxPricingKey) == null) {
         }],
     }));
 }
-if (requestedFixtureSize != null) {
-    localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
-        ...DEFAULT_UI_PREFERENCES,
+localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
+    ...DEFAULT_UI_PREFERENCES,
+    semanticInspectorEnabled: true,
+    ...(requestedFixtureSize == null ? {} : {
         timelineRetentionLimit: requestedFixtureSize,
         timelineReadLimit: requestedFixtureSize,
-    }));
-}
+    }),
+}));
 const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.10.1',
+    version: '0.11.0',
+    semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
 document.body.dataset.fixtureSize = String(timeline.length);
@@ -1241,6 +1392,10 @@ document.body.dataset.sourceCount = String(
 document.body.dataset.stressFixture = String(
     requestedFixtureSize != null || requestedSourceCount != null,
 );
+document.body.dataset.semanticCore = String(
+    sandboxSemanticInspector instanceof SemanticInspector,
+);
+document.body.dataset.semanticNetworkCallCount = '0';
 document.body.dataset.fixtureFeatures = [
     'provider-trace',
     'provenance-available',
@@ -1253,6 +1408,11 @@ document.body.dataset.fixtureFeatures = [
     'corrupt-warning',
     'usage-local-estimate',
     'pricing-user-override',
+    'semantic-consent-preview',
+    'semantic-result',
+    'semantic-error',
+    'semantic-cancel',
+    'semantic-no-provider-call',
     'privacy-redacted',
     'privacy-metadata',
     'retention-policy',
@@ -1291,6 +1451,29 @@ document.getElementById('sandbox-theme').addEventListener('click', () => {
     document.body.style.color = darkTheme ? '#eef2f7' : '#172033';
     devTools.syncOpaqueTheme();
 });
+async function setSemanticFixtureMode(mode) {
+    semanticFixtureMode = mode;
+    sandboxSemanticCache.clear();
+    document.body.dataset.semanticFixtureMode = mode;
+    document.body.dataset.semanticState = 'idle';
+    selectPrivacyFixture('full');
+    devTools.resetSemanticInspectionState(devTools.selectedSnapshot()?.id);
+    await devTools.open();
+    devTools.selectTab('rules');
+    return mode;
+}
+document.getElementById('sandbox-semantic-success')?.addEventListener(
+    'click',
+    () => void setSemanticFixtureMode('success'),
+);
+document.getElementById('sandbox-semantic-error')?.addEventListener(
+    'click',
+    () => void setSemanticFixtureMode('error'),
+);
+document.getElementById('sandbox-semantic-slow')?.addEventListener(
+    'click',
+    () => void setSemanticFixtureMode('slow'),
+);
 document.getElementById('sandbox-import-valid').addEventListener('click', async () => {
     const file = new File(
         [serializeTimelineDiagnostics(timeline, 'json')],
@@ -1325,7 +1508,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.10.1',
+        extensionVersion: '0.11.0',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1385,6 +1568,14 @@ document.getElementById('sandbox-select-metadata')?.addEventListener('click', ()
 });
 globalThis.devToolsSandboxFixtures = {
     selectPrivacyFixture,
+    setSemanticFixtureMode,
+    semantic: {
+        inspector: sandboxSemanticInspector,
+        adapter: sandboxSemanticAdapter,
+        stats: semanticFixtureStats,
+        mode: () => semanticFixtureMode,
+        cacheStatus: () => sandboxSemanticInspector.cacheStatus(),
+    },
     runArchiveImportSmokeTest,
     runArchiveRollbackSmokeTest,
     performance: {
