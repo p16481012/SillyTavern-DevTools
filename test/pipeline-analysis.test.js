@@ -56,6 +56,35 @@ test('compareLoreEntries reports activated, removed, and retained entries', () =
     assert.deepEqual(changes.retained, [beta]);
 });
 
+test('compareLoreEntries reports same-UID content, key, position, and order changes', () => {
+    const stableBefore = {
+        world: 'world',
+        uid: 7,
+        key: ['alpha'],
+        content: 'old lore',
+        position: 2,
+    };
+    const stableAfter = {
+        world: 'world',
+        uid: 7,
+        key: ['alpha', 'beta'],
+        content: 'new lore',
+        position: 4,
+    };
+    const changes = compareLoreEntries(
+        [{ world: 'world', uid: 1 }, stableBefore],
+        [stableAfter, { world: 'world', uid: 1 }],
+    );
+
+    assert.equal(changes.activated.length, 0);
+    assert.equal(changes.removed.length, 0);
+    assert.deepEqual(
+        changes.changed.find(({ key }) => key === 'world:7')?.changes
+            .map(({ field }) => field),
+        ['content', 'key', 'position', 'order'],
+    );
+});
+
 test('compareSnapshotSources uses stable metadata identities across captures', () => {
     const base = snapshot({
         id: 'base',
@@ -178,6 +207,92 @@ test('compareSnapshotSources reports a prompt removed when it leaves the actual 
     assert.equal(changes.length, 1);
     assert.equal(changes[0].status, 'removed');
     assert.equal(changes[0].source.metadata.field, 'optional');
+});
+
+test('compareSnapshotSources reports stable source metadata without exposing inactive text changes', () => {
+    const before = {
+        ...source({
+            id: 'before',
+            field: 'configured',
+            content: 'private old draft',
+            tokenCount: 10,
+        }),
+        included: false,
+        configuredEnabled: false,
+        metadata: {
+            field: 'configured',
+            identifier: 'stable-prompt',
+            role: 'system',
+            depth: 2,
+            position: 'relative',
+            promptOrder: 1,
+        },
+    };
+    const after = {
+        ...source({
+            id: 'after',
+            field: 'configured',
+            content: 'private new draft',
+            tokenCount: 99,
+        }),
+        included: false,
+        configuredEnabled: false,
+        metadata: {
+            field: 'configured',
+            identifier: 'stable-prompt',
+            role: 'developer',
+            depth: 4,
+            position: 'absolute',
+            promptOrder: 3,
+        },
+    };
+
+    const changes = compareSnapshotSources(
+        snapshot({ id: 'base', timestamp: 1, totalTokens: 0, sources: [before] }),
+        snapshot({ id: 'compare', timestamp: 2, totalTokens: 0, sources: [after] }),
+    );
+
+    assert.equal(changes.length, 1);
+    assert.deepEqual(changes[0].changeKinds, ['metadata']);
+    assert.deepEqual(
+        changes[0].metadataChanges.map(({ field }) => field),
+        ['role', 'depth', 'position', 'promptOrder'],
+    );
+    assert.equal(changes[0].changeKinds.includes('content'), false);
+    assert.equal(changes[0].changeKinds.includes('tokens'), false);
+});
+
+test('compareSnapshotSources treats enabled transitions as presence and metadata changes', () => {
+    const before = {
+        ...source({
+            id: 'before',
+            field: 'configured',
+            content: 'same',
+            tokenCount: 1,
+        }),
+        included: false,
+        configuredEnabled: false,
+        metadata: { field: 'configured', identifier: 'stable-prompt' },
+    };
+    const after = {
+        ...before,
+        id: 'after',
+        included: true,
+        configuredEnabled: true,
+    };
+
+    const [change] = compareSnapshotSources(
+        snapshot({ id: 'base', timestamp: 1, totalTokens: 0, sources: [before] }),
+        snapshot({ id: 'compare', timestamp: 2, totalTokens: 1, sources: [after] }),
+    );
+
+    assert.equal(change.status, 'added');
+    assert.deepEqual(change.changeKinds, ['presence', 'metadata']);
+    assert.deepEqual(change.metadataChanges, [{
+        field: 'enabled',
+        before: false,
+        after: true,
+    }]);
 });
 
 test('buildTimelineAnalysis calculates chronological token and lore deltas', () => {

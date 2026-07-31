@@ -8,11 +8,13 @@ import {
     findTemplateRanges,
     finalizeSnapshot,
     flattenPrompt,
+    flattenPromptWithLocations,
     searchSnapshot,
     serializeSnapshot,
     snapshotProvider,
 } from '../src/model.js';
 import { providerDisplayLabel } from '../src/i18n.js';
+import { migrateSnapshot } from '../src/migrations.js';
 
 test('snapshot provider prefers the captured Chat Completion source', () => {
     const legacySnapshot = {
@@ -81,6 +83,34 @@ test('flattenPrompt preserves chat message order and roles', () => {
     assert.match(flattened, /# 1 SYSTEM\nRules/);
     assert.match(flattened, /# 2 USER\nHello/);
     assert.ok(flattened.indexOf('Rules') < flattened.indexOf('Hello'));
+});
+
+test('flattenPromptWithLocations maps message and content-part JSON pointers to final ranges', () => {
+    const payload = [{
+        role: 'system',
+        content: [
+            { type: 'text', text: 'First' },
+            { type: 'image_url', image_url: { url: 'omitted' } },
+        ],
+    }];
+    const flattened = flattenPromptWithLocations(payload);
+    const textLocation = flattened.locations.find(
+        ({ jsonPointer: pointer }) => pointer === '/payload/0/content/0/text',
+    );
+    const imageLocation = flattened.locations.find(
+        ({ jsonPointer: pointer }) => pointer === '/payload/0/content/1',
+    );
+
+    assert.equal(
+        flattened.text.slice(textLocation.finalRange.start, textLocation.finalRange.end),
+        'First',
+    );
+    assert.match(
+        flattened.text.slice(imageLocation.finalRange.start, imageLocation.finalRange.end),
+        /\[이미지 입력 2\]/,
+    );
+    assert.equal(textLocation.messageIndex, 0);
+    assert.equal(textLocation.role, 'system');
 });
 
 test('buildSources marks exact source content without altering the payload', () => {
@@ -378,6 +408,99 @@ test('snapshot ids are stable for identical inputs at the same timestamp', () =>
     assert.equal(createSnapshotId(1234, payload), createSnapshotId(1234, payload));
 });
 
+test('configured prompts claim identical payload occurrences one-to-one', () => {
+    const payload = [
+        { role: 'system', content: 'Shared instruction.' },
+        { role: 'system', content: 'Shared instruction.' },
+        { role: 'system', name: 'provider', content: 'Shared instruction.' },
+    ];
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [{
+            identifier: 'shared-1',
+            name: 'Shared 1',
+            content: 'Shared instruction.',
+            enabled: true,
+            role: 'system',
+        }, {
+            identifier: 'shared-2',
+            name: 'Shared 2',
+            content: 'Shared instruction.',
+            enabled: true,
+            role: 'system',
+        }],
+    }, payload, []);
+    const configured = sources.filter(
+        (source) => source.metadata?.sourceKind === 'configuredPrompt',
+    );
+    const requestSource = sources.find(
+        (source) => source.metadata?.sourceKind === 'requestMessage',
+    );
+
+    assert.deepEqual(
+        configured.map((source) => source.provenance.locations.map(
+            (location) => [location.jsonPointer, location.messageIndex, location.role],
+        )),
+        [
+            [['/payload/0/content', 0, 'system']],
+            [['/payload/1/content', 1, 'system']],
+        ],
+    );
+    assert.equal(configured.every((source) => source.ranges.length === 1), true);
+    assert.equal(requestSource.content, 'Shared instruction.');
+    assert.equal(requestSource.metadata.messageIndex, 2);
+    assert.deepEqual(
+        requestSource.provenance.locations.map(({ jsonPointer: pointer }) => pointer),
+        ['/payload/2/content'],
+    );
+});
+
+test('duplicate configured prompt attribution remains bounded at scale', () => {
+    const count = 500;
+    const content = 'Repeated configured instruction.';
+    const payload = [
+        ...Array.from({ length: count }, () => ({ role: 'system', content })),
+        { role: 'system', name: 'provider', content },
+    ];
+    const configuredPrompts = Array.from({ length: count }, (_, index) => ({
+        identifier: `configured-${index}`,
+        name: `Configured ${index}`,
+        content,
+        enabled: true,
+        role: 'system',
+    }));
+    const startedAt = performance.now();
+    const sources = buildSources({
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts,
+    }, payload, []);
+    const elapsed = performance.now() - startedAt;
+    const configured = sources.filter(
+        (source) => source.metadata?.sourceKind === 'configuredPrompt',
+    );
+    const requestSources = sources.filter(
+        (source) => source.metadata?.sourceKind === 'requestMessage',
+    );
+
+    assert.equal(configured.length, count);
+    assert.equal(configured.every((source) => source.ranges.length === 1), true);
+    assert.deepEqual(
+        configured.map((source) => source.provenance.locations[0].messageIndex),
+        Array.from({ length: count }, (_, index) => index),
+    );
+    assert.deepEqual(
+        requestSources.map((source) => source.metadata.messageIndex),
+        [count],
+    );
+    assert.ok(elapsed < 2_000, `duplicate attribution took ${elapsed.toFixed(1)}ms`);
+});
+
 test('snapshot finalization counts identical text only once', async () => {
     const payload = [{ role: 'user', content: 'same prompt text' }];
     const countedTexts = [];
@@ -408,6 +531,121 @@ test('snapshot finalization counts identical text only once', async () => {
         1,
     );
     assert.equal(result.stats.totalTokens, result.finalText.length);
+});
+
+test('snapshot finalization separates selected generation source from unknown upstream provider', async () => {
+    const result = await finalizeSnapshot({
+        contextState: {
+            chatId: 'chat',
+            mainApi: 'openai',
+            chatCompletionSource: 'context-fallback',
+            character: {},
+            characterFields: {},
+            personaDescription: '',
+            authorsNote: '',
+            extensionPrompts: {},
+            configuredPrompts: [],
+            maxContext: 4096,
+        },
+        payload: [{ role: 'user', content: 'hello' }],
+        promptType: 'chat-completion',
+        generationType: 'normal',
+        activatedLore: [],
+        extensionVersion: 'test',
+        tokenCounter: async () => 1,
+        request: {
+            body: {
+                chat_completion_source: 'openrouter',
+                messages: [{ role: 'user', content: 'hello' }],
+            },
+            settings: { chat_completion_source: 'openrouter' },
+            bodyKeys: ['chat_completion_source', 'messages'],
+            redactedPaths: [],
+            omittedMediaPaths: [],
+            correlationId: null,
+        },
+    });
+
+    assert.equal(result.provider, 'openrouter');
+    assert.deepEqual(result.providerTrace.selectedSource, {
+        value: 'openrouter',
+        status: 'captured',
+        evidencePointer: '/request/body/chat_completion_source',
+    });
+    assert.deepEqual(result.providerTrace.upstreamProvider, {
+        value: null,
+        status: 'unknown',
+        evidencePointer: null,
+    });
+});
+
+test('unknown request provider does not mask a known context fallback', async () => {
+    const result = await finalizeSnapshot({
+        contextState: {
+            chatId: 'chat',
+            mainApi: 'openai',
+            chatCompletionSource: 'openrouter',
+            character: {},
+            characterFields: {},
+            personaDescription: '',
+            authorsNote: '',
+            extensionPrompts: {},
+            configuredPrompts: [],
+            maxContext: 4096,
+        },
+        payload: [{ role: 'user', content: 'hello' }],
+        promptType: 'chat-completion',
+        generationType: 'normal',
+        activatedLore: [],
+        extensionVersion: 'test',
+        tokenCounter: async () => 1,
+        request: {
+            body: {
+                chat_completion_source: 'unknown',
+                messages: [{ role: 'user', content: 'hello' }],
+            },
+            settings: { chat_completion_source: 'unknown' },
+            bodyKeys: ['chat_completion_source', 'messages'],
+            redactedPaths: [],
+            omittedMediaPaths: [],
+            correlationId: null,
+        },
+    });
+
+    assert.equal(result.provider, 'openrouter');
+    assert.deepEqual(result.providerTrace.selectedSource, {
+        value: 'openrouter',
+        status: 'context-fallback',
+        evidencePointer: '/provider',
+    });
+    assert.strictEqual(migrateSnapshot(result), result);
+});
+
+test('assistant prefill distinguishes explicit evidence from a last-message inference', () => {
+    const contextState = {
+        character: {},
+        personaDescription: '',
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [],
+    };
+    const payload = [{ role: 'assistant', content: 'Continue' }];
+    const inferred = buildSources(contextState, payload, [])
+        .find((source) => source.type === 'assistant_prefill');
+    const confirmed = buildSources(contextState, payload, [], {
+        body: { continue_prefill: true },
+    }).find((source) => source.type === 'assistant_prefill');
+
+    assert.equal(inferred.metadata.prefillStatus, 'inferred');
+    assert.equal(inferred.provenance.method, 'assistant-prefill-inferred');
+    assert.equal(confirmed.metadata.prefillStatus, 'confirmed');
+    assert.equal(confirmed.provenance.method, 'assistant-prefill-explicit');
+    assert.equal(
+        confirmed.provenance.locations.some(
+            ({ jsonPointer: pointer }) => pointer === '/request/body/continue_prefill',
+        ),
+        true,
+    );
 });
 
 test('searchSnapshot supports literal and regex searches', () => {

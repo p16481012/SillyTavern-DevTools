@@ -13,6 +13,26 @@ function snapshot(id, chatId, timestamp) {
     };
 }
 
+function jsonBytes(value) {
+    return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+function seedIndexedSnapshot(store, value, approximateBytes = jsonBytes(value)) {
+    const chatId = value.chatId;
+    store.memory.set(store.snapshotKey(chatId, value.id), value);
+    store.memory.set(store.timelineIndexKey(chatId), {
+        version: 2,
+        chatId,
+        entries: [{
+            id: value.id,
+            timestamp: value.timestamp,
+            approximateBytes,
+        }],
+        updatedAt: value.timestamp,
+    });
+    store.memory.set('chat-index', [chatId]);
+}
+
 function yieldStorageOperations(store) {
     const read = store.read.bind(store);
     const write = store.write.bind(store);
@@ -538,4 +558,198 @@ test('a mutation during background rebuild discards stale metadata safely', asyn
     const rebuilt = await store.rebuildStorageSummary();
     assert.equal(rebuilt.complete, true);
     assert.equal(rebuilt.snapshotCount, 2);
+});
+
+test('reading a legacy indexed snapshot writes its migration back only once', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const legacy = {
+        ...snapshot('legacy', 'chat', 1),
+        finalText: 'legacy prompt',
+    };
+    seedIndexedSnapshot(store, legacy);
+    const recordKey = store.snapshotKey('chat', 'legacy');
+    const write = store.write.bind(store);
+    let recordWrites = 0;
+    store.write = async (key, value) => {
+        if (key === recordKey) recordWrites += 1;
+        return write(key, value);
+    };
+
+    const first = await store.getSnapshot('chat', 'legacy');
+    const persisted = store.memory.get(recordKey);
+    const second = await store.getSnapshot('chat', 'legacy');
+
+    assert.notStrictEqual(first, legacy);
+    assert.strictEqual(first, persisted);
+    assert.strictEqual(second, persisted);
+    assert.equal(recordWrites, 1);
+});
+
+test('lazy snapshot migration reconciles index bytes and a complete summary', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const legacy = {
+        ...snapshot('legacy', 'chat', 1),
+        finalText: 'a legacy prompt whose migrated representation is larger',
+    };
+    seedIndexedSnapshot(store, legacy, 1);
+    const before = await store.rebuildStorageSummary();
+    assert.equal(before.approximateBytes, 1);
+
+    const page = await store.getTimelinePage('chat');
+    const persisted = store.memory.get(store.snapshotKey('chat', 'legacy'));
+    const expectedBytes = jsonBytes(persisted);
+    const index = store.memory.get(store.timelineIndexKey('chat'));
+    const summary = await store.getStorageSummary();
+
+    assert.deepEqual(page.snapshots.map(({ id }) => id), ['legacy']);
+    assert.equal(index.entries[0].approximateBytes, expectedBytes);
+    assert.equal(summary.complete, true);
+    assert.equal(summary.approximateBytes, expectedBytes);
+});
+
+test('malformed records are isolated without deleting raw data or hiding healthy siblings', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const healthy = snapshot('healthy', 'chat', 1);
+    const corruptRecords = Array.from({ length: 25 }, (_, index) => ({
+        schemaVersion: 1,
+        id: `corrupt-${index + 1}`,
+        chatId: 'chat',
+        timestamp: index + 2,
+        sources: { invalid: true },
+        privateSentinel: `must-not-leak-${index + 1}`,
+    }));
+    const entries = [healthy, ...corruptRecords].map((value) => {
+        store.memory.set(store.snapshotKey('chat', value.id), value);
+        return {
+            id: value.id,
+            timestamp: value.timestamp,
+            approximateBytes: jsonBytes(value),
+        };
+    });
+    store.memory.set(store.timelineIndexKey('chat'), {
+        version: 2,
+        chatId: 'chat',
+        entries,
+        updatedAt: 30,
+    });
+    store.memory.set('chat-index', ['chat']);
+    const preservedRaw = store.memory.get(store.snapshotKey('chat', 'corrupt-1'));
+
+    const page = await store.getTimelinePage('chat');
+
+    assert.deepEqual(page.snapshots.map(({ id }) => id), ['healthy']);
+    assert.equal(page.corruptCount, 25);
+    assert.equal(page.corruptEntries.length, 20);
+    assert.deepEqual(
+        Object.keys(page.corruptEntries[0]).sort(),
+        ['id', 'message'],
+    );
+    assert.equal(
+        JSON.stringify(page.corruptEntries).includes('must-not-leak'),
+        false,
+    );
+    assert.strictEqual(
+        store.memory.get(store.snapshotKey('chat', 'corrupt-1')),
+        preservedRaw,
+    );
+    assert.equal(await store.getSnapshot('chat', 'corrupt-1'), null);
+    assert.strictEqual(
+        store.memory.get(store.snapshotKey('chat', 'corrupt-1')),
+        preservedRaw,
+    );
+});
+
+test('legacy array migration preserves every malformed record and indexes it for warning', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const healthy = snapshot('healthy', 'legacy-chat', 1);
+    const malformedWithId = {
+        schemaVersion: 5,
+        id: 'malformed',
+        chatId: 'legacy-chat',
+        timestamp: 2,
+        finalText: 'broken',
+        sources: { invalid: true },
+        privateSentinel: 'keep-malformed-verbatim',
+    };
+    const idless = {
+        schemaVersion: 5,
+        chatId: 'legacy-chat',
+        timestamp: 3,
+        finalText: 'idless',
+        sources: [],
+        privateSentinel: 'keep-idless-verbatim',
+    };
+    const primitive = 'keep-primitive-verbatim';
+    store.memory.set(store.timelineKey('legacy-chat'), [
+        healthy,
+        malformedWithId,
+        idless,
+        primitive,
+    ]);
+
+    const page = await store.getTimelinePage('legacy-chat');
+    const index = store.memory.get(store.timelineIndexKey('legacy-chat'));
+    const syntheticEntries = index.entries.filter(
+        ({ id }) => id.startsWith('__legacy-corrupt-v1-'),
+    );
+
+    assert.deepEqual(page.snapshots.map(({ id }) => id), ['healthy']);
+    assert.equal(page.totalCount, 4);
+    assert.equal(page.corruptCount, 3);
+    assert.equal(index.entries.length, 4);
+    assert.equal(syntheticEntries.length, 2);
+    assert.strictEqual(
+        store.memory.get(store.snapshotKey('legacy-chat', 'malformed')),
+        malformedWithId,
+    );
+    assert.deepEqual(
+        syntheticEntries.map(({ id }) => (
+            store.memory.get(store.snapshotKey('legacy-chat', id))
+        )),
+        [primitive, idless],
+    );
+    assert.equal(store.memory.has(store.timelineKey('legacy-chat')), false);
+});
+
+test('retrying an interrupted idless legacy migration reuses its synthetic record id', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const legacyKey = store.timelineKey('chat');
+    const indexKey = store.timelineIndexKey('chat');
+    const idless = {
+        schemaVersion: 5,
+        chatId: 'chat',
+        timestamp: 1,
+        finalText: 'idless',
+        sources: [],
+        privateSentinel: 'keep-on-retry',
+    };
+    store.memory.set(legacyKey, [idless]);
+    const write = store.write.bind(store);
+    let failIndexWrite = true;
+    store.write = async (key, value) => {
+        if (key === indexKey && failIndexWrite) {
+            throw new Error('simulated index failure');
+        }
+        return write(key, value);
+    };
+
+    await assert.rejects(
+        store.getTimelinePage('chat'),
+        /simulated index failure/,
+    );
+    const firstRecordKeys = [...store.memory.keys()].filter(
+        (key) => key.startsWith('snapshot:v2:'),
+    );
+    assert.equal(firstRecordKeys.length, 1);
+    assert.equal(store.memory.has(legacyKey), true);
+
+    failIndexWrite = false;
+    const page = await store.getTimelinePage('chat');
+    const secondRecordKeys = [...store.memory.keys()].filter(
+        (key) => key.startsWith('snapshot:v2:'),
+    );
+    assert.deepEqual(secondRecordKeys, firstRecordKeys);
+    assert.equal(page.corruptCount, 1);
+    assert.strictEqual(store.memory.get(firstRecordKeys[0]), idless);
+    assert.equal(store.memory.has(legacyKey), false);
 });

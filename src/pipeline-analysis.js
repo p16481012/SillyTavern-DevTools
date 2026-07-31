@@ -20,13 +20,70 @@ export function loreEntryLabel(entry) {
         || '이름 없는 로어북 항목';
 }
 
+function equivalentValue(left, right) {
+    if (Object.is(left, right)) return true;
+    try {
+        return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+        return false;
+    }
+}
+
+function loreFieldChanges(before, after, beforeOrder, afterOrder) {
+    const fields = [
+        ['content', before?.content ?? null, after?.content ?? null],
+        ['key', before?.key ?? null, after?.key ?? null],
+        ['position', before?.position ?? null, after?.position ?? null],
+        ['order', beforeOrder, afterOrder],
+    ];
+    return fields
+        .filter(([, beforeValue, afterValue]) => (
+            !equivalentValue(beforeValue, afterValue)
+        ))
+        .map(([field, beforeValue, afterValue]) => ({
+            field,
+            before: beforeValue,
+            after: afterValue,
+        }));
+}
+
 export function compareLoreEntries(baseEntries = [], compareEntries = []) {
-    const base = new Map(baseEntries.map((entry) => [loreEntryKey(entry), entry]));
-    const compare = new Map(compareEntries.map((entry) => [loreEntryKey(entry), entry]));
+    const base = new Map(baseEntries.map((entry, order) => [
+        loreEntryKey(entry),
+        { entry, order },
+    ]));
+    const compare = new Map(compareEntries.map((entry, order) => [
+        loreEntryKey(entry),
+        { entry, order },
+    ]));
+    const retainedKeys = [...compare.keys()].filter((key) => base.has(key));
+    const changed = retainedKeys.flatMap((key) => {
+        const before = base.get(key);
+        const after = compare.get(key);
+        const changes = loreFieldChanges(
+            before.entry,
+            after.entry,
+            before.order,
+            after.order,
+        );
+        return changes.length
+            ? [{
+                key,
+                before: before.entry,
+                after: after.entry,
+                changes,
+            }]
+            : [];
+    });
     return {
-        activated: [...compare].filter(([key]) => !base.has(key)).map(([, entry]) => entry),
-        removed: [...base].filter(([key]) => !compare.has(key)).map(([, entry]) => entry),
-        retained: [...compare].filter(([key]) => base.has(key)).map(([, entry]) => entry),
+        activated: [...compare]
+            .filter(([key]) => !base.has(key))
+            .map(([, { entry }]) => entry),
+        removed: [...base]
+            .filter(([key]) => !compare.has(key))
+            .map(([, { entry }]) => entry),
+        retained: retainedKeys.map((key) => compare.get(key).entry),
+        changed,
     };
 }
 
@@ -46,13 +103,52 @@ function sourceBaseKey(source) {
 function indexSources(sources = []) {
     const counts = new Map();
     const indexed = new Map();
-    for (const source of sources.filter(sourceIsIncludedInRequest)) {
+    for (const source of sources.filter((item) => item?.type !== 'final')) {
         const base = sourceBaseKey(source);
         const occurrence = counts.get(base) ?? 0;
         counts.set(base, occurrence + 1);
         indexed.set(`${base}#${occurrence}`, source);
     }
     return indexed;
+}
+
+const SOURCE_METADATA_FIELDS = [
+    'role',
+    'depth',
+    'position',
+    'enabled',
+    'promptOrder',
+];
+
+function firstDefined(...values) {
+    return values.find((value) => value !== undefined) ?? null;
+}
+
+function sourceMetadataValue(source, field) {
+    const metadata = source?.metadata ?? {};
+    if (field === 'enabled') {
+        return firstDefined(
+            source?.configuredEnabled,
+            source?.enabled,
+            metadata.configuredEnabled,
+            metadata.enabled,
+        );
+    }
+    return firstDefined(metadata[field], source?.[field]);
+}
+
+function sourceMetadataChanges(before, after) {
+    return SOURCE_METADATA_FIELDS.flatMap((field) => {
+        const beforeValue = sourceMetadataValue(before, field);
+        const afterValue = sourceMetadataValue(after, field);
+        return equivalentValue(beforeValue, afterValue)
+            ? []
+            : [{
+                field,
+                before: beforeValue,
+                after: afterValue,
+            }];
+    });
 }
 
 export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
@@ -64,14 +160,41 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
     for (const key of keys) {
         const before = base.get(key) ?? null;
         const after = compare.get(key) ?? null;
+        const beforeIncluded = sourceIsIncludedInRequest(before);
+        const afterIncluded = sourceIsIncludedInRequest(after);
+        const metadataChanges = before && after
+            ? sourceMetadataChanges(before, after)
+            : [];
+        const changeKinds = [];
         let status = 'unchanged';
-        if (!before) status = 'added';
-        else if (!after) status = 'removed';
-        else if (
-            before.content !== after.content
-            || before.tokenCount !== after.tokenCount
-            || before.attribution !== after.attribution
-        ) status = 'changed';
+        if (!before) {
+            if (!afterIncluded) continue;
+            status = 'added';
+            changeKinds.push('presence');
+        } else if (!after) {
+            if (!beforeIncluded) continue;
+            status = 'removed';
+            changeKinds.push('presence');
+        } else if (!beforeIncluded && afterIncluded) {
+            status = 'added';
+            changeKinds.push('presence');
+        } else if (beforeIncluded && !afterIncluded) {
+            status = 'removed';
+            changeKinds.push('presence');
+        } else {
+            if (beforeIncluded && afterIncluded) {
+                if (before.content !== after.content) changeKinds.push('content');
+                if (before.tokenCount !== after.tokenCount) changeKinds.push('tokens');
+                if (before.attribution !== after.attribution) {
+                    changeKinds.push('attribution');
+                }
+            }
+            if (metadataChanges.length) changeKinds.push('metadata');
+            if (changeKinds.length) status = 'changed';
+        }
+        if (metadataChanges.length && !changeKinds.includes('metadata')) {
+            changeKinds.push('metadata');
+        }
 
         if (status === 'unchanged') continue;
         results.push({
@@ -81,6 +204,8 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
             after,
             source: after ?? before,
             tokenDelta: (after?.tokenCount ?? 0) - (before?.tokenCount ?? 0),
+            changeKinds,
+            metadataChanges,
         });
     }
     return results;

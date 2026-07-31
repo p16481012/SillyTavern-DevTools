@@ -8,10 +8,15 @@ import {
     detectMultimodalProvider,
     estimateMultimodalTokens,
 } from './multimodal.js';
+import {
+    attachProvenanceLocations,
+    createProviderTrace,
+    jsonPointer,
+} from './provenance.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
 import { compileUserRegex, UserRegexError } from './regex-safety.js';
 
-export const SNAPSHOT_SCHEMA_VERSION = 5;
+export const SNAPSHOT_SCHEMA_VERSION = 6;
 export const SEARCH_QUERY_MAX_LENGTH = 512;
 const TEMPLATE_REGEX_MAX_LENGTH = 12_000;
 
@@ -48,14 +53,19 @@ function textCompletionProvider(api, source) {
 
 export function snapshotProvider(snapshot = {}) {
     const api = nonEmptyString(snapshot.api);
+    const tracedSource = nonEmptyString(snapshot.providerTrace?.selectedSource?.value);
+    if (tracedSource && tracedSource.toLowerCase() !== 'unknown') {
+        return tracedSource;
+    }
     if (snapshot.promptType && snapshot.promptType !== 'chat-completion') {
         return textCompletionProvider(
             api,
-            firstKnownString(snapshot.provider, snapshot.generatingApi),
+            firstKnownString(tracedSource, snapshot.provider, snapshot.generatingApi),
         );
     }
 
     return firstKnownString(
+        tracedSource,
         snapshot.request?.settings?.chat_completion_source,
         snapshot.request?.body?.chat_completion_source,
         snapshot.provider,
@@ -63,6 +73,79 @@ export function snapshotProvider(snapshot = {}) {
         api,
         'unknown',
     );
+}
+
+function selectedProviderTrace({
+    api,
+    promptType,
+    generationType,
+    request,
+    contextState,
+}) {
+    if (promptType === 'chat-completion') {
+        const bodySource = firstKnownString(
+            request?.body?.chat_completion_source,
+        );
+        const settingsSource = firstKnownString(
+            request?.settings?.chat_completion_source,
+        );
+        const requestSource = firstKnownString(bodySource, settingsSource);
+        if (requestSource && requestSource.toLowerCase() !== 'unknown') {
+            return createProviderTrace({
+                api,
+                promptType,
+                generationType,
+                selectedSource: requestSource,
+                selectedSourceStatus: 'captured',
+                selectedSourcePointer: bodySource
+                    && bodySource.toLowerCase() !== 'unknown'
+                    ? '/request/body/chat_completion_source'
+                    : '/request/settings/chat_completion_source',
+            });
+        }
+        const contextSource = firstKnownString(contextState.chatCompletionSource);
+        if (contextSource && contextSource.toLowerCase() !== 'unknown') {
+            return createProviderTrace({
+                api,
+                promptType,
+                generationType,
+                selectedSource: contextSource,
+                selectedSourceStatus: 'context-fallback',
+                selectedSourcePointer: '/provider',
+            });
+        }
+        const fallbackApi = firstKnownString(api, 'unknown');
+        return createProviderTrace({
+            api,
+            promptType,
+            generationType,
+            selectedSource: fallbackApi,
+            selectedSourceStatus: fallbackApi === 'unknown'
+                ? 'unknown'
+                : 'context-fallback',
+            selectedSourcePointer: fallbackApi === 'unknown' ? null : '/api',
+        });
+    }
+
+    const selectedSource = textCompletionProvider(
+        api,
+        contextState.textCompletionSource,
+    );
+    const sourceFromContext = firstKnownString(contextState.textCompletionSource);
+    return createProviderTrace({
+        api,
+        promptType,
+        generationType,
+        selectedSource,
+        selectedSourceStatus: selectedSource === 'unknown'
+            ? 'unknown'
+            : 'context-fallback',
+        selectedSourcePointer: selectedSource === 'unknown'
+            ? null
+            : sourceFromContext
+                ? '/provider'
+                : '/api',
+    });
 }
 
 const SOURCE_COLORS = {
@@ -140,59 +223,198 @@ export function contentPartToText(part, index = 0) {
     return JSON.stringify(part);
 }
 
-function flattenMessage(message, index) {
-    const role = String(message?.role ?? 'unknown').toUpperCase();
-    const name = message?.name ? ` (${message.name})` : '';
-    const sections = [contentToText(message?.content)];
-    if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
-        sections.push(`TOOL CALLS\n${JSON.stringify(message.tool_calls, null, 2)}`);
+function contentWithLocations(content, messageIndex, role) {
+    if (!Array.isArray(content)) {
+        const text = contentToText(content);
+        const directText = typeof content === 'string';
+        return {
+            text,
+            locations: text
+                ? [{
+                    jsonPointer: jsonPointer('payload', messageIndex, 'content'),
+                    messageIndex,
+                    role,
+                    valueRange: directText ? { start: 0, end: text.length } : null,
+                    finalRange: { start: 0, end: text.length },
+                }]
+                : [],
+        };
     }
-    if (message?.function_call) {
-        sections.push(`FUNCTION CALL\n${JSON.stringify(message.function_call, null, 2)}`);
-    }
-    return `# ${index + 1} ${role}${name}\n${sections.filter(Boolean).join('\n')}`;
+
+    const sections = content.map((part, partIndex) => {
+        const text = String(contentPartToText(part, partIndex) ?? '');
+        const directText = typeof part === 'string'
+            || (
+                ['text', 'input_text', 'output_text'].includes(part?.type)
+                && typeof part.text === 'string'
+            );
+        return {
+            text,
+            jsonPointer: typeof part === 'string'
+                ? jsonPointer('payload', messageIndex, 'content', partIndex)
+                : directText
+                    ? jsonPointer('payload', messageIndex, 'content', partIndex, 'text')
+                    : jsonPointer('payload', messageIndex, 'content', partIndex),
+            directText,
+        };
+    });
+    const locations = [];
+    let offset = 0;
+    sections.forEach((section, index) => {
+        if (section.text) {
+            locations.push({
+                jsonPointer: section.jsonPointer,
+                messageIndex,
+                role,
+                valueRange: section.directText
+                    ? { start: 0, end: section.text.length }
+                    : null,
+                finalRange: {
+                    start: offset,
+                    end: offset + section.text.length,
+                },
+            });
+        }
+        offset += section.text.length + (index < sections.length - 1 ? 1 : 0);
+    });
+    return {
+        text: sections.map(({ text }) => text).join('\n'),
+        locations,
+    };
 }
 
-export function flattenPrompt(payload) {
+function flattenMessageWithLocations(message, index, blockOffset = 0) {
+    const role = String(message?.role ?? 'unknown').toUpperCase();
+    const normalizedRole = role.toLowerCase();
+    const name = message?.name ? ` (${message.name})` : '';
+    const header = `# ${index + 1} ${role}${name}\n`;
+    const content = contentWithLocations(message?.content, index, normalizedRole);
+    const sections = [{
+        text: content.text,
+        locations: content.locations,
+    }];
+    if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
+        const serialized = JSON.stringify(message.tool_calls, null, 2);
+        sections.push({
+            text: `TOOL CALLS\n${serialized}`,
+            locations: [{
+                jsonPointer: jsonPointer('payload', index, 'tool_calls'),
+                messageIndex: index,
+                role: normalizedRole,
+                valueRange: null,
+                finalRange: {
+                    start: 'TOOL CALLS\n'.length,
+                    end: 'TOOL CALLS\n'.length + serialized.length,
+                },
+            }],
+        });
+    }
+    if (message?.function_call) {
+        const serialized = JSON.stringify(message.function_call, null, 2);
+        sections.push({
+            text: `FUNCTION CALL\n${serialized}`,
+            locations: [{
+                jsonPointer: jsonPointer('payload', index, 'function_call'),
+                messageIndex: index,
+                role: normalizedRole,
+                valueRange: null,
+                finalRange: {
+                    start: 'FUNCTION CALL\n'.length,
+                    end: 'FUNCTION CALL\n'.length + serialized.length,
+                },
+            }],
+        });
+    }
+    const presentSections = sections.filter(({ text }) => Boolean(text));
+    const locations = [];
+    let sectionOffset = header.length;
+    presentSections.forEach((section, sectionIndex) => {
+        for (const location of section.locations) {
+            locations.push({
+                ...location,
+                finalRange: location.finalRange
+                    ? {
+                        start: blockOffset + sectionOffset + location.finalRange.start,
+                        end: blockOffset + sectionOffset + location.finalRange.end,
+                    }
+                    : null,
+            });
+        }
+        sectionOffset += section.text.length
+            + (sectionIndex < presentSections.length - 1 ? 1 : 0);
+    });
+    const text = `${header}${presentSections.map(({ text }) => text).join('\n')}`;
+    const rawContent = content.text;
+    const trimmedContent = rawContent.trim();
+    const leadingWhitespace = rawContent.length - rawContent.trimStart().length;
+    const messageEntry = trimmedContent
+        ? {
+            content: trimmedContent,
+            end: blockOffset + header.length + leadingWhitespace + trimmedContent.length,
+            jsonPointer: jsonPointer('payload', index, 'content'),
+            message,
+            messageIndex: index,
+            role: normalizedRole,
+            start: blockOffset + header.length + leadingWhitespace,
+        }
+        : null;
+    return { text, locations, messageEntry };
+}
+
+export function flattenPromptWithLocations(payload) {
     if (typeof payload === 'string') {
-        return payload;
+        return {
+            text: payload,
+            locations: payload
+                ? [{
+                    jsonPointer: jsonPointer('payload'),
+                    messageIndex: null,
+                    role: null,
+                    valueRange: { start: 0, end: payload.length },
+                    finalRange: { start: 0, end: payload.length },
+                }]
+                : [],
+            messageEntries: [],
+        };
     }
 
     if (!Array.isArray(payload)) {
-        return JSON.stringify(payload ?? null, null, 2);
+        const text = JSON.stringify(payload ?? null, null, 2);
+        return {
+            text,
+            locations: text
+                ? [{
+                    jsonPointer: jsonPointer('payload'),
+                    messageIndex: null,
+                    role: null,
+                    valueRange: null,
+                    finalRange: { start: 0, end: text.length },
+                }]
+                : [],
+            messageEntries: [],
+        };
     }
 
-    return payload.map(flattenMessage).join('\n\n');
+    const blocks = [];
+    const locations = [];
+    const messageEntries = [];
+    let blockOffset = 0;
+    payload.forEach((message, index) => {
+        const block = flattenMessageWithLocations(message, index, blockOffset);
+        blocks.push(block.text);
+        locations.push(...block.locations);
+        if (block.messageEntry) messageEntries.push(block.messageEntry);
+        blockOffset += block.text.length + (index < payload.length - 1 ? 2 : 0);
+    });
+    return {
+        text: blocks.join('\n\n'),
+        locations,
+        messageEntries,
+    };
 }
 
-function payloadMessageEntries(payload) {
-    if (!Array.isArray(payload)) return [];
-
-    const entries = [];
-    let blockOffset = 0;
-    payload.forEach((message, messageIndex) => {
-        const block = flattenMessage(message, messageIndex);
-        const rawContent = contentToText(message?.content);
-        const content = rawContent.trim();
-        if (content) {
-            const role = String(message?.role ?? 'unknown').toLowerCase();
-            const header = `# ${messageIndex + 1} ${role.toUpperCase()}${
-                message?.name ? ` (${message.name})` : ''
-            }\n`;
-            const leadingWhitespace = rawContent.length - rawContent.trimStart().length;
-            const start = blockOffset + header.length + leadingWhitespace;
-            entries.push({
-                content,
-                end: start + content.length,
-                message,
-                messageIndex,
-                role,
-                start,
-            });
-        }
-        blockOffset += block.length + (messageIndex < payload.length - 1 ? 2 : 0);
-    });
-    return entries;
+export function flattenPrompt(payload) {
+    return flattenPromptWithLocations(payload).text;
 }
 
 export function findExactRanges(finalText, content, limit = 50) {
@@ -364,6 +586,40 @@ function getCharacterFields(contextState) {
     };
 }
 
+function provenanceLocationsForRanges(ranges, payloadLocations) {
+    const locations = [];
+    for (const range of ranges ?? []) {
+        if (!Number.isFinite(range?.start) || !Number.isFinite(range?.end)) continue;
+        for (const payloadLocation of payloadLocations ?? []) {
+            const payloadRange = payloadLocation?.finalRange;
+            if (!payloadRange) continue;
+            const start = Math.max(range.start, payloadRange.start);
+            const end = Math.min(range.end, payloadRange.end);
+            if (end <= start) continue;
+
+            let valueRange = null;
+            if (
+                payloadLocation.valueRange
+                && payloadRange.end - payloadRange.start
+                    === payloadLocation.valueRange.end - payloadLocation.valueRange.start
+            ) {
+                valueRange = {
+                    start: payloadLocation.valueRange.start + start - payloadRange.start,
+                    end: payloadLocation.valueRange.start + end - payloadRange.start,
+                };
+            }
+            locations.push({
+                jsonPointer: payloadLocation.jsonPointer,
+                messageIndex: payloadLocation.messageIndex,
+                role: payloadLocation.role,
+                valueRange,
+                finalRange: { start, end },
+            });
+        }
+    }
+    return locations;
+}
+
 function addSource(sources, {
     type,
     label,
@@ -376,6 +632,8 @@ function addSource(sources, {
     configuredEnabled = undefined,
     ranges: providedRanges = null,
     provenance: providedProvenance = null,
+    provenanceLocations = [],
+    payloadLocations = [],
 }) {
     const text = contentToText(content).trim();
     if (!text) {
@@ -412,6 +670,14 @@ function addSource(sources, {
             : templateMatch.ranges.length
                 ? { method: templateMatch.method, confidence: templateMatch.confidence }
                 : { method: 'unmatched', confidence: 0 };
+    const provenance = providedProvenance ?? (attribution
+        ? { method: attribution, confidence: attribution === 'exact' ? 1 : null }
+        : inferredProvenance);
+    const locations = [
+        ...(providedProvenance?.locations ?? []),
+        ...provenanceLocations,
+        ...provenanceLocationsForRanges(ranges, payloadLocations),
+    ];
     sources.push({
         id: `${type}:${sources.length}`,
         type,
@@ -424,9 +690,7 @@ function addSource(sources, {
         tokenCount: null,
         metadata,
         ranges,
-        provenance: providedProvenance ?? (attribution
-            ? { method: attribution, confidence: attribution === 'exact' ? 1 : null }
-            : inferredProvenance),
+        provenance: attachProvenanceLocations(provenance, locations),
         ...(configuredEnabled !== undefined ? { configuredEnabled } : {}),
     });
 }
@@ -468,91 +732,197 @@ function offsetRanges(ranges, offset) {
     }));
 }
 
-function findConfiguredPromptMatch(prompt, messageEntries) {
-    const configuredEnabled = prompt?.enabled ?? null;
-    if (configuredEnabled === false) {
+function createConfiguredPromptMatcher(messageEntries) {
+    const candidateGroups = new Map();
+    const matchCaches = {
+        exact: new Map(),
+        normalized: new Map(),
+        template: new Map(),
+    };
+    const claimedRanges = [];
+
+    const groupKeyForPrompt = (prompt) => normalizedConfiguredRole(prompt?.role)
+        ?? '__system-or-developer__';
+    const candidatesForPrompt = (prompt) => {
+        const groupKey = groupKeyForPrompt(prompt);
+        if (!candidateGroups.has(groupKey)) {
+            candidateGroups.set(
+                groupKey,
+                configuredPromptCandidates(messageEntries, prompt),
+            );
+        }
+        return { groupKey, candidates: candidateGroups.get(groupKey) };
+    };
+    const claimedRangeIndex = (range) => {
+        let low = 0;
+        let high = claimedRanges.length;
+        while (low < high) {
+            const middle = Math.floor((low + high) / 2);
+            if (claimedRanges[middle].start < range.start) low = middle + 1;
+            else high = middle;
+        }
+        return low;
+    };
+    const overlapsClaimedRange = ({ range }) => {
+        const index = claimedRangeIndex(range);
+        const previous = claimedRanges[index - 1];
+        const next = claimedRanges[index];
+        return Boolean(
+            (previous && range.start < previous.end && range.end > previous.start)
+            || (next && range.start < next.end && range.end > next.start)
+        );
+    };
+    const claimRange = (range) => {
+        claimedRanges.splice(claimedRangeIndex(range), 0, range);
+    };
+    const cacheFor = (kind, groupKey, content, candidates) => {
+        const cacheKey = `${groupKey}\u0000${content}`;
+        const cache = matchCaches[kind];
+        if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+        const occurrences = [];
+        for (const entry of candidates) {
+            if (kind === 'template') {
+                const match = findTemplateRanges(entry.content, content);
+                for (const range of offsetRanges(match.ranges, entry.start)) {
+                    occurrences.push({
+                        range,
+                        messageIndex: entry.messageIndex,
+                        confidence: Number.isFinite(match.confidence)
+                            ? match.confidence
+                            : 0.55,
+                    });
+                }
+                continue;
+            }
+            const localRanges = kind === 'exact'
+                ? findExactRanges(entry.content, content)
+                : findNormalizedRanges(entry.content, content);
+            for (const range of offsetRanges(localRanges, entry.start)) {
+                occurrences.push({
+                    range,
+                    messageIndex: entry.messageIndex,
+                    confidence: kind === 'exact' ? 1 : 0.95,
+                });
+            }
+        }
+        const result = { occurrences, cursor: 0 };
+        cache.set(cacheKey, result);
+        return result;
+    };
+    const claimFrom = (cached) => {
+        while (
+            cached.cursor < cached.occurrences.length
+            && overlapsClaimedRange(cached.occurrences[cached.cursor])
+        ) {
+            cached.cursor += 1;
+        }
+        if (cached.cursor >= cached.occurrences.length) return null;
+        const occurrence = cached.occurrences[cached.cursor];
+        cached.cursor += 1;
+        claimRange(occurrence.range);
+        return occurrence;
+    };
+
+    return (prompt) => {
+        const configuredEnabled = prompt?.enabled ?? null;
+        if (configuredEnabled === false) {
+            return {
+                attribution: 'unmatched',
+                included: false,
+                provenance: {
+                    method: 'configured-disabled',
+                    confidence: 1,
+                    messageIndexes: [],
+                },
+                ranges: [],
+            };
+        }
+
+        const content = contentToText(prompt?.content).trim();
+        if (!content) {
+            return {
+                attribution: 'unmatched',
+                included: false,
+                provenance: {
+                    method: 'configured-payload-unmatched',
+                    confidence: 0,
+                    messageIndexes: [],
+                },
+                ranges: [],
+            };
+        }
+
+        const { groupKey, candidates } = candidatesForPrompt(prompt);
+        const exact = cacheFor('exact', groupKey, content, candidates);
+        const exactOccurrence = claimFrom(exact);
+        if (exactOccurrence) {
+            return {
+                attribution: 'exact',
+                included: true,
+                provenance: {
+                    method: 'configured-payload-exact',
+                    confidence: 1,
+                    messageIndexes: [exactOccurrence.messageIndex],
+                    candidateCount: exact.occurrences.length,
+                    ambiguous: exact.occurrences.length > 1,
+                },
+                ranges: [exactOccurrence.range],
+            };
+        }
+
+        const normalized = cacheFor('normalized', groupKey, content, candidates);
+        const normalizedOccurrence = claimFrom(normalized);
+        if (normalizedOccurrence) {
+            return {
+                attribution: 'normalized',
+                included: true,
+                provenance: {
+                    method: 'configured-payload-normalized',
+                    confidence: 0.95,
+                    messageIndexes: [normalizedOccurrence.messageIndex],
+                    candidateCount: normalized.occurrences.length,
+                    ambiguous: normalized.occurrences.length > 1,
+                },
+                ranges: [normalizedOccurrence.range],
+            };
+        }
+
+        const template = cacheFor('template', groupKey, content, candidates);
+        const templateOccurrence = claimFrom(template);
+        if (templateOccurrence) {
+            return {
+                attribution: 'template',
+                included: true,
+                provenance: {
+                    method: 'configured-payload-template',
+                    matcher: 'macro-template',
+                    confidence: templateOccurrence.confidence,
+                    messageIndexes: [templateOccurrence.messageIndex],
+                    candidateCount: template.occurrences.length,
+                    ambiguous: template.occurrences.length > 1,
+                },
+                ranges: [templateOccurrence.range],
+            };
+        }
+
         return {
             attribution: 'unmatched',
             included: false,
             provenance: {
-                method: 'configured-disabled',
-                confidence: 1,
+                method: 'configured-payload-unmatched',
+                confidence: 0,
                 messageIndexes: [],
             },
             ranges: [],
         };
-    }
+    };
+}
 
-    const content = contentToText(prompt?.content).trim();
-    const candidates = configuredPromptCandidates(messageEntries, prompt);
-    const exactRanges = [];
-    const exactMessageIndexes = new Set();
-    candidates.forEach((entry) => {
-        const localRanges = findExactRanges(entry.content, content);
-        if (!localRanges.length) return;
-        exactRanges.push(...offsetRanges(localRanges, entry.start));
-        exactMessageIndexes.add(entry.messageIndex);
-    });
-    if (exactRanges.length) {
-        return {
-            attribution: 'exact',
-            included: true,
-            provenance: {
-                method: 'configured-payload-exact',
-                confidence: 1,
-                messageIndexes: [...exactMessageIndexes],
-            },
-            ranges: exactRanges,
-        };
+function findConfiguredPromptMatch(prompt, matchConfiguredPrompt) {
+    if (typeof matchConfiguredPrompt === 'function') {
+        return matchConfiguredPrompt(prompt);
     }
-
-    const normalizedRanges = [];
-    const normalizedMessageIndexes = new Set();
-    candidates.forEach((entry) => {
-        const localRanges = findNormalizedRanges(entry.content, content);
-        if (!localRanges.length) return;
-        normalizedRanges.push(...offsetRanges(localRanges, entry.start));
-        normalizedMessageIndexes.add(entry.messageIndex);
-    });
-    if (normalizedRanges.length) {
-        return {
-            attribution: 'normalized',
-            included: true,
-            provenance: {
-                method: 'configured-payload-normalized',
-                confidence: 0.95,
-                messageIndexes: [...normalizedMessageIndexes],
-            },
-            ranges: normalizedRanges,
-        };
-    }
-
-    const templateRanges = [];
-    const templateMessageIndexes = new Set();
-    const templateConfidences = [];
-    candidates.forEach((entry) => {
-        const match = findTemplateRanges(entry.content, content);
-        if (!match.ranges.length) return;
-        templateRanges.push(...offsetRanges(match.ranges, entry.start));
-        templateMessageIndexes.add(entry.messageIndex);
-        if (Number.isFinite(match.confidence)) templateConfidences.push(match.confidence);
-    });
-    if (templateRanges.length) {
-        return {
-            attribution: 'template',
-            included: true,
-            provenance: {
-                method: 'configured-payload-template',
-                matcher: 'macro-template',
-                confidence: templateConfidences.length
-                    ? Math.min(...templateConfidences)
-                    : 0.55,
-                messageIndexes: [...templateMessageIndexes],
-            },
-            ranges: templateRanges,
-        };
-    }
-
     return {
         attribution: 'unmatched',
         included: false,
@@ -594,20 +964,40 @@ function meaningfulRequestFragment(value) {
     return String(value ?? '').replace(/[\s\p{P}\p{S}]/gu, '').length > 0;
 }
 
-function addUnattributedRequestSystemSources(sources, messageEntries, finalText) {
+function addUnattributedRequestSystemSources(
+    sources,
+    messageEntries,
+    finalText,
+    payloadLocations,
+) {
     const requestEntries = messageEntries.filter(
         (entry) => ['system', 'developer'].includes(entry.role),
     );
+    const includedRanges = mergeRanges(sources
+        .filter((source) => source.included !== false)
+        .flatMap((source) => source.ranges ?? []));
+    let coveredIndex = 0;
     for (const entry of requestEntries) {
         const roleLabel = entry.role === 'developer' ? '개발자' : '시스템';
-        const covered = mergeRanges(sources
-            .filter((source) => source.included !== false)
-            .flatMap((source) => source.ranges ?? [])
-            .map((range) => ({
+        while (
+            coveredIndex < includedRanges.length
+            && includedRanges[coveredIndex].end <= entry.start
+        ) {
+            coveredIndex += 1;
+        }
+        const covered = [];
+        for (
+            let index = coveredIndex;
+            index < includedRanges.length && includedRanges[index].start < entry.end;
+            index += 1
+        ) {
+            const range = includedRanges[index];
+            const intersection = {
                 start: Math.max(entry.start, range.start),
                 end: Math.min(entry.end, range.end),
-            }))
-            .filter((range) => range.end > range.start));
+            };
+            if (intersection.end > intersection.start) covered.push(intersection);
+        }
 
         const gaps = [];
         let cursor = entry.start;
@@ -634,6 +1024,7 @@ function addUnattributedRequestSystemSources(sources, messageEntries, finalText)
                 .map((range) => finalText.slice(range.start, range.end))
                 .join('\n'),
             finalText,
+            payloadLocations,
             metadata: {
                 sourceKind: 'requestMessage',
                 messageIndex: entry.messageIndex,
@@ -653,22 +1044,34 @@ function addUnattributedRequestSystemSources(sources, messageEntries, finalText)
     }
 }
 
-function addStructuredSources(sources, payload, request, finalText, contextState) {
+function addStructuredSources(
+    sources,
+    payload,
+    request,
+    finalText,
+    contextState,
+    payloadLocations,
+) {
     const requestBody = request?.body ?? request ?? {};
     const provider = detectMultimodalProvider(contextState, request);
     const model = request?.settings?.model ?? requestBody?.model ?? contextState?.model ?? '';
     const toolSchemas = [
         ...(Array.isArray(requestBody?.tools)
-            ? requestBody.tools.map((schema) => ({ schema, legacy: false }))
+            ? requestBody.tools.map((schema, index) => ({
+                schema,
+                legacy: false,
+                pointer: jsonPointer('request', 'body', 'tools', index),
+            }))
             : []),
         ...(Array.isArray(requestBody?.functions)
-            ? requestBody.functions.map((definition) => ({
+            ? requestBody.functions.map((definition, index) => ({
                 schema: { type: 'function', function: definition },
                 legacy: true,
+                pointer: jsonPointer('request', 'body', 'functions', index),
             }))
             : []),
     ];
-    toolSchemas.forEach(({ schema, legacy }, index) => {
+    toolSchemas.forEach(({ schema, legacy, pointer }, index) => {
         const name = schema?.function?.name ?? schema?.name ?? String(index + 1);
         addSource(sources, {
             type: 'tool_schema',
@@ -676,9 +1079,17 @@ function addStructuredSources(sources, payload, request, finalText, contextState
             labelKey: 'source.toolSchema',
             content: JSON.stringify(schema, null, 2),
             finalText,
+            payloadLocations,
             metadata: { name, index, legacy },
             attribution: 'derived',
             included: true,
+            provenanceLocations: [{
+                jsonPointer: pointer,
+                messageIndex: null,
+                role: null,
+                valueRange: null,
+                finalRange: null,
+            }],
         });
     });
 
@@ -697,9 +1108,19 @@ function addStructuredSources(sources, payload, request, finalText, contextState
                 labelKey: 'source.toolCall',
                 content: JSON.stringify(call, null, 2),
                 finalText,
+                payloadLocations,
                 metadata: { name, messageIndex, callIndex },
                 attribution: 'derived',
                 included: true,
+                provenanceLocations: [{
+                    jsonPointer: Array.isArray(message?.tool_calls)
+                        ? jsonPointer('payload', messageIndex, 'tool_calls', callIndex)
+                        : jsonPointer('payload', messageIndex, 'function_call'),
+                    messageIndex,
+                    role: String(message?.role ?? 'unknown').toLowerCase(),
+                    valueRange: null,
+                    finalRange: null,
+                }],
             });
         });
 
@@ -711,6 +1132,7 @@ function addStructuredSources(sources, payload, request, finalText, contextState
                 labelKey: 'source.toolResult',
                 content: message.content,
                 finalText,
+                payloadLocations,
                 metadata: {
                     name,
                     toolCallId: message?.tool_call_id ?? null,
@@ -729,6 +1151,7 @@ function addStructuredSources(sources, payload, request, finalText, contextState
                 labelKey: `source.multimodal.${type}`,
                 content: contentPartToText(part, partIndex),
                 finalText,
+                payloadLocations,
                 metadata: {
                     type,
                     messageIndex,
@@ -745,13 +1168,38 @@ function addStructuredSources(sources, payload, request, finalText, contextState
     });
 }
 
+function assistantPrefillEvidence(request) {
+    const body = request?.body ?? request;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+    const explicitFields = [
+        'assistant_prefill',
+        'continue_prefill',
+        'prefill',
+    ];
+    for (const field of explicitFields) {
+        const value = body[field];
+        if (value === true || (typeof value === 'string' && value.trim())) {
+            return jsonPointer('request', 'body', field);
+        }
+    }
+    return null;
+}
+
 export function buildSources(contextState, payload, activatedLore = [], request = null) {
-    const finalText = flattenPrompt(payload);
+    const flattened = flattenPromptWithLocations(payload);
+    const finalText = flattened.text;
+    const payloadLocations = flattened.locations;
     const sources = [];
     const character = getCharacterFields(contextState);
-    const messageEntries = payloadMessageEntries(payload);
+    const messageEntries = flattened.messageEntries;
+    const matchConfiguredPrompt = createConfiguredPromptMatcher(messageEntries);
+    const add = (options) => addSource(sources, {
+        ...options,
+        finalText,
+        payloadLocations,
+    });
 
-    addSource(sources, {
+    add({
         type: 'character',
         label: 'Character Description',
         labelKey: 'source.characterDescription',
@@ -759,7 +1207,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'description' },
     });
-    addSource(sources, {
+    add({
         type: 'character',
         label: 'Character Personality',
         labelKey: 'source.characterPersonality',
@@ -767,7 +1215,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'personality' },
     });
-    addSource(sources, {
+    add({
         type: 'character',
         label: 'Scenario',
         labelKey: 'source.scenario',
@@ -775,7 +1223,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'scenario' },
     });
-    addSource(sources, {
+    add({
         type: 'character',
         label: 'Character Example Dialogue',
         labelKey: 'source.characterExamples',
@@ -783,7 +1231,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'mes_example' },
     });
-    addSource(sources, {
+    add({
         type: 'character',
         label: 'Character First Message',
         labelKey: 'source.characterFirstMessage',
@@ -791,7 +1239,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'first_mes' },
     });
-    addSource(sources, {
+    add({
         type: 'system',
         label: 'Character System Prompt',
         labelKey: 'source.characterSystemPrompt',
@@ -799,7 +1247,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'system_prompt' },
     });
-    addSource(sources, {
+    add({
         type: 'jailbreak',
         label: 'Character Post-History Instructions',
         labelKey: 'source.characterPostHistory',
@@ -807,7 +1255,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'post_history_instructions' },
     });
-    addSource(sources, {
+    add({
         type: 'extension',
         label: 'Character Depth Prompt',
         labelKey: 'source.characterDepthPrompt',
@@ -815,14 +1263,14 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         finalText,
         metadata: { field: 'extensions.depth_prompt.prompt' },
     });
-    addSource(sources, {
+    add({
         type: 'persona',
         label: 'Persona',
         labelKey: 'source.persona',
         content: contextState.personaDescription,
         finalText,
     });
-    addSource(sources, {
+    add({
         type: 'authors_note',
         label: "Author's Note",
         labelKey: 'source.authorsNote',
@@ -831,7 +1279,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
     });
 
     for (const entry of activatedLore) {
-        addSource(sources, {
+        add({
             type: 'lorebook',
             label: entry?.comment || entry?.key?.join(', ') || `Lorebook entry ${entry?.uid ?? '?'}`,
             labelKey: entry?.comment || entry?.key?.length ? null : 'source.lorebookEntry',
@@ -846,7 +1294,7 @@ export function buildSources(contextState, payload, activatedLore = [], request 
     }
 
     for (const [key, prompt] of Object.entries(contextState.extensionPrompts ?? {})) {
-        addSource(sources, {
+        add({
             type: 'extension',
             label: prompt?.name || key,
             content: prompt?.value ?? prompt?.content,
@@ -863,8 +1311,8 @@ export function buildSources(contextState, payload, activatedLore = [], request 
     for (const [promptIndex, prompt] of (contextState.configuredPrompts ?? []).entries()) {
         const type = classifyConfiguredPrompt(prompt);
         const configuredEnabled = prompt?.enabled ?? null;
-        const match = findConfiguredPromptMatch(prompt, messageEntries);
-        addSource(sources, {
+        const match = findConfiguredPromptMatch(prompt, matchConfiguredPrompt);
+        add({
             type,
             label: prompt?.name || prompt?.identifier || 'Configured prompt',
             labelKey: prompt?.name || prompt?.identifier ? null : 'source.configuredPrompt',
@@ -898,12 +1346,24 @@ export function buildSources(contextState, payload, activatedLore = [], request 
         });
     }
 
-    addStructuredSources(sources, payload, request, finalText, contextState);
-    addUnattributedRequestSystemSources(sources, messageEntries, finalText);
+    addStructuredSources(
+        sources,
+        payload,
+        request,
+        finalText,
+        contextState,
+        payloadLocations,
+    );
+    addUnattributedRequestSystemSources(
+        sources,
+        messageEntries,
+        finalText,
+        payloadLocations,
+    );
 
     if (Array.isArray(payload)) {
         const historyMessages = payload.filter((message) => ['user', 'assistant', 'tool'].includes(message?.role));
-        addSource(sources, {
+        add({
             type: 'chat_history',
             label: 'Chat History',
             labelKey: 'source.chatHistory',
@@ -916,29 +1376,48 @@ export function buildSources(contextState, payload, activatedLore = [], request 
 
         const lastMessage = payload.at(-1);
         if (lastMessage?.role === 'assistant') {
-            addSource(sources, {
+            const explicitPrefillPointer = assistantPrefillEvidence(request);
+            const prefillStatus = explicitPrefillPointer ? 'confirmed' : 'inferred';
+            const messageIndex = payload.length - 1;
+            add({
                 type: 'assistant_prefill',
                 label: 'Assistant Prefill / Last Assistant Message',
                 labelKey: 'source.assistantPrefill',
                 content: lastMessage.content,
                 finalText,
-                metadata: { inferred: true },
+                metadata: {
+                    inferred: prefillStatus === 'inferred',
+                    prefillStatus,
+                },
                 attribution: 'derived',
                 included: true,
+                provenance: {
+                    method: explicitPrefillPointer
+                        ? 'assistant-prefill-explicit'
+                        : 'assistant-prefill-inferred',
+                    confidence: explicitPrefillPointer ? 1 : 0.5,
+                    messageIndexes: [messageIndex],
+                },
+                provenanceLocations: explicitPrefillPointer
+                    ? [{
+                        jsonPointer: explicitPrefillPointer,
+                        messageIndex: null,
+                        role: null,
+                        valueRange: null,
+                        finalRange: null,
+                    }]
+                    : [],
             });
         }
     }
 
-    sources.push({
-        id: `final:${sources.length}`,
+    add({
         type: 'final',
         label: 'Final Prompt',
         labelKey: 'source.finalPrompt',
         content: finalText,
-        color: SOURCE_COLORS.final,
         attribution: 'exact',
         included: true,
-        tokenCount: null,
         metadata: {},
         ranges: finalText ? [{ start: 0, end: finalText.length }] : [],
         provenance: { method: 'exact', confidence: 1 },
@@ -1013,15 +1492,14 @@ export async function finalizeSnapshot({
         .filter(Boolean);
     const estimatedMultimodal = multimodalEstimates.filter((estimate) => Number.isFinite(estimate.tokens));
     const api = contextState.mainApi || 'unknown';
-    const provider = promptType === 'chat-completion'
-        ? firstKnownString(
-            normalizedRequest.settings?.chat_completion_source,
-            normalizedRequest.body?.chat_completion_source,
-            contextState.chatCompletionSource,
-            api,
-            'unknown',
-        )
-        : textCompletionProvider(api, contextState.textCompletionSource);
+    const providerTrace = selectedProviderTrace({
+        api,
+        promptType,
+        generationType,
+        request: normalizedRequest,
+        contextState,
+    });
+    const provider = providerTrace.selectedSource.value;
 
     return {
         schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -1032,6 +1510,7 @@ export async function finalizeSnapshot({
         messageCount: contextState.messageCount,
         api,
         provider,
+        providerTrace,
         model: normalizedRequest.settings?.model ?? contextState.model ?? null,
         preset: contextState.preset || null,
         profileContext: contextState.profileContext ?? null,

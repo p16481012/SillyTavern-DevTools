@@ -13,6 +13,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         ?? '노출 수위와 묘사 강도를 조절합니다.';
     const disabledInstruction = additions.disabledInstruction
         ?? '비활성 상태라 이번 요청에는 포함되지 않습니다.';
+    const assistantPrefill = additions.assistantPrefill ?? '답변 초안:';
     const finalText = [
         '# 1 SYSTEM',
         koreanInstruction,
@@ -25,14 +26,17 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         '# 2 USER',
         '[이미지 입력 1]',
         '이 이미지를 설명해줘',
+        '',
+        '# 3 ASSISTANT',
+        assistantPrefill,
     ].join('\n');
     return {
-        schemaVersion: 5,
-        extensionVersion: '0.9.1',
+        schemaVersion: 6,
+        extensionVersion: '0.9.2',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
-        messageCount: 2,
+        messageCount: 3,
         api: additions.api ?? 'openai',
         ...(additions.omitProvider ? {} : { provider }),
         model,
@@ -45,6 +49,26 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         }),
         promptType: 'chat-completion',
         generationType: 'normal',
+        providerTrace: {
+            transport: {
+                api: additions.api ?? 'openai',
+                promptType: 'chat-completion',
+                generationType: 'normal',
+            },
+            selectedSource: {
+                value: provider,
+                status: additions.providerTraceStatus
+                    ?? (additions.omitProvider ? 'context-fallback' : 'captured'),
+                evidencePointer: additions.omitProvider
+                    ? null
+                    : '/request/body/chat_completion_source',
+            },
+            upstreamProvider: {
+                value: null,
+                status: 'unknown',
+                evidencePointer: null,
+            },
+        },
         payload: [
             {
                 role: 'system',
@@ -67,6 +91,10 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     },
                     { type: 'text', text: '이 이미지를 설명해줘' },
                 ],
+            },
+            {
+                role: 'assistant',
+                content: assistantPrefill,
             },
         ],
         finalText,
@@ -114,15 +142,37 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     name: '출력언어 | 한국어',
                     enabled: true,
                     configuredEnabled: true,
-                    promptOrder: 0,
+                    promptOrder: additions.languagePromptOrder ?? 0,
                     promptOrderSource: 'prompt-manager',
-                    role: 'system',
+                    role: additions.languageRole ?? 'system',
+                    depth: additions.languageDepth ?? 0,
+                    position: additions.languagePosition ?? 'relative',
                 },
                 ranges: [{
                     start: finalText.indexOf(koreanInstruction),
                     end: finalText.indexOf(koreanInstruction) + koreanInstruction.length,
                 }],
-                provenance: { method: 'configured-payload-exact', confidence: 1 },
+                provenance: {
+                    method: 'configured-payload-exact',
+                    confidence: 1,
+                    availability: 'available',
+                    locations: [{
+                        jsonPointer: '/payload/0/content',
+                        messageIndex: 0,
+                        role: 'system',
+                        valueRange: {
+                            start: 0,
+                            end: koreanInstruction.length,
+                        },
+                        finalRange: {
+                            start: finalText.indexOf(koreanInstruction),
+                            end: finalText.indexOf(koreanInstruction)
+                                + koreanInstruction.length,
+                        },
+                    }],
+                    locationCount: 1,
+                    locationsTruncated: false,
+                },
             },
             {
                 id: 'utility:language-japanese',
@@ -234,7 +284,24 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     end: finalText.indexOf('사용자 민수에게 친절하게 답하세요.')
                         + '사용자 민수에게 친절하게 답하세요.'.length,
                 }],
-                provenance: { method: 'macro-template', confidence: 0.84 },
+                provenance: {
+                    method: 'macro-template',
+                    confidence: 0.84,
+                    availability: 'available',
+                    locations: [{
+                        jsonPointer: '/payload/0/content',
+                        messageIndex: 0,
+                        role: 'system',
+                        valueRange: null,
+                        finalRange: {
+                            start: finalText.indexOf('사용자 민수에게 친절하게 답하세요.'),
+                            end: finalText.indexOf('사용자 민수에게 친절하게 답하세요.')
+                                + '사용자 민수에게 친절하게 답하세요.'.length,
+                        },
+                    }],
+                    locationCount: 52,
+                    locationsTruncated: true,
+                },
             },
             {
                 id: 'tool_schema:2',
@@ -248,7 +315,20 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 tokenCount: 12,
                 metadata: { name: 'weather' },
                 ranges: [],
-                provenance: { method: 'derived', confidence: null },
+                provenance: {
+                    method: 'derived',
+                    confidence: null,
+                    availability: 'available',
+                    locations: [{
+                        jsonPointer: '/request/body/tools/0',
+                        messageIndex: null,
+                        role: null,
+                        valueRange: null,
+                        finalRange: null,
+                    }],
+                    locationCount: 1,
+                    locationsTruncated: false,
+                },
             },
             {
                 id: 'multimodal:3',
@@ -297,7 +377,14 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     role: 'system',
                 },
                 ranges: [],
-                provenance: { method: 'unmatched', confidence: null },
+                provenance: {
+                    method: 'unmatched',
+                    confidence: null,
+                    availability: 'legacy-unavailable',
+                    locations: [],
+                    locationCount: 0,
+                    locationsTruncated: false,
+                },
             },
             {
                 id: 'utility:unmatched-cot',
@@ -346,6 +433,45 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                 provenance: { method: 'configured-disabled', confidence: null },
             },
             {
+                id: 'assistant_prefill:4',
+                type: 'assistant_prefill',
+                label: 'Assistant Prefill / Last Assistant Message',
+                labelKey: 'source.assistantPrefill',
+                content: assistantPrefill,
+                color: '#0284c7',
+                attribution: 'exact',
+                included: true,
+                tokenCount: 4,
+                metadata: {
+                    prefillStatus: additions.prefillStatus ?? 'inferred',
+                    inferred: (additions.prefillStatus ?? 'inferred') !== 'confirmed',
+                    messageIndex: 2,
+                    role: 'assistant',
+                },
+                ranges: [{
+                    start: finalText.lastIndexOf(assistantPrefill),
+                    end: finalText.lastIndexOf(assistantPrefill) + assistantPrefill.length,
+                }],
+                provenance: {
+                    method: 'request-payload',
+                    confidence: additions.prefillStatus === 'confirmed' ? 1 : 0.65,
+                    availability: 'available',
+                    locations: [{
+                        jsonPointer: '/payload/2/content',
+                        messageIndex: 2,
+                        role: 'assistant',
+                        valueRange: { start: 0, end: assistantPrefill.length },
+                        finalRange: {
+                            start: finalText.lastIndexOf(assistantPrefill),
+                            end: finalText.lastIndexOf(assistantPrefill)
+                                + assistantPrefill.length,
+                        },
+                    }],
+                    locationCount: 1,
+                    locationsTruncated: false,
+                },
+            },
+            {
                 id: 'final:4',
                 type: 'final',
                 label: 'Final Prompt',
@@ -380,7 +506,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     };
 }
 
-const sandboxNow = Date.now();
+const sandboxNow = Date.UTC(2026, 6, 31, 12, 0, 0);
 const historicalProviders = [
     ['openai', 'gpt-4o'],
     ['claude', 'claude-sonnet-4'],
@@ -410,26 +536,69 @@ timeline.push(
     createSnapshot('sandbox-11', sandboxNow - 60000, 168, {
         provider: 'makersuite',
         model: 'gemini-2.5-pro',
-        lorebookEntries: [{ uid: 1, world: 'Sandbox', content: '활성 로어' }],
+        prefillStatus: 'inferred',
+        lorebookEntries: [
+            {
+                uid: 1,
+                world: 'Sandbox',
+                comment: '계절 배경',
+                key: ['여름'],
+                position: 'before',
+                content: '배경은 한여름입니다.',
+            },
+            {
+                uid: 2,
+                world: 'Sandbox',
+                comment: '말투 지침',
+                key: ['말투'],
+                position: 'after',
+                content: '차분한 말투를 사용합니다.',
+            },
+        ],
     }),
     createSnapshot('sandbox-12', sandboxNow, 214, {
         provider: 'claude',
         model: 'claude-sonnet-4',
+        prefillStatus: 'confirmed',
+        providerTraceStatus: 'captured',
         correlationMethod: 'explicit-id',
         correlationId: 'sandbox-request',
         koreanInstruction: '반드시 자연스러운 한국어로 답변하세요.',
+        languageRole: 'developer',
+        languageDepth: 4,
+        languagePosition: 'in-chat',
+        languagePromptOrder: 7,
         addedInstruction: '답변은 300자 이내로 작성하세요.',
         omittedInstruction: '이 미포함 프롬프트 변경은 소스 비교에 나오면 안 됩니다.',
         disabledInstruction: '이 비활성 프롬프트 변경도 소스 비교에 나오면 안 됩니다.',
+        lorebookEntries: [
+            {
+                uid: 2,
+                world: 'Sandbox',
+                comment: '말투 지침',
+                key: ['말투'],
+                position: 'after',
+                content: '차분한 말투를 사용합니다.',
+            },
+            {
+                uid: 1,
+                world: 'Sandbox',
+                comment: '계절 배경',
+                key: ['겨울', '눈'],
+                position: 'after',
+                content: '배경은 눈 내리는 한겨울입니다.',
+            },
+        ],
     }),
 );
 let otherTimeline = [
-    createSnapshot('other-1', Date.now() - 30000, 96, { chatId: 'other-private-chat' }),
+    createSnapshot('other-1', sandboxNow - 30000, 96, { chatId: 'other-private-chat' }),
 ];
 let temporaryStorage = false;
 let summaryNeedsRebuild = false;
 let darkTheme = false;
 let timelinePageReadCount = 0;
+let corruptRecordCount = 2;
 
 const capture = new EventTarget();
 capture.retrySnapshot = async (snapshot) => {
@@ -488,6 +657,13 @@ const store = {
             totalCount: timeline.length,
             loadedCount: snapshots.length,
             limit,
+            corruptCount: corruptRecordCount,
+            corruptEntries: corruptRecordCount > 0
+                ? [
+                    { id: 'sandbox-corrupt-a', errorCode: 'invalid-schema' },
+                    { id: 'sandbox-corrupt-b', errorCode: 'invalid-provenance' },
+                ].slice(0, corruptRecordCount)
+                : [],
         };
     },
     async deleteSnapshot(_chatId, snapshotId) {
@@ -503,6 +679,7 @@ const store = {
     },
     async clearTimeline() {
         timeline = [];
+        corruptRecordCount = 0;
     },
     async clearAll() {
         const result = {
@@ -511,6 +688,7 @@ const store = {
         };
         timeline = [];
         otherTimeline = [];
+        corruptRecordCount = 0;
         return result;
     },
     async getAllTimelines() {
@@ -556,8 +734,20 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.9.1',
+    version: '0.9.2',
 });
+document.body.dataset.fixtureSchema = '6';
+document.body.dataset.fixtureFeatures = [
+    'provider-trace',
+    'provenance-available',
+    'provenance-legacy-unavailable',
+    'provenance-truncated',
+    'prefill-confirmed',
+    'prefill-inferred',
+    'metadata-diff',
+    'lore-changed',
+    'corrupt-warning',
+].join(',');
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
 document.getElementById('sandbox-storage-error').addEventListener('click', () => {

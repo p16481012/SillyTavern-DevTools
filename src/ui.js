@@ -483,6 +483,45 @@ function translatedValue(key, fallback) {
     return translated === key ? fallback : translated;
 }
 
+function normalizedCount(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : fallback;
+}
+
+function provenanceAvailabilityLabel(value) {
+    const availability = value || 'unavailable';
+    return translatedValue(
+        `explorer.provenanceAvailability.${availability}`,
+        availability,
+    );
+}
+
+function prefillStatus(source) {
+    if (source?.type !== 'assistant_prefill') return null;
+    const value = source?.metadata?.prefillStatus;
+    if (value === 'confirmed' || value === 'inferred') return value;
+    return 'unknown';
+}
+
+function diffFieldLabel(namespace, field) {
+    return translatedValue(`${namespace}.${field}`, field || t('common.unknown'));
+}
+
+function diffValueLabel(value) {
+    if (value == null || value === '') return t('common.none');
+    if (value === true) return t('common.enabled');
+    if (value === false) return t('common.disabled');
+    if (Array.isArray(value)) return value.map(diffValueLabel).join(', ');
+    if (typeof value === 'object') {
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return t('common.unknown');
+        }
+    }
+    return String(value);
+}
+
 function multimodalEstimateLabels(source) {
     const estimate = source?.metadata?.tokenEstimate;
     if (!estimate) {
@@ -553,6 +592,7 @@ export class DevToolsWindow {
         this.content = null;
         this.timeline = [];
         this.timelineTotalCount = 0;
+        this.timelineCorruptCount = 0;
         this.selectedId = null;
         this.selectedTimelineIds = new Set();
         this.timelineSelectionChatId = null;
@@ -642,6 +682,9 @@ export class DevToolsWindow {
         if (typeof this.store.getTimelinePage === 'function') {
             const page = await this.store.getTimelinePage(chatId, { limit });
             const snapshots = Array.isArray(page?.snapshots) ? page.snapshots : [];
+            const corruptEntryCount = Array.isArray(page?.corruptEntries)
+                ? page.corruptEntries.length
+                : 0;
             return {
                 snapshots,
                 loadedCount: snapshots.length,
@@ -650,6 +693,10 @@ export class DevToolsWindow {
                     Number.isFinite(page?.totalCount)
                         ? Math.trunc(page.totalCount)
                         : snapshots.length,
+                ),
+                corruptCount: Math.max(
+                    corruptEntryCount,
+                    normalizedCount(page?.corruptCount),
                 ),
                 limit,
             };
@@ -660,6 +707,7 @@ export class DevToolsWindow {
             snapshots,
             loadedCount: snapshots.length,
             totalCount: Array.isArray(timeline) ? timeline.length : snapshots.length,
+            corruptCount: 0,
             limit,
         };
     }
@@ -1334,6 +1382,7 @@ export class DevToolsWindow {
             }
             this.timeline = page.snapshots;
             this.timelineTotalCount = page.totalCount;
+            this.timelineCorruptCount = page.corruptCount;
             this.pruneTimelineSelection();
             if (!this.timeline.some((snapshot) => snapshot.id === this.selectedId)) {
                 this.selectedId = this.timeline.at(-1)?.id ?? null;
@@ -1967,6 +2016,134 @@ export class DevToolsWindow {
         return wrapper;
     }
 
+    renderProvenanceDetails(source) {
+        const provenance = source?.provenance ?? {};
+        const locations = Array.isArray(provenance.locations)
+            ? provenance.locations.filter((location) => (
+                location
+                && typeof location === 'object'
+                && typeof location.jsonPointer === 'string'
+            ))
+            : [];
+        const availability = provenance.availability
+            ?? (locations.length > 0 ? 'available' : 'unavailable');
+        const locationCount = Math.max(
+            locations.length,
+            normalizedCount(provenance.locationCount, locations.length),
+        );
+        const details = element('details', {
+            className: 'st-devtools-provenance-details st-devtools-disclosure',
+        });
+        const summary = element('summary');
+        const heading = element('span', {
+            className: 'st-devtools-provenance-heading',
+        });
+        heading.appendChild(explainedTitle(
+            t('explorer.provenanceTitle'),
+            t('explorer.provenanceDescription'),
+        ));
+        summary.append(
+            heading,
+            element('span', {
+                className: `st-devtools-badge provenance-${availability}`,
+                text: locations.length > 0
+                    ? t('explorer.provenanceCount', { count: locationCount })
+                    : provenanceAvailabilityLabel(availability),
+            }),
+        );
+        details.appendChild(summary);
+        attachLazyDetailsContent(details, () => {
+            const content = element('div', {
+                className: 'st-devtools-provenance-content',
+            });
+            if (locations.length === 0) {
+                content.appendChild(proseElement(
+                    'p',
+                    t(availability === 'legacy-unavailable'
+                        ? 'explorer.provenanceLegacyUnavailable'
+                        : 'explorer.provenanceUnavailable'),
+                ));
+                return content;
+            }
+
+            const list = element('ol', {
+                className: 'st-devtools-provenance-list',
+            });
+            for (const [index, location] of locations.entries()) {
+                const item = element('li', {
+                    className: 'st-devtools-provenance-location',
+                });
+                item.append(
+                    element('strong', {
+                        text: t('explorer.provenanceLocation', {
+                            count: index + 1,
+                        }),
+                    }),
+                    element('code', {
+                        text: location.jsonPointer || '/',
+                    }),
+                );
+                const metadata = element('span', {
+                    className: 'st-devtools-provenance-location-meta',
+                });
+                if (Number.isInteger(location.messageIndex)) {
+                    metadata.appendChild(element('span', {
+                        text: t('explorer.provenanceMessage', {
+                            count: location.messageIndex + 1,
+                        }),
+                    }));
+                }
+                if (location.role) {
+                    metadata.appendChild(element('span', {
+                        text: t('explorer.provenanceRole', {
+                            role: location.role,
+                        }),
+                    }));
+                }
+                if (
+                    Number.isInteger(location.valueRange?.start)
+                    && Number.isInteger(location.valueRange?.end)
+                ) {
+                    metadata.appendChild(element('span', {
+                        text: t('explorer.provenanceValueRange', {
+                            start: location.valueRange.start,
+                            end: location.valueRange.end,
+                        }),
+                    }));
+                }
+                if (
+                    Number.isInteger(location.finalRange?.start)
+                    && Number.isInteger(location.finalRange?.end)
+                ) {
+                    metadata.appendChild(element('span', {
+                        text: t('explorer.provenanceFinalRange', {
+                            start: location.finalRange.start,
+                            end: location.finalRange.end,
+                        }),
+                    }));
+                }
+                if (metadata.childElementCount > 0) item.appendChild(metadata);
+                list.appendChild(item);
+            }
+            content.appendChild(list);
+            if (
+                provenance.locationsTruncated
+                || locationCount > locations.length
+            ) {
+                content.appendChild(proseElement(
+                    'small',
+                    t('explorer.provenanceTruncated', {
+                        total: locationCount,
+                        shown: locations.length,
+                    }),
+                    { className: 'st-devtools-provenance-truncated' },
+                ));
+            }
+            return content;
+        });
+        return details;
+    }
+
     renderExplorer(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         const sourceGroups = explorerSourceGroups(snapshot.sources);
@@ -2059,6 +2236,16 @@ export class DevToolsWindow {
                         text: t(`explorer.state.${state}`),
                     }));
                 }
+                const sourcePrefillStatus = prefillStatus(source);
+                if (sourcePrefillStatus) {
+                    badges.appendChild(element('span', {
+                        className: `st-devtools-badge prefill-${sourcePrefillStatus}`,
+                        text: t(`explorer.prefillStatus.${sourcePrefillStatus}`),
+                        title: t(
+                            `explorer.prefillStatusDescription.${sourcePrefillStatus}`,
+                        ),
+                    }));
+                }
                 summary.append(heading, badges);
 
                 details.appendChild(summary);
@@ -2121,6 +2308,9 @@ export class DevToolsWindow {
                             actions.appendChild(jump);
                             body.appendChild(actions);
                         }
+                    }
+                    if (source.provenance) {
+                        body.appendChild(this.renderProvenanceDetails(source));
                     }
                     const pre = source.type === 'final'
                         ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
@@ -2390,6 +2580,19 @@ export class DevToolsWindow {
                 : t('snapshot.loadedAll', { count: this.timeline.length }),
         }));
         page.appendChild(this.renderStorageOverview());
+        if (this.timelineCorruptCount > 0) {
+            const warning = element('section', {
+                className: 'st-devtools-corrupt-warning',
+            });
+            warning.setAttribute('role', 'status');
+            warning.append(
+                element('strong', { text: t('storage.corruptSnapshotsTitle') }),
+                proseElement('p', t('storage.corruptSnapshotsDescription', {
+                    count: this.timelineCorruptCount,
+                })),
+            );
+            page.appendChild(warning);
+        }
 
         const toolbox = element('details', {
             className: 'st-devtools-toolbox st-devtools-timeline-toolbox',
@@ -2553,7 +2756,17 @@ export class DevToolsWindow {
                         text: t('timeline.loreRemoved', { count: lore.removed.length }),
                     }));
                 }
-                if (!lore.activated.length && !lore.removed.length) {
+                if (lore.changed?.length) {
+                    changes.appendChild(element('span', {
+                        className: 'st-devtools-change-pill changed',
+                        text: t('timeline.loreChanged', { count: lore.changed.length }),
+                    }));
+                }
+                if (
+                    !lore.activated.length
+                    && !lore.removed.length
+                    && !(lore.changed?.length)
+                ) {
                     changes.appendChild(element('span', {
                         className: 'st-devtools-change-pill',
                         text: t('timeline.loreNoChanges'),
@@ -2581,7 +2794,11 @@ export class DevToolsWindow {
 
             if (
                 snapshot.id === this.selectedId
-                && (lore.activated.length || lore.removed.length)
+                && (
+                    lore.activated.length
+                    || lore.removed.length
+                    || lore.changed?.length
+                )
             ) {
                 entry.appendChild(this.renderLoreChangeList(lore));
             }
@@ -2935,6 +3152,7 @@ export class DevToolsWindow {
             const localSettingCount = this.clearLocalData();
             this.timeline = [];
             this.timelineTotalCount = 0;
+            this.timelineCorruptCount = 0;
             this.selectedId = null;
             this.selectedTimelineIds.clear();
             this.storageSummary = {
@@ -2983,6 +3201,7 @@ export class DevToolsWindow {
             if (chatId === this.currentChatId()) {
                 this.timeline = [];
                 this.timelineTotalCount = 0;
+                this.timelineCorruptCount = 0;
                 this.selectedId = null;
                 this.selectedTimelineIds.clear();
             }
@@ -3071,6 +3290,7 @@ export class DevToolsWindow {
             if (chatId === this.currentChatId()) {
                 this.timeline = pageAfterDelete.snapshots;
                 this.timelineTotalCount = pageAfterDelete.totalCount;
+                this.timelineCorruptCount = pageAfterDelete.corruptCount;
                 this.selectedTimelineIds = new Set(
                     [...this.selectedTimelineIds].filter((id) => !idSet.has(id)),
                 );
@@ -3275,10 +3495,46 @@ export class DevToolsWindow {
         return figure;
     }
 
+    renderFieldChanges(changes, namespace, className = '') {
+        const normalized = Array.isArray(changes)
+            ? changes.filter((change) => change && typeof change === 'object')
+            : [];
+        if (normalized.length === 0) return null;
+        const wrapper = element('div', {
+            className: `st-devtools-field-change-table-wrap ${className}`.trim(),
+        });
+        const table = element('table', {
+            className: 'st-devtools-field-change-table',
+        });
+        const head = element('thead');
+        const headRow = element('tr');
+        headRow.append(
+            element('th', { text: t('diff.changeKinds') }),
+            element('th', { text: t('diff.before') }),
+            element('th', { text: t('diff.after') }),
+        );
+        head.appendChild(headRow);
+        const body = element('tbody');
+        for (const change of normalized) {
+            const row = element('tr');
+            row.append(
+                element('th', {
+                    text: diffFieldLabel(namespace, change.field),
+                }),
+                element('td', { text: diffValueLabel(change.before) }),
+                element('td', { text: diffValueLabel(change.after) }),
+            );
+            body.appendChild(row);
+        }
+        table.append(head, body);
+        wrapper.appendChild(table);
+        return wrapper;
+    }
+
     renderLoreChangeList(lore) {
         const wrapper = element('div', { className: 'st-devtools-lore-change-list' });
         const appendGroup = (labelKey, entries, className) => {
-            if (!entries.length) return;
+            if (!entries?.length) return;
             const group = element('div', { className });
             group.appendChild(element('strong', { text: t(labelKey) }));
             const list = element('ul');
@@ -3290,6 +3546,65 @@ export class DevToolsWindow {
         };
         appendGroup('timeline.loreActivatedList', lore.activated, 'activated');
         appendGroup('timeline.loreRemovedList', lore.removed, 'removed');
+        if (lore.changed?.length) {
+            const group = element('div', { className: 'changed' });
+            group.appendChild(element('strong', {
+                text: t('timeline.loreChangedList'),
+            }));
+            const cards = element('div', {
+                className: 'st-devtools-lore-changed-cards',
+            });
+            for (const changed of lore.changed) {
+                const changes = Array.isArray(changed?.changes)
+                    ? changed.changes
+                    : [];
+                const fields = changes.map(({ field }) => (
+                    diffFieldLabel('diff.loreField', field)
+                ));
+                const card = element('details', {
+                    className: 'st-devtools-lore-changed-card',
+                });
+                const summary = element('summary');
+                summary.append(
+                    element('span', {
+                        text: loreEntryLabel(changed?.after ?? changed?.before ?? {}),
+                    }),
+                    element('small', {
+                        text: t('diff.loreChangedFields', {
+                            fields: fields.join(' · ') || t('common.unknown'),
+                        }),
+                    }),
+                );
+                card.appendChild(summary);
+                attachLazyDetailsContent(card, () => {
+                    const content = element('div', {
+                        className: 'st-devtools-lore-changed-content',
+                    });
+                    const contentChange = changes.find(({ field }) => field === 'content');
+                    if (contentChange) {
+                        content.appendChild(element('strong', {
+                            text: t('diff.loreContentChanges'),
+                        }));
+                        const diff = element('pre');
+                        this.appendDiffMarkup(
+                            diff,
+                            contentChange.before ?? '',
+                            contentChange.after ?? '',
+                        );
+                        content.appendChild(diff);
+                    }
+                    const metadata = this.renderFieldChanges(
+                        changes.filter(({ field }) => field !== 'content'),
+                        'diff.loreField',
+                    );
+                    if (metadata) content.appendChild(metadata);
+                    return content;
+                });
+                cards.appendChild(card);
+            }
+            group.appendChild(cards);
+            wrapper.appendChild(group);
+        }
         return wrapper;
     }
 
@@ -3403,10 +3718,23 @@ export class DevToolsWindow {
 
         const list = element('div', { className: 'st-devtools-source-change-list' });
         for (const change of changes) {
+            const changeKinds = Array.isArray(change.changeKinds)
+                ? change.changeKinds
+                : [];
             const card = element('details', {
                 className: `st-devtools-source-change status-${change.status}`,
             });
             const summary = element('summary');
+            const kindBadges = element('span', {
+                className: 'st-devtools-source-change-kinds',
+                title: t('diff.changeKinds'),
+            });
+            for (const kind of changeKinds) {
+                kindBadges.appendChild(element('span', {
+                    className: `st-devtools-change-kind kind-${kind}`,
+                    text: translatedValue(`diff.changeKind.${kind}`, kind),
+                }));
+            }
             summary.append(
                 element('strong', { text: sourceDisplayLabel(change.source) }),
                 element('span', {
@@ -3417,28 +3745,59 @@ export class DevToolsWindow {
                     className: 'st-devtools-change-pill',
                     text: t('diff.tokenDelta', { delta: formatDelta(change.tokenDelta) }),
                 }),
+                kindBadges,
             );
             card.appendChild(summary);
             attachLazyDetailsContent(card, () => {
-                const content = element('pre');
-                if (change.status === 'added') {
-                    content.appendChild(element('span', {
-                        className: 'diff-added',
-                        text: change.after?.content ?? '',
+                const body = element('div', {
+                    className: 'st-devtools-source-change-content',
+                });
+                const hasContentChange = (
+                    change.status === 'added'
+                    || change.status === 'removed'
+                    || changeKinds.includes('content')
+                );
+                if (hasContentChange) {
+                    body.appendChild(element('strong', {
+                        text: t('diff.contentChanges'),
                     }));
-                } else if (change.status === 'removed') {
-                    content.appendChild(element('span', {
-                        className: 'diff-removed',
-                        text: change.before?.content ?? '',
-                    }));
-                } else {
-                    this.appendDiffMarkup(
-                        content,
-                        change.before?.content ?? '',
-                        change.after?.content ?? '',
-                    );
+                    const content = element('pre');
+                    if (change.status === 'added') {
+                        content.appendChild(element('span', {
+                            className: 'diff-added',
+                            text: change.after?.content ?? '',
+                        }));
+                    } else if (change.status === 'removed') {
+                        content.appendChild(element('span', {
+                            className: 'diff-removed',
+                            text: change.before?.content ?? '',
+                        }));
+                    } else {
+                        this.appendDiffMarkup(
+                            content,
+                            change.before?.content ?? '',
+                            change.after?.content ?? '',
+                        );
+                    }
+                    body.appendChild(content);
                 }
-                return content;
+                const metadata = this.renderFieldChanges(
+                    change.metadataChanges,
+                    'diff.metadataField',
+                    'st-devtools-source-metadata-changes',
+                );
+                if (metadata) {
+                    const metadataSection = element('section', {
+                        className: 'st-devtools-source-metadata-section',
+                    });
+                    metadataSection.append(
+                        element('strong', { text: t('diff.metadataChanges') }),
+                        proseElement('p', t('diff.metadataDescription')),
+                        metadata,
+                    );
+                    body.appendChild(metadataSection);
+                }
+                return body;
             });
             list.appendChild(card);
         }
@@ -3455,7 +3814,11 @@ export class DevToolsWindow {
             base.lorebookEntries ?? [],
             compare.lorebookEntries ?? [],
         );
-        if (!changes.activated.length && !changes.removed.length) {
+        if (
+            !changes.activated.length
+            && !changes.removed.length
+            && !changes.changed?.length
+        ) {
             section.appendChild(proseElement('p', t('diff.noLoreChanges')));
             return;
         }
@@ -3477,6 +3840,75 @@ export class DevToolsWindow {
         }
         wrapper.appendChild(select);
         return { wrapper, select };
+    }
+
+    renderProviderTrace(snapshot) {
+        const trace = snapshot?.providerTrace;
+        if (!trace || typeof trace !== 'object') return null;
+        const selected = trace.selectedSource ?? {};
+        const upstream = trace.upstreamProvider ?? {};
+        const transport = trace.transport ?? {};
+        const section = element('section', {
+            className: 'st-devtools-provider-trace',
+        });
+        section.appendChild(explainedTitle(
+            t('context.providerTrace'),
+            t('context.providerTraceDescription'),
+            { tag: 'h3', titleTag: 'span' },
+        ));
+        const grid = element('div', {
+            className: 'st-devtools-provider-trace-grid',
+        });
+        const appendProvider = (label, value, status, evidencePointer = null) => {
+            const card = element('div', {
+                className: `st-devtools-provider-trace-item provider-${status || 'unknown'}`,
+            });
+            card.append(
+                element('small', { text: label }),
+                element('strong', {
+                    text: value
+                        ? providerDisplayLabel(value)
+                        : t('context.upstreamUnknown'),
+                }),
+                element('span', {
+                    className: 'st-devtools-badge',
+                    text: translatedValue(
+                        `context.providerStatus.${status || 'unknown'}`,
+                        status || t('common.unknown'),
+                    ),
+                }),
+            );
+            if (evidencePointer) {
+                card.appendChild(element('code', {
+                    text: t('context.providerEvidence', {
+                        pointer: evidencePointer,
+                    }),
+                }));
+            }
+            grid.appendChild(card);
+        };
+        appendProvider(
+            t('context.selectedGenerationSource'),
+            selected.value && selected.value !== 'unknown' ? selected.value : null,
+            selected.status,
+            selected.evidencePointer,
+        );
+        appendProvider(
+            t('context.upstreamProvider'),
+            upstream.value,
+            upstream.status,
+            upstream.evidencePointer,
+        );
+        const transportSummary = element('small', {
+            className: 'st-devtools-provider-transport',
+            text: `${t('context.transportPath')}: ${
+                promptTypeDisplayLabel(transport.promptType)
+            } · ${generationTypeDisplayLabel(transport.generationType)} · ${
+                transport.api || t('common.unknown')
+            }`,
+        });
+        section.append(grid, transportSummary);
+        return section;
     }
 
     renderContext(snapshot) {
@@ -3687,9 +4119,11 @@ export class DevToolsWindow {
                     : snapshot.finalText,
             })
         ));
+        const providerTrace = this.renderProviderTrace(snapshot);
         page.append(
             coreStats,
             captureCard,
+            ...(providerTrace ? [providerTrace] : []),
             detailStats,
             exportTools,
             settingsDetails,

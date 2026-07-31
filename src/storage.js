@@ -9,6 +9,10 @@ const LEGACY_TIMELINE_PREFIX = 'timeline:';
 const TIMELINE_INDEX_PREFIX = 'timeline-index:v2:';
 const SNAPSHOT_PREFIX = 'snapshot:v2:';
 const SUMMARY_YIELD_BUDGET_MS = 8;
+const CORRUPT_ENTRY_LIMIT = 20;
+const CORRUPT_ENTRY_ID_MAX_LENGTH = 256;
+const CORRUPT_SNAPSHOT_MESSAGE = '저장된 스냅샷을 변환하지 못했습니다.';
+const MISSING_SNAPSHOT_MESSAGE = '저장된 스냅샷 레코드를 찾을 수 없습니다.';
 
 function approximateJsonBytes(value) {
     try {
@@ -144,28 +148,74 @@ function sumEntryBytes(entries) {
     );
 }
 
-function legacySnapshotRecords(value) {
-    const snapshotsById = new Map();
-    for (const snapshot of Array.isArray(value) ? value : []) {
-        if (
-            snapshot
-            && typeof snapshot === 'object'
-            && typeof snapshot.id === 'string'
-            && snapshot.id
-        ) {
-            snapshotsById.set(snapshot.id, snapshot);
-        }
+function legacyRecordFingerprint(value) {
+    let serialized;
+    try {
+        serialized = JSON.stringify(value);
+    } catch {
+        serialized = Object.prototype.toString.call(value);
     }
-    return [...snapshotsById.values()]
-        .sort((left, right) => (Number(left.timestamp) || 0) - (Number(right.timestamp) || 0));
+    const input = serialized ?? String(value);
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index += 1) {
+        hash ^= input.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
 }
 
-function legacyRetentionEntry(snapshot) {
+function legacySnapshotRecords(value) {
+    const rawRecords = Array.isArray(value) ? value : [];
+    const lastIndexById = new Map();
+    for (const [index, snapshot] of rawRecords.entries()) {
+        if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+            const id = typeof snapshot.id === 'string' ? snapshot.id : '';
+            if (id) lastIndexById.set(id, index);
+        }
+    }
+
+    const reservedIds = new Set(lastIndexById.keys());
+    const records = rawRecords.map((legacySnapshot, originalIndex) => {
+        const rawId = legacySnapshot
+            && typeof legacySnapshot === 'object'
+            && !Array.isArray(legacySnapshot)
+            && typeof legacySnapshot.id === 'string'
+            ? legacySnapshot.id
+            : '';
+        const keepsOriginalId = Boolean(rawId)
+            && lastIndexById.get(rawId) === originalIndex;
+        let id = rawId;
+        if (!keepsOriginalId) {
+            const base = `__legacy-corrupt-v1-${originalIndex}-${
+                legacyRecordFingerprint(legacySnapshot)
+            }`;
+            id = base;
+            let collision = 1;
+            while (reservedIds.has(id)) {
+                id = `${base}-${collision}`;
+                collision += 1;
+            }
+        }
+        reservedIds.add(id);
+        return {
+            id,
+            timestamp: Number(legacySnapshot?.timestamp) || 0,
+            originalIndex,
+            legacySnapshot,
+        };
+    });
+    return records.sort(
+        (left, right) => left.timestamp - right.timestamp
+            || left.originalIndex - right.originalIndex,
+    );
+}
+
+function legacyRetentionEntry(record) {
     return {
-        id: snapshot.id,
-        timestamp: Number(snapshot.timestamp) || 0,
+        id: record.id,
+        timestamp: record.timestamp,
         approximateBytes: null,
-        legacySnapshot: snapshot,
+        legacySnapshot: record.legacySnapshot,
     };
 }
 
@@ -173,6 +223,13 @@ function retentionEntryBytes(entry) {
     return Number.isFinite(entry?.approximateBytes)
         ? Math.max(0, Number(entry.approximateBytes))
         : approximateJsonBytes(entry?.legacySnapshot);
+}
+
+function corruptEntryMetadata(snapshotId, message) {
+    return {
+        id: String(snapshotId ?? '').slice(0, CORRUPT_ENTRY_ID_MAX_LENGTH),
+        message,
+    };
 }
 
 export class SnapshotStore {
@@ -356,11 +413,32 @@ export class SnapshotStore {
         const entries = [];
         let lastYieldAt = Date.now();
 
-        for (const legacySnapshot of retained) {
-            const snapshot = migrateSnapshot(legacySnapshot);
-            const bytes = approximateJsonBytes(snapshot);
-            await this.write(this.snapshotKey(chatId, snapshot.id), snapshot);
-            entries.push(timelineEntry(snapshot, bytes));
+        for (const record of retained) {
+            let storedSnapshot = record.legacySnapshot;
+            try {
+                const migrated = migrateSnapshot(record.legacySnapshot);
+                if (
+                    migrated
+                    && typeof migrated === 'object'
+                    && !Array.isArray(migrated)
+                    && migrated.id === record.id
+                ) {
+                    storedSnapshot = migrated;
+                }
+            } catch {
+                // Preserve malformed legacy data verbatim so the indexed reader can
+                // isolate it and surface a corruption warning without losing evidence.
+            }
+            const bytes = approximateJsonBytes(storedSnapshot);
+            await this.write(
+                this.snapshotKey(chatId, record.id),
+                storedSnapshot,
+            );
+            entries.push({
+                id: record.id,
+                timestamp: record.timestamp,
+                approximateBytes: bytes,
+            });
             lastYieldAt = await this.maybeYield(lastYieldAt, this.migrationYield);
         }
 
@@ -383,8 +461,87 @@ export class SnapshotStore {
 
     async readSnapshotUnlocked(chatId, snapshotId) {
         const stored = await this.read(this.snapshotKey(chatId, snapshotId), null);
-        if (!stored) return null;
-        return migrateSnapshot(stored);
+        if (!stored) {
+            return {
+                id: snapshotId,
+                snapshot: null,
+                approximateBytes: null,
+                migrated: false,
+                corruptEntry: corruptEntryMetadata(
+                    snapshotId,
+                    MISSING_SNAPSHOT_MESSAGE,
+                ),
+            };
+        }
+
+        let snapshot;
+        try {
+            snapshot = migrateSnapshot(stored);
+            if (
+                !snapshot
+                || typeof snapshot !== 'object'
+                || snapshot.id !== snapshotId
+            ) {
+                throw new TypeError('Invalid migrated snapshot.');
+            }
+        } catch {
+            return {
+                id: snapshotId,
+                snapshot: null,
+                approximateBytes: null,
+                migrated: false,
+                corruptEntry: corruptEntryMetadata(
+                    snapshotId,
+                    CORRUPT_SNAPSHOT_MESSAGE,
+                ),
+            };
+        }
+
+        const migrated = snapshot !== stored;
+        return {
+            id: snapshotId,
+            snapshot,
+            approximateBytes: migrated ? approximateJsonBytes(snapshot) : null,
+            migrated,
+            corruptEntry: null,
+        };
+    }
+
+    async reconcileReadSnapshotsUnlocked(chatId, index, readResults) {
+        const byteCounts = new Map();
+        let migrated = false;
+        for (const result of readResults) {
+            if (result.snapshot && Number.isFinite(result.approximateBytes)) {
+                byteCounts.set(result.id, result.approximateBytes);
+            }
+            migrated ||= result.migrated;
+        }
+
+        let byteDelta = 0;
+        let indexChanged = false;
+        const nextEntries = index.entries.map((entry) => {
+            if (!byteCounts.has(entry.id)) return entry;
+            const approximateBytes = byteCounts.get(entry.id);
+            if (approximateBytes === entry.approximateBytes) return entry;
+            indexChanged = true;
+            byteDelta += approximateBytes - entry.approximateBytes;
+            return { ...entry, approximateBytes };
+        });
+
+        if (migrated || indexChanged) {
+            this.mutationRevision += 1;
+        }
+        if (indexChanged) {
+            await this.writeTimelineIndex(chatId, nextEntries);
+            await this.updateCompleteSummary({ byteDelta });
+        }
+        for (const result of readResults) {
+            if (!result.migrated) continue;
+            await this.write(
+                this.snapshotKey(chatId, result.id),
+                result.snapshot,
+            );
+        }
     }
 
     async writeTimelineIndex(chatId, entries) {
@@ -505,14 +662,27 @@ export class SnapshotStore {
                 const index = await this.readTimelineIndexUnlocked(normalizedChatId);
                 const readLimit = normalizeReadLimit(limit, this.maxSnapshotsPerChat);
                 const selectedEntries = index.entries.slice(-readLimit);
-                const snapshots = (await Promise.all(selectedEntries.map(
+                const readResults = await Promise.all(selectedEntries.map(
                     (entry) => this.readSnapshotUnlocked(normalizedChatId, entry.id),
-                ))).filter(Boolean);
+                ));
+                await this.reconcileReadSnapshotsUnlocked(
+                    normalizedChatId,
+                    index,
+                    readResults,
+                );
+                const snapshots = readResults
+                    .map((result) => result.snapshot)
+                    .filter(Boolean);
+                const corruptResults = readResults
+                    .map((result) => result.corruptEntry)
+                    .filter(Boolean);
                 return {
                     snapshots,
                     totalCount: index.entries.length,
                     loadedCount: snapshots.length,
                     limit: readLimit,
+                    corruptCount: corruptResults.length,
+                    corruptEntries: corruptResults.slice(0, CORRUPT_ENTRY_LIMIT),
                 };
             })
         ));
@@ -529,7 +699,16 @@ export class SnapshotStore {
             this.withLock(indexKey, async () => {
                 const index = await this.readTimelineIndexUnlocked(normalizedChatId);
                 if (!index.entries.some(({ id }) => id === snapshotId)) return null;
-                return this.readSnapshotUnlocked(normalizedChatId, snapshotId);
+                const result = await this.readSnapshotUnlocked(
+                    normalizedChatId,
+                    snapshotId,
+                );
+                await this.reconcileReadSnapshotsUnlocked(
+                    normalizedChatId,
+                    index,
+                    [result],
+                );
+                return result.snapshot;
             })
         ));
     }
@@ -699,13 +878,14 @@ export class SnapshotStore {
                             );
                             if (removedRecords.length === 0) return;
                             await this.migrateLegacyTimelineUnlocked(chatId, records, limit);
-                            for (const snapshot of removedRecords) {
-                                await this.remove(this.snapshotKey(chatId, snapshot.id));
+                            for (const record of removedRecords) {
+                                await this.remove(this.snapshotKey(chatId, record.id));
                             }
                             affectedChatCount += 1;
                             snapshotCount += removedRecords.length;
                             approximateBytes += removedRecords.reduce(
-                                (total, snapshot) => total + approximateJsonBytes(snapshot),
+                                (total, record) => total
+                                    + approximateJsonBytes(record.legacySnapshot),
                                 0,
                             );
                             return;
@@ -907,12 +1087,12 @@ export class SnapshotStore {
                 }
             } else if (container.legacyKey) {
                 const stored = await this.read(container.legacyKey, []);
-                const snapshots = legacySnapshotRecords(stored);
-                if (snapshots.length > 0) {
+                const records = legacySnapshotRecords(stored);
+                if (records.length > 0) {
                     chatCount += 1;
-                    snapshotCount += snapshots.length;
-                    for (const snapshot of snapshots) {
-                        approximateBytes += approximateJsonBytes(snapshot);
+                    snapshotCount += records.length;
+                    for (const record of records) {
+                        approximateBytes += approximateJsonBytes(record.legacySnapshot);
                         lastYieldAt = await this.maybeYield(lastYieldAt);
                         if (revision !== this.mutationRevision) {
                             return this.getStorageSummary();

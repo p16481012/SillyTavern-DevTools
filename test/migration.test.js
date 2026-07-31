@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { migrateSnapshot } from '../src/migrations.js';
+import {
+    migrateSnapshot,
+    SnapshotMigrationError,
+} from '../src/migrations.js';
 import { SnapshotStore } from '../src/storage.js';
 
 function legacySnapshot() {
@@ -21,12 +24,12 @@ function legacySnapshot() {
     };
 }
 
-test('v1 snapshots migrate to schema v5 without changing captured text', () => {
+test('v1 snapshots migrate through schema v5 to v6 without changing captured text', () => {
     const original = legacySnapshot();
     const migrated = migrateSnapshot(original);
 
     assert.equal(original.schemaVersion, 1);
-    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.schemaVersion, 6);
     assert.equal(migrated.capture.requestStatus, 'prompt-only-timeout');
     assert.equal(migrated.capture.generationStatus, 'unknown');
     assert.equal(migrated.finalText, original.finalText);
@@ -37,7 +40,13 @@ test('v1 snapshots migrate to schema v5 without changing captured text', () => {
     assert.deepEqual(migrated.sources[0].provenance, {
         method: 'exact',
         confidence: 1,
+        availability: 'legacy-unavailable',
+        locations: [],
+        locationCount: 0,
+        locationsTruncated: false,
     });
+    assert.equal(migrated.providerTrace.selectedSource.value, 'unknown');
+    assert.equal(migrated.providerTrace.upstreamProvider.status, 'unknown');
     assert.deepEqual(migrated.stats.structured, {
         toolSchemas: 0,
         toolCalls: 0,
@@ -63,12 +72,16 @@ test('legacy storage settings skip oversized template regexes without failing mi
     };
     const migrated = migrateSnapshot(oversized);
 
-    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.schemaVersion, 6);
     assert.equal(migrated.sources[0].attribution, 'unmatched');
     assert.deepEqual(migrated.sources[0].ranges, []);
     assert.deepEqual(migrated.sources[0].provenance, {
         method: 'unmatched',
         confidence: 0,
+        availability: 'legacy-unavailable',
+        locations: [],
+        locationCount: 0,
+        locationsTruncated: false,
     });
 
     const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
@@ -87,7 +100,7 @@ test('timeline reads persist one-time schema migration', async () => {
     store.memory.set(store.timelineKey('chat'), [legacySnapshot()]);
 
     const timeline = await store.getTimeline('chat');
-    assert.equal(timeline[0].schemaVersion, 5);
+    assert.equal(timeline[0].schemaVersion, 6);
     assert.equal(store.memory.has(store.timelineKey('chat')), false);
     assert.equal(
         store.memory.get(store.timelineIndexKey('chat')).version,
@@ -95,7 +108,7 @@ test('timeline reads persist one-time schema migration', async () => {
     );
     assert.equal(
         store.memory.get(store.snapshotKey('chat', 'legacy')).schemaVersion,
-        5,
+        6,
     );
 });
 
@@ -170,10 +183,242 @@ test('v4 request captures gain lifecycle defaults without losing request data', 
         },
     });
 
-    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.schemaVersion, 6);
     assert.equal(migrated.request.body.model, 'test-model');
     assert.equal(migrated.capture.requestStatus, 'captured');
     assert.equal(migrated.capture.generationStatus, 'unknown');
+});
+
+test('v5 migration is non-mutating, records legacy provenance honestly, and is idempotent', () => {
+    const original = {
+        ...legacySnapshot(),
+        schemaVersion: 5,
+        api: 'openai',
+        provider: 'openrouter',
+        generationType: 'normal',
+        capture: {
+            eventName: 'CHAT_COMPLETION_SETTINGS_READY',
+            stage: 'backend-request-ready',
+            fallback: false,
+        },
+        sources: [{
+            id: 'prefill',
+            type: 'assistant_prefill',
+            content: 'Continue here',
+            ranges: [{ start: 0, end: 10 }],
+            attribution: 'derived',
+            metadata: { inferred: true },
+            provenance: {
+                method: 'assistant-prefill-inferred',
+                confidence: 0.5,
+                messageIndexes: [0],
+            },
+        }],
+    };
+    const before = structuredClone(original);
+    const migrated = migrateSnapshot(original);
+
+    assert.deepEqual(original, before);
+    assert.notEqual(migrated, original);
+    assert.equal(migrated.schemaVersion, 6);
+    assert.equal(migrated.capture.migratedFrom, 5);
+    assert.equal(migrated.sources[0].metadata.prefillStatus, 'inferred');
+    assert.equal(migrated.sources[0].provenance.availability, 'legacy-unavailable');
+    assert.deepEqual(migrated.sources[0].provenance.locations, []);
+    assert.equal(migrated.providerTrace.selectedSource.value, 'openrouter');
+    assert.equal(migrated.providerTrace.selectedSource.status, 'legacy-fallback');
+    assert.deepEqual(migrated.providerTrace.upstreamProvider, {
+        value: null,
+        status: 'unknown',
+        evidencePointer: null,
+    });
+    assert.equal(migrateSnapshot(migrated), migrated);
+    assert.deepEqual(JSON.parse(JSON.stringify(migrated)), migrated);
+});
+
+test('corrupt legacy ranges fail at a record boundary without mutating the source', () => {
+    const corrupt = {
+        ...legacySnapshot(),
+        schemaVersion: 5,
+        sources: [{
+            id: 'broken',
+            type: 'system',
+            content: 'Legacy source',
+            ranges: [{ start: 9, end: 2 }],
+        }],
+    };
+    const before = structuredClone(corrupt);
+
+    assert.throws(
+        () => migrateSnapshot(corrupt),
+        (error) => (
+            error instanceof SnapshotMigrationError
+            && error.code === 'invalid-source-ranges'
+        ),
+    );
+    assert.deepEqual(corrupt, before);
+});
+
+test('corrupt v6 provenance pointers are rejected at the same record boundary', () => {
+    const corrupt = {
+        schemaVersion: 6,
+        id: 'corrupt-v6',
+        timestamp: 1,
+        finalText: 'text',
+        sources: [{
+            id: 'source',
+            type: 'system',
+            content: 'text',
+            ranges: [{ start: 0, end: 4 }],
+            provenance: {
+                method: 'exact',
+                confidence: 1,
+                availability: 'available',
+                locations: [{
+                    jsonPointer: '/payload/~2broken',
+                    messageIndex: 0,
+                    role: 'system',
+                    valueRange: { start: 0, end: 4 },
+                    finalRange: { start: 0, end: 4 },
+                }],
+                locationCount: 1,
+                locationsTruncated: false,
+            },
+        }],
+    };
+
+    assert.throws(
+        () => migrateSnapshot(corrupt),
+        (error) => (
+            error instanceof SnapshotMigrationError
+            && error.code === 'invalid-provenance-locations'
+        ),
+    );
+});
+
+function v6SnapshotWithLocation(location = {}, source = {}) {
+    return {
+        schemaVersion: 6,
+        id: 'v6-location',
+        timestamp: 1,
+        finalText: 'text',
+        payload: [{ role: 'system', content: 'text' }],
+        sources: [{
+            id: 'source',
+            type: 'system',
+            content: 'text',
+            ranges: [{ start: 0, end: 4 }],
+            provenance: {
+                method: 'exact',
+                confidence: 1,
+                availability: 'available',
+                locations: [{
+                    jsonPointer: '/payload/0/content',
+                    messageIndex: 0,
+                    role: 'system',
+                    valueRange: { start: 0, end: 4 },
+                    finalRange: { start: 0, end: 4 },
+                    ...location,
+                }],
+                locationCount: 1,
+                locationsTruncated: false,
+            },
+            ...source,
+        }],
+    };
+}
+
+test('valid v6 provenance resolves its generated payload pointer idempotently', () => {
+    const valid = v6SnapshotWithLocation();
+    assert.strictEqual(migrateSnapshot(valid), valid);
+});
+
+test('v6 provenance rejects malformed, oversized, missing, and contradictory locations', () => {
+    const cases = [{
+        name: 'malformed explicit value range',
+        snapshot: v6SnapshotWithLocation({
+            valueRange: { start: '0', end: 4 },
+        }),
+    }, {
+        name: 'malformed explicit final range',
+        snapshot: v6SnapshotWithLocation({
+            finalRange: { start: 2, end: 2 },
+        }),
+    }, {
+        name: 'oversized pointer',
+        snapshot: v6SnapshotWithLocation({
+            jsonPointer: `/${'x'.repeat(1_024)}`,
+        }),
+    }, {
+        name: 'oversized role',
+        snapshot: v6SnapshotWithLocation({
+            role: 's'.repeat(65),
+        }),
+    }, {
+        name: 'missing pointer target',
+        snapshot: v6SnapshotWithLocation({
+            jsonPointer: '/payload/1/content',
+            messageIndex: 1,
+        }),
+    }, {
+        name: 'value range outside pointer target',
+        snapshot: v6SnapshotWithLocation({
+            valueRange: { start: 0, end: 5 },
+        }),
+    }, {
+        name: 'final range outside final text',
+        snapshot: v6SnapshotWithLocation({
+            finalRange: { start: 0, end: 5 },
+        }),
+    }, {
+        name: 'final range contradicts source range and content',
+        snapshot: {
+            ...v6SnapshotWithLocation({
+                valueRange: null,
+                finalRange: { start: 4, end: 8 },
+            }, {
+                ranges: [{ start: 0, end: 4 }],
+            }),
+            finalText: 'textmore',
+        },
+    }];
+
+    for (const { name, snapshot } of cases) {
+        assert.throws(
+            () => migrateSnapshot(snapshot),
+            (error) => (
+                error instanceof SnapshotMigrationError
+                && error.code === 'invalid-provenance-locations'
+            ),
+            name,
+        );
+    }
+});
+
+test('v6 provider evidence pointers must resolve within the snapshot', () => {
+    const corrupt = {
+        ...v6SnapshotWithLocation(),
+        providerTrace: {
+            selectedSource: {
+                value: 'openrouter',
+                status: 'captured',
+                evidencePointer: '/request/body/chat_completion_source',
+            },
+            upstreamProvider: {
+                value: null,
+                status: 'unknown',
+                evidencePointer: null,
+            },
+        },
+    };
+
+    assert.throws(
+        () => migrateSnapshot(corrupt),
+        (error) => (
+            error instanceof SnapshotMigrationError
+            && error.code === 'invalid-provider-trace'
+        ),
+    );
 });
 
 test('deleteSnapshot removes only the selected snapshot and cleans up an empty timeline', async () => {

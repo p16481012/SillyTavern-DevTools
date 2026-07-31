@@ -3,8 +3,28 @@ import {
     findNormalizedRanges,
     findTemplateRanges,
     SNAPSHOT_SCHEMA_VERSION,
+    snapshotProvider,
 } from './model.js';
+import {
+    createProviderTrace,
+    legacyUnavailableProvenance,
+    MAX_PROVENANCE_LOCATIONS,
+    normalizeProvenanceLocation,
+} from './provenance.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
+
+const SCHEMA_V5 = 5;
+const MAX_JSON_POINTER_LENGTH = 1_024;
+const MAX_PROVENANCE_ROLE_LENGTH = 64;
+const MAX_PROVENANCE_LOCATION_COUNT = 100_000;
+
+export class SnapshotMigrationError extends Error {
+    constructor(code, message) {
+        super(message);
+        this.name = 'SnapshotMigrationError';
+        this.code = code;
+    }
+}
 
 function legacyEventName(snapshot) {
     return snapshot.promptType === 'chat-completion'
@@ -12,22 +32,266 @@ function legacyEventName(snapshot) {
         : 'GENERATE_AFTER_COMBINE_PROMPTS';
 }
 
-export function migrateSnapshot(snapshot) {
-    if (!snapshot || typeof snapshot !== 'object') {
-        return snapshot;
+function validRange(range) {
+    return Number.isInteger(range?.start)
+        && Number.isInteger(range?.end)
+        && range.start >= 0
+        && range.end > range.start;
+}
+
+function validJsonPointer(value) {
+    return typeof value === 'string'
+        && value.length <= MAX_JSON_POINTER_LENGTH
+        && (value === '' || (value.startsWith('/') && !/~(?![01])/u.test(value)));
+}
+
+function jsonPointerSegments(pointer) {
+    if (!validJsonPointer(pointer)) return null;
+    if (pointer === '') return [];
+    return pointer
+        .slice(1)
+        .split('/')
+        .map((segment) => segment.replaceAll('~1', '/').replaceAll('~0', '~'));
+}
+
+function resolveJsonPointer(root, pointer) {
+    const segments = jsonPointerSegments(pointer);
+    if (!segments) return { exists: false, value: undefined, segments: [] };
+    let value = root;
+    for (const segment of segments) {
+        if (Array.isArray(value)) {
+            if (!/^(?:0|[1-9]\d*)$/u.test(segment)) {
+                return { exists: false, value: undefined, segments };
+            }
+            const index = Number(segment);
+            if (!Number.isSafeInteger(index) || index >= value.length) {
+                return { exists: false, value: undefined, segments };
+            }
+            value = value[index];
+            continue;
+        }
+        if (
+            !value
+            || typeof value !== 'object'
+            || !Object.prototype.hasOwnProperty.call(value, segment)
+        ) {
+            return { exists: false, value: undefined, segments };
+        }
+        value = value[segment];
     }
-    if ((Number(snapshot.schemaVersion) || 1) >= SNAPSHOT_SCHEMA_VERSION) {
-        return snapshot;
+    return { exists: true, value, segments };
+}
+
+function explicitRangeIsValid(location, key) {
+    return !Object.prototype.hasOwnProperty.call(location, key)
+        || location[key] === null
+        || validRange(location[key]);
+}
+
+function provenanceLocationIsValid(snapshot, source, location) {
+    if (
+        !location
+        || typeof location !== 'object'
+        || Array.isArray(location)
+        || !explicitRangeIsValid(location, 'valueRange')
+        || !explicitRangeIsValid(location, 'finalRange')
+    ) {
+        return false;
+    }
+    if (
+        Object.prototype.hasOwnProperty.call(location, 'role')
+        && location.role !== null
+        && (
+            typeof location.role !== 'string'
+            || !location.role.trim()
+            || location.role.length > MAX_PROVENANCE_ROLE_LENGTH
+        )
+    ) {
+        return false;
     }
 
+    const normalized = normalizeProvenanceLocation(location);
+    if (!normalized || !validJsonPointer(normalized.jsonPointer)) return false;
+    const resolved = resolveJsonPointer(snapshot, normalized.jsonPointer);
+    if (!resolved.exists) return false;
+
     const finalText = snapshot.finalText ?? '';
-    const legacyVersion = Number(snapshot.schemaVersion) || 1;
+    if (normalized.finalRange && normalized.finalRange.end > finalText.length) {
+        return false;
+    }
+    if (
+        normalized.valueRange
+        && (
+            typeof resolved.value !== 'string'
+            || normalized.valueRange.end > resolved.value.length
+        )
+    ) {
+        return false;
+    }
+    if (normalized.finalRange) {
+        const matchesSourceRange = (source.ranges ?? []).some(
+            (range) => normalized.finalRange.start >= range.start
+                && normalized.finalRange.end <= range.end,
+        );
+        const fragment = finalText.slice(
+            normalized.finalRange.start,
+            normalized.finalRange.end,
+        );
+        const matchesSourceContent = typeof source.content === 'string'
+            && source.content.includes(fragment);
+        if (!matchesSourceRange && !matchesSourceContent) return false;
+    }
+    if (
+        normalized.valueRange
+        && normalized.finalRange
+        && resolved.value.slice(
+            normalized.valueRange.start,
+            normalized.valueRange.end,
+        ) !== finalText.slice(
+            normalized.finalRange.start,
+            normalized.finalRange.end,
+        )
+    ) {
+        return false;
+    }
+
+    if (normalized.messageIndex != null) {
+        if (
+            !Array.isArray(snapshot.payload)
+            || normalized.messageIndex >= snapshot.payload.length
+        ) {
+            return false;
+        }
+        const payloadIndex = resolved.segments[0] === 'payload'
+            && /^(?:0|[1-9]\d*)$/u.test(resolved.segments[1] ?? '')
+            ? Number(resolved.segments[1])
+            : null;
+        if (payloadIndex != null && payloadIndex !== normalized.messageIndex) {
+            return false;
+        }
+        if (normalized.role) {
+            const payloadRole = String(
+                snapshot.payload[normalized.messageIndex]?.role ?? 'unknown',
+            ).trim().toLowerCase();
+            if (payloadRole !== normalized.role) return false;
+        }
+    }
+    return true;
+}
+
+function providerEvidencePointersAreValid(snapshot) {
+    const pointers = [
+        snapshot.providerTrace?.selectedSource?.evidencePointer,
+        snapshot.providerTrace?.upstreamProvider?.evidencePointer,
+    ].filter((pointer) => pointer != null);
+    return pointers.every((pointer) => (
+        validJsonPointer(pointer)
+        && resolveJsonPointer(snapshot, pointer).exists
+    ));
+}
+
+function assertMigratableSnapshot(snapshot, { validateV6 = false } = {}) {
+    if (snapshot.finalText != null && typeof snapshot.finalText !== 'string') {
+        throw new SnapshotMigrationError(
+            'invalid-final-text',
+            'Snapshot finalText must be a string.',
+        );
+    }
+    if (snapshot.sources != null && !Array.isArray(snapshot.sources)) {
+        throw new SnapshotMigrationError(
+            'invalid-sources',
+            'Snapshot sources must be an array.',
+        );
+    }
+    for (const source of snapshot.sources ?? []) {
+        if (!source || typeof source !== 'object' || Array.isArray(source)) {
+            throw new SnapshotMigrationError(
+                'invalid-source',
+                'Snapshot source must be an object.',
+            );
+        }
+        if (
+            source.ranges != null
+            && (
+                !Array.isArray(source.ranges)
+                || source.ranges.some((range) => !validRange(range))
+                || (
+                    validateV6
+                    && source.ranges.some(
+                        (range) => range.end > (snapshot.finalText ?? '').length,
+                    )
+                )
+            )
+        ) {
+            throw new SnapshotMigrationError(
+                'invalid-source-ranges',
+                'Snapshot source ranges are invalid.',
+            );
+        }
+        if (validateV6 && source.provenance?.locations != null) {
+            const locations = source.provenance.locations;
+            if (
+                !Array.isArray(locations)
+                || locations.length > MAX_PROVENANCE_LOCATIONS
+                || locations.some(
+                    (location) => !provenanceLocationIsValid(snapshot, source, location),
+                )
+            ) {
+                throw new SnapshotMigrationError(
+                    'invalid-provenance-locations',
+                    'Snapshot provenance locations are invalid.',
+                );
+            }
+            const locationCount = source.provenance.locationCount;
+            if (
+                locationCount != null
+                && (
+                    !Number.isInteger(locationCount)
+                    || locationCount < locations.length
+                    || locationCount > MAX_PROVENANCE_LOCATION_COUNT
+                )
+            ) {
+                throw new SnapshotMigrationError(
+                    'invalid-provenance-count',
+                    'Snapshot provenance location count is invalid.',
+                );
+            }
+        }
+    }
+    if (validateV6 && !providerEvidencePointersAreValid(snapshot)) {
+        throw new SnapshotMigrationError(
+            'invalid-provider-trace',
+            'Snapshot provider trace evidence pointers are invalid.',
+        );
+    }
+}
+
+function legacySourceProvenance(attribution, templateMatch) {
+    if (attribution === 'exact') return { method: 'exact', confidence: 1 };
+    if (attribution === 'normalized') {
+        return { method: 'normalized', confidence: 0.95 };
+    }
+    if (attribution === 'template') {
+        return {
+            method: templateMatch.method ?? 'macro-template',
+            confidence: templateMatch.confidence ?? 0.55,
+        };
+    }
+    if (attribution === 'unmatched') return { method: 'unmatched', confidence: 0 };
+    return { method: attribution ?? 'unknown', confidence: null };
+}
+
+export function migrateV4ToV5(snapshot, originalVersion = Number(snapshot?.schemaVersion) || 1) {
+    assertMigratableSnapshot(snapshot);
+    if ((Number(snapshot.schemaVersion) || 1) >= SCHEMA_V5) return snapshot;
+
+    const finalText = snapshot.finalText ?? '';
     const legacyCapture = snapshot.capture ?? createCaptureBoundary({
         eventName: legacyEventName(snapshot),
         stage: 'prompt-ready',
         requestBodyAvailable: false,
         fallback: true,
-        migratedFrom: legacyVersion,
+        migratedFrom: originalVersion,
     });
     const legacyRequest = snapshot.request ?? createRequestRecord(null);
     const sources = (snapshot.sources ?? []).map((source) => {
@@ -50,25 +314,12 @@ export function migrateSnapshot(snapshot) {
                     ? 'template'
                     : source.attribution
             : source.attribution;
-        const provenance = source.provenance ?? (
-            attribution === 'exact'
-                ? { method: 'exact', confidence: 1 }
-                : attribution === 'normalized'
-                    ? { method: 'normalized', confidence: 0.95 }
-                    : attribution === 'template'
-                        ? {
-                            method: templateMatch.method ?? 'macro-template',
-                            confidence: templateMatch.confidence ?? 0.55,
-                        }
-                        : attribution === 'unmatched'
-                            ? { method: 'unmatched', confidence: 0 }
-                            : { method: attribution ?? 'unknown', confidence: null }
-        );
         return {
             ...source,
             attribution,
             ranges,
-            provenance,
+            provenance: source.provenance
+                ?? legacySourceProvenance(attribution, templateMatch),
         };
     });
     const structured = snapshot.stats?.structured ?? {};
@@ -78,9 +329,10 @@ export function migrateSnapshot(snapshot) {
         .filter((estimate) => Number.isFinite(estimate?.tokens));
     return {
         ...snapshot,
-        schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+        schemaVersion: SCHEMA_V5,
         capture: {
             ...legacyCapture,
+            migratedFrom: legacyCapture.migratedFrom ?? originalVersion,
             correlationId: legacyCapture.correlationId ?? null,
             correlationMethod: legacyCapture.correlationMethod
                 ?? (legacyCapture.fallback ? 'prompt-only' : 'fifo'),
@@ -120,6 +372,89 @@ export function migrateSnapshot(snapshot) {
             },
         },
     };
+}
+
+function legacyProviderTrace(snapshot) {
+    const selectedSource = snapshotProvider(snapshot) ?? 'unknown';
+    const hasProvider = typeof snapshot.provider === 'string' && snapshot.provider;
+    const hasApi = typeof snapshot.api === 'string' && snapshot.api;
+    return createProviderTrace({
+        api: snapshot.api ?? 'unknown',
+        promptType: snapshot.promptType ?? 'unknown',
+        generationType: snapshot.generationType ?? 'unknown',
+        selectedSource,
+        selectedSourceStatus: selectedSource === 'unknown'
+            ? 'unknown'
+            : 'legacy-fallback',
+        selectedSourcePointer: hasProvider
+            ? '/provider'
+            : hasApi
+                ? '/api'
+                : null,
+    });
+}
+
+export function migrateV5ToV6(snapshot, originalVersion = Number(snapshot?.schemaVersion) || 5) {
+    assertMigratableSnapshot(snapshot);
+    if ((Number(snapshot.schemaVersion) || 1) >= SNAPSHOT_SCHEMA_VERSION) return snapshot;
+
+    const sources = (snapshot.sources ?? []).map((source) => {
+        const metadata = source.type === 'assistant_prefill'
+            ? {
+                ...(source.metadata ?? {}),
+                inferred: source.metadata?.prefillStatus === 'confirmed'
+                    ? false
+                    : source.metadata?.inferred !== false,
+                prefillStatus: source.metadata?.prefillStatus === 'confirmed'
+                    ? 'confirmed'
+                    : 'inferred',
+            }
+            : source.metadata;
+        return {
+            ...source,
+            ...(metadata !== undefined ? { metadata } : {}),
+            provenance: legacyUnavailableProvenance(
+                source.provenance
+                    ?? legacySourceProvenance(source.attribution, {}),
+            ),
+        };
+    });
+
+    return {
+        ...snapshot,
+        schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+        capture: snapshot.capture
+            ? {
+                ...snapshot.capture,
+                migratedFrom: snapshot.capture.migratedFrom ?? originalVersion,
+            }
+            : snapshot.capture,
+        providerTrace: snapshot.providerTrace ?? legacyProviderTrace(snapshot),
+        sources,
+    };
+}
+
+export function migrateSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+        return snapshot;
+    }
+    const version = Number(snapshot.schemaVersion) || 1;
+    if (version >= SNAPSHOT_SCHEMA_VERSION) {
+        if (version === SNAPSHOT_SCHEMA_VERSION) {
+            assertMigratableSnapshot(snapshot, { validateV6: true });
+        }
+        return snapshot;
+    }
+
+    let migrated = snapshot;
+    if (version < SCHEMA_V5) {
+        migrated = migrateV4ToV5(migrated, version);
+    }
+    if ((Number(migrated.schemaVersion) || 1) < SNAPSHOT_SCHEMA_VERSION) {
+        migrated = migrateV5ToV6(migrated, version);
+    }
+    assertMigratableSnapshot(migrated, { validateV6: true });
+    return migrated;
 }
 
 export function migrateTimeline(timeline) {
