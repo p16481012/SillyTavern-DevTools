@@ -167,14 +167,33 @@ const PRICING_RATE_FIELDS = Object.freeze([
 ]);
 const TABS = [
     ['explorer', 'tab.explorer'],
+    ['rules', 'tab.rules'],
     ['timeline', 'tab.timeline'],
     ['diff', 'tab.diff'],
-    ['context', 'tab.context'],
-    ['rules', 'tab.rules'],
     ['search', 'tab.search'],
+    ['context', 'tab.context'],
 ];
+const NAV_GROUPS = [
+    ['prompt', 'nav.prompt', ['explorer'], 'explorer'],
+    ['inspect', 'nav.inspect', ['rules'], 'rules'],
+    ['history', 'nav.history', ['timeline', 'diff'], 'timeline'],
+    ['tools', 'nav.tools', ['search', 'context'], 'search'],
+];
+const CAPTURE_STATUS_STATES = new Set([
+    'waiting',
+    'capturing',
+    'processing',
+    'saved',
+    'failed',
+    'excluded-semantic',
+    'skipped-safety',
+]);
 let tooltipSequence = 0;
 let fieldSequence = 0;
+
+function navigationGroupForTab(tabId) {
+    return NAV_GROUPS.find(([, , tabs]) => tabs.includes(tabId)) ?? NAV_GROUPS[0];
+}
 
 function element(tag, options = {}) {
     const node = document.createElement(tag);
@@ -721,6 +740,17 @@ export class DevToolsWindow {
         this.pendingPricingOverrides = null;
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
+        this.lastTabByGroup = new Map(
+            NAV_GROUPS.map(([groupId, , , defaultTab]) => [groupId, defaultTab]),
+        );
+        const initialGroup = navigationGroupForTab(this.activeTab);
+        this.lastTabByGroup.set(initialGroup[0], this.activeTab);
+        this.captureStatus = {
+            state: 'waiting',
+            at: Date.now(),
+        };
+        this.captureStatusRegion = null;
+        this.secondaryTabList = null;
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
         this.comparisonPolicySettings = this.loadComparisonPolicySettings();
@@ -758,6 +788,9 @@ export class DevToolsWindow {
         this.settingsOverlay = null;
         this.settingsPanel = null;
         this.settingsRefreshTimer = null;
+        this.helpOverlay = null;
+        this.helpPanel = null;
+        this.helpPreviouslyFocused = null;
         this.themeModeInput = null;
         this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
@@ -793,6 +826,9 @@ export class DevToolsWindow {
         this.diagnosticImportError = null;
         this.capture.addEventListener('snapshot', (event) => this.onSnapshot(event.detail));
         this.capture.addEventListener('capture-error', (event) => this.onCaptureError(event.detail));
+        this.capture.addEventListener('capture-status', (event) => {
+            this.onCaptureStatus(event.detail);
+        });
     }
 
     currentChatId() {
@@ -1923,15 +1959,30 @@ export class DevToolsWindow {
             type: 'submit',
         });
         actions.append(reset, cancel, apply);
+        const settingsGroup = (labelKey, fields, { open = false } = {}) => {
+            const details = element('details', {
+                className: 'st-devtools-settings-group st-devtools-disclosure',
+            });
+            details.open = open;
+            details.appendChild(element('summary', { text: t(labelKey) }));
+            const content = element('div', {
+                className: 'st-devtools-settings-group-content',
+            });
+            content.append(...fields);
+            details.appendChild(content);
+            return details;
+        };
         form.append(
-            themeField,
-            retentionField,
-            ageField,
-            byteField,
-            readField,
-            captureField,
-            semanticField,
-            pricingEditor.details,
+            settingsGroup('settings.group.basic', [themeField], { open: true }),
+            settingsGroup(
+                'settings.group.snapshots',
+                [retentionField, readField, captureField],
+                { open: true },
+            ),
+            settingsGroup(
+                'settings.group.advanced',
+                [ageField, byteField, semanticField, pricingEditor.details],
+            ),
             actions,
         );
         form.addEventListener('submit', async (event) => {
@@ -3034,6 +3085,7 @@ export class DevToolsWindow {
         this.closeSemanticConsent(false, { restoreFocus: false });
         this.cancelSemanticInspection();
         this.closeSettings({ restoreFocus: false });
+        this.closeHelp({ restoreFocus: false });
         if (this.root) {
             this.root.hidden = true;
         }
@@ -3066,6 +3118,15 @@ export class DevToolsWindow {
         );
 
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
+        const help = element('button', {
+            className: 'menu_button st-devtools-help-trigger',
+            title: t('action.help'),
+            type: 'button',
+        });
+        help.setAttribute('aria-label', t('action.help'));
+        help.dataset.tourId = 'help';
+        help.appendChild(element('i', { className: 'fa-solid fa-circle-question' }));
+        help.addEventListener('click', () => this.openHelp());
         const settings = element('button', {
             className: 'menu_button',
             title: t('action.settings'),
@@ -3075,16 +3136,43 @@ export class DevToolsWindow {
         settings.appendChild(element('i', { className: 'fa-solid fa-gear' }));
         settings.addEventListener('click', () => this.openSettings());
         const refresh = element('button', { className: 'menu_button', title: t('action.refresh'), type: 'button' });
+        refresh.setAttribute('aria-label', t('action.refresh'));
         refresh.appendChild(element('i', { className: 'fa-solid fa-rotate' }));
         refresh.addEventListener('click', () => this.refresh());
         const close = element('button', { className: 'menu_button', title: t('action.close'), type: 'button' });
+        close.setAttribute('aria-label', t('action.close'));
         close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
         close.addEventListener('click', () => this.close());
-        headerActions.append(settings, refresh, close);
+        headerActions.append(help, settings, refresh, close);
         header.append(title, headerActions);
 
-        const tabList = element('nav', { className: 'st-devtools-tabs' });
+        const primaryTabs = element('nav', {
+            className: 'st-devtools-primary-tabs',
+        });
+        primaryTabs.setAttribute('aria-label', t('nav.label'));
+        for (const [groupId, labelKey, , defaultTab] of NAV_GROUPS) {
+            const button = element('button', {
+                className: 'st-devtools-primary-tab',
+                text: t(labelKey),
+                type: 'button',
+            });
+            button.dataset.navGroup = groupId;
+            button.id = `st-devtools-nav-${groupId}`;
+            button.addEventListener('click', () => {
+                this.selectTab(this.lastTabByGroup.get(groupId) ?? defaultTab);
+            });
+            button.addEventListener('keydown', (event) => {
+                this.handlePrimaryTabKeydown(event, groupId);
+            });
+            primaryTabs.appendChild(button);
+        }
+
+        const tabList = element('nav', {
+            className: 'st-devtools-tabs st-devtools-secondary-tabs',
+        });
         tabList.setAttribute('role', 'tablist');
+        tabList.setAttribute('aria-label', t('nav.secondaryLabel'));
+        this.secondaryTabList = tabList;
         for (const [id, labelKey] of TABS) {
             const button = element('button', { className: 'st-devtools-tab', text: t(labelKey), type: 'button' });
             button.dataset.tab = id;
@@ -3098,13 +3186,24 @@ export class DevToolsWindow {
 
         this.content = element('main', { className: 'st-devtools-content' });
         this.content.setAttribute('role', 'tabpanel');
-        this.primaryRegions = [header, tabList, this.content];
+        this.captureStatusRegion = this.buildCaptureStatus();
+        this.updateCaptureStatus();
+        this.primaryRegions = [
+            header,
+            primaryTabs,
+            tabList,
+            this.captureStatusRegion,
+            this.content,
+        ];
         this.window.append(
             header,
+            primaryTabs,
             tabList,
+            this.captureStatusRegion,
             this.content,
             this.buildSettingsPanel(),
             this.buildSemanticConsentDialog(),
+            this.buildHelpPanel(),
         );
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
@@ -3120,6 +3219,179 @@ export class DevToolsWindow {
         this.enableDragging(header);
         this.observeGeometry();
         this.selectTab(this.activeTab);
+    }
+
+    buildCaptureStatus() {
+        const region = element('section', {
+            className: 'st-devtools-capture-status',
+        });
+        region.dataset.tourId = 'capture-status';
+        region.setAttribute('role', 'status');
+        region.setAttribute('aria-live', 'polite');
+        region.setAttribute('aria-atomic', 'true');
+        region.append(
+            element('span', {
+                className: 'st-devtools-capture-status-dot',
+                text: '',
+            }),
+            element('strong', {
+                className: 'st-devtools-capture-status-label',
+                text: t('capture.status.label'),
+            }),
+            element('span', {
+                className: 'st-devtools-capture-status-copy',
+            }),
+        );
+        this.updateCaptureStatus();
+        return region;
+    }
+
+    onCaptureStatus(detail) {
+        const state = typeof detail?.state === 'string'
+            ? detail.state
+            : 'waiting';
+        if (!CAPTURE_STATUS_STATES.has(state)) return;
+        this.captureStatus = {
+            state,
+            at: Number.isFinite(detail?.at) ? detail.at : Date.now(),
+            ...(typeof detail?.promptType === 'string'
+                ? { promptType: detail.promptType }
+                : {}),
+            ...(typeof detail?.stage === 'string'
+                ? { stage: detail.stage }
+                : {}),
+        };
+        this.updateCaptureStatus();
+    }
+
+    updateCaptureStatus() {
+        if (!this.captureStatusRegion) return;
+        const state = CAPTURE_STATUS_STATES.has(this.captureStatus?.state)
+            ? this.captureStatus.state
+            : 'waiting';
+        for (const knownState of CAPTURE_STATUS_STATES) {
+            this.captureStatusRegion.classList.remove(`is-${knownState}`);
+        }
+        this.captureStatusRegion.classList.add(`is-${state}`);
+        const keySuffix = state === 'excluded-semantic'
+            ? 'excludedSemantic'
+            : state === 'skipped-safety'
+                ? 'skippedSafety'
+                : state;
+        const copy = this.captureStatusRegion.querySelector(
+            '.st-devtools-capture-status-copy',
+        );
+        if (copy) copy.textContent = t(`capture.status.${keySuffix}`);
+    }
+
+    buildHelpPanel() {
+        const overlay = element('div', {
+            className: 'st-devtools-help-overlay',
+        });
+        overlay.hidden = true;
+        overlay.addEventListener('pointerdown', (event) => {
+            if (event.target === overlay) this.closeHelp();
+        });
+        const panel = element('section', {
+            className: 'st-devtools-help-panel',
+        });
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'st-devtools-help-title');
+        const header = element('header', {
+            className: 'st-devtools-help-header',
+        });
+        const heading = element('h2', {
+            text: t('help.title'),
+        });
+        heading.id = 'st-devtools-help-title';
+        const close = element('button', {
+            className: 'menu_button',
+            title: t('action.close'),
+            type: 'button',
+        });
+        close.setAttribute('aria-label', t('action.close'));
+        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
+        close.addEventListener('click', () => this.closeHelp());
+        header.append(heading, close);
+        const body = element('div', {
+            className: 'st-devtools-help-body',
+        });
+        body.append(
+            proseElement('p', t('help.description')),
+            this.renderQuickStart(),
+        );
+        panel.append(header, body);
+        overlay.appendChild(panel);
+        this.helpOverlay = overlay;
+        this.helpPanel = panel;
+        return overlay;
+    }
+
+    renderQuickStart({ showHeading = false } = {}) {
+        const section = element('section', {
+            className: 'st-devtools-quick-start',
+        });
+        section.dataset.tourId = 'quick-start';
+        if (showHeading) {
+            section.appendChild(element('h4', {
+                text: t('empty.quickStartTitle'),
+            }));
+        }
+        const steps = element('ol', {
+            className: 'st-devtools-quick-start-steps',
+        });
+        for (const index of [1, 2, 3]) {
+            const step = element('li', {
+                className: 'st-devtools-quick-start-step',
+            });
+            step.append(
+                element('strong', { text: t(`help.step${index}Title`) }),
+                proseElement('p', t(`help.step${index}Description`)),
+            );
+            steps.appendChild(step);
+        }
+        const note = proseElement('p', t('help.semanticNote'));
+        note.className = 'st-devtools-quick-start-note';
+        const diagnostics = element('details', {
+            className: 'st-devtools-empty-diagnostics st-devtools-disclosure',
+        });
+        diagnostics.append(
+            element('summary', { text: t('help.troubleshootTitle') }),
+            proseElement('p', t('help.troubleshootDescription')),
+        );
+        section.append(steps, note, diagnostics);
+        return section;
+    }
+
+    openHelp() {
+        if (!this.helpOverlay || !this.helpPanel) return;
+        this.helpPreviouslyFocused = document.activeElement;
+        this.window.setAttribute('aria-modal', 'false');
+        for (const region of this.primaryRegions) {
+            region.inert = true;
+            region.setAttribute('aria-hidden', 'true');
+        }
+        this.helpOverlay.hidden = false;
+        queueMicrotask(() => this.helpPanel.querySelector('button')?.focus());
+    }
+
+    closeHelp({ restoreFocus = true } = {}) {
+        if (!this.helpOverlay || this.helpOverlay.hidden) return;
+        this.helpOverlay.hidden = true;
+        this.window.setAttribute('aria-modal', 'true');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (
+            restoreFocus
+            && this.helpPreviouslyFocused?.isConnected
+            && typeof this.helpPreviouslyFocused.focus === 'function'
+        ) {
+            this.helpPreviouslyFocused.focus();
+        }
+        this.helpPreviouslyFocused = null;
     }
 
     syncOpaqueTheme() {
@@ -3578,7 +3850,15 @@ export class DevToolsWindow {
     }
 
     activeTabButton() {
-        return this.window?.querySelector(`.st-devtools-tab[data-tab="${this.activeTab}"]`) ?? null;
+        const [groupId, , tabs] = navigationGroupForTab(this.activeTab);
+        if (tabs.length <= 1) {
+            return this.window?.querySelector(
+                `.st-devtools-primary-tab[data-nav-group="${groupId}"]`,
+            ) ?? null;
+        }
+        return this.window?.querySelector(
+            `.st-devtools-tab[data-tab="${this.activeTab}"]`,
+        ) ?? null;
     }
 
     focusableElements() {
@@ -3588,7 +3868,9 @@ export class DevToolsWindow {
             ? this.semanticConsentPanel
             : this.settingsOverlay && !this.settingsOverlay.hidden
                 ? this.settingsPanel
-                : this.window;
+                : this.helpOverlay && !this.helpOverlay.hidden
+                    ? this.helpPanel
+                    : this.window;
         return [...scope.querySelectorAll(
             'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
             'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
@@ -3612,6 +3894,8 @@ export class DevToolsWindow {
                 this.closeSemanticConsent(false);
             } else if (this.settingsOverlay && !this.settingsOverlay.hidden) {
                 this.closeSettings();
+            } else if (this.helpOverlay && !this.helpOverlay.hidden) {
+                this.closeHelp();
             } else {
                 this.close();
             }
@@ -3633,7 +3917,9 @@ export class DevToolsWindow {
             ? this.semanticConsentPanel
             : this.settingsOverlay && !this.settingsOverlay.hidden
                 ? this.settingsPanel
-                : this.window;
+                : this.helpOverlay && !this.helpOverlay.hidden
+                    ? this.helpPanel
+                    : this.window;
         if (!focusScope.contains(active)) {
             event.preventDefault();
             (event.shiftKey ? last : first).focus();
@@ -3833,7 +4119,7 @@ export class DevToolsWindow {
     }
 
     handleTabKeydown(event, id) {
-        const ids = TABS.map(([tabId]) => tabId);
+        const [, , ids] = navigationGroupForTab(id);
         const currentIndex = ids.indexOf(id);
         let nextIndex = null;
         if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ids.length;
@@ -3845,10 +4131,29 @@ export class DevToolsWindow {
         this.selectTab(ids[nextIndex], { focus: true });
     }
 
+    handlePrimaryTabKeydown(event, groupId) {
+        const ids = NAV_GROUPS.map(([id]) => id);
+        const currentIndex = ids.indexOf(groupId);
+        let nextIndex = null;
+        if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ids.length;
+        if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + ids.length) % ids.length;
+        if (event.key === 'Home') nextIndex = 0;
+        if (event.key === 'End') nextIndex = ids.length - 1;
+        if (nextIndex == null) return;
+        event.preventDefault();
+        const [nextGroupId, , , defaultTab] = NAV_GROUPS[nextIndex];
+        this.selectTab(this.lastTabByGroup.get(nextGroupId) ?? defaultTab);
+        this.window?.querySelector(
+            `.st-devtools-primary-tab[data-nav-group="${nextGroupId}"]`,
+        )?.focus();
+    }
+
     selectTab(id, { focus = false } = {}) {
         const nextTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
         const changed = nextTab !== this.activeTab;
         this.activeTab = nextTab;
+        const [groupId] = navigationGroupForTab(nextTab);
+        this.lastTabByGroup.set(groupId, nextTab);
         localStorage.setItem(LAST_TAB_KEY, this.activeTab);
         this.render();
         if (this.activeTab === 'timeline' && this.root && !this.root.hidden) {
@@ -3863,14 +4168,32 @@ export class DevToolsWindow {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.syncOpaqueTheme();
+        const [activeGroupId, , activeGroupTabs] = navigationGroupForTab(
+            this.activeTab,
+        );
+        for (const button of this.window.querySelectorAll('.st-devtools-primary-tab')) {
+            const active = button.dataset.navGroup === activeGroupId;
+            button.classList.toggle('active', active);
+            if (active) button.setAttribute('aria-current', 'page');
+            else button.removeAttribute('aria-current');
+        }
+        if (this.secondaryTabList) {
+            this.secondaryTabList.hidden = activeGroupTabs.length <= 1;
+        }
         for (const button of this.window.querySelectorAll('.st-devtools-tab')) {
+            button.hidden = !activeGroupTabs.includes(button.dataset.tab);
             const active = button.dataset.tab === this.activeTab;
             button.classList.toggle('active', active);
             button.setAttribute('aria-selected', String(active));
             button.tabIndex = active ? 0 : -1;
         }
         this.content.id = this.panelElementId(this.activeTab);
-        this.content.setAttribute('aria-labelledby', this.tabElementId(this.activeTab));
+        this.content.setAttribute(
+            'aria-labelledby',
+            activeGroupTabs.length <= 1
+                ? `st-devtools-nav-${activeGroupId}`
+                : this.tabElementId(this.activeTab),
+        );
         this.content.replaceChildren();
         if (this.storageErrors.length > 0) {
             this.content.appendChild(this.renderStorageErrors());
@@ -4011,12 +4334,31 @@ export class DevToolsWindow {
             element('i', { className: 'fa-solid fa-wave-square' }),
             element('h3', { text: t('empty.title') }),
             proseElement('p', t('empty.description')),
+            this.renderQuickStart({ showHeading: true }),
         );
+        const actions = element('div', {
+            className: 'st-devtools-empty-actions',
+        });
+        const back = element('button', {
+            className: 'menu_button',
+            text: t('action.returnToChat'),
+            type: 'button',
+        });
+        back.addEventListener('click', () => this.close());
+        const refresh = element('button', {
+            className: 'menu_button',
+            text: t('action.refresh'),
+            type: 'button',
+        });
+        refresh.addEventListener('click', () => this.refresh());
+        actions.append(back, refresh);
+        empty.appendChild(actions);
         return empty;
     }
 
     renderSnapshotPicker(labelText = t('snapshot.label')) {
         const wrapper = element('div', { className: 'st-devtools-picker' });
+        wrapper.dataset.tourId = 'snapshot-picker';
         wrapper.appendChild(element('span', {
             className: 'st-devtools-picker-label',
             text: labelText,
@@ -4640,7 +4982,7 @@ export class DevToolsWindow {
         const page = element('div', { className: 'st-devtools-page' });
         const analyses = buildTimelineAnalysis(this.timeline, { includeSourceChanges: false });
         this.pruneTimelineSelection();
-        page.appendChild(element('p', {
+        const loadedStatus = element('p', {
             className: 'st-devtools-section-intro',
             text: this.timelineTotalCount > this.timeline.length
                 ? t('snapshot.loadedSubset', {
@@ -4648,20 +4990,20 @@ export class DevToolsWindow {
                     total: this.timelineTotalCount,
                 })
                 : t('snapshot.loadedAll', { count: this.timeline.length }),
-        }));
-        page.appendChild(this.renderStorageOverview());
+        });
+        const storageOverview = this.renderStorageOverview();
+        let corruptWarning = null;
         if (this.timelineCorruptCount > 0) {
-            const warning = element('section', {
+            corruptWarning = element('section', {
                 className: 'st-devtools-corrupt-warning',
             });
-            warning.setAttribute('role', 'status');
-            warning.append(
+            corruptWarning.setAttribute('role', 'status');
+            corruptWarning.append(
                 element('strong', { text: t('storage.corruptSnapshotsTitle') }),
                 proseElement('p', t('storage.corruptSnapshotsDescription', {
                     count: this.timelineCorruptCount,
                 })),
             );
-            page.appendChild(warning);
         }
 
         const toolbox = element('details', {
@@ -4760,16 +5102,30 @@ export class DevToolsWindow {
             ),
         );
         toolbox.append(toolboxSummary, toolboxContent);
-        page.appendChild(toolbox);
         const diagnosticStatus = this.renderDiagnosticImportStatus();
-        if (diagnosticStatus) page.appendChild(diagnosticStatus);
+
+        const storageDetails = element('details', {
+            className: 'st-devtools-disclosure st-devtools-timeline-storage-details',
+        });
+        storageDetails.appendChild(element('summary', {
+            text: t('timeline.storageDetailsTitle'),
+        }));
+        const storageContent = element('div', {
+            className: 'st-devtools-timeline-storage-content',
+        });
+        storageContent.append(loadedStatus, storageOverview, toolbox);
+        if (diagnosticStatus) storageContent.appendChild(diagnosticStatus);
+        storageDetails.appendChild(storageContent);
 
         if (this.timeline.length === 0) {
             page.appendChild(this.renderEmpty());
+            if (corruptWarning) page.appendChild(corruptWarning);
+            page.appendChild(storageDetails);
             return page;
         }
 
         page.appendChild(this.renderGrowthChart(analyses, this.timelineTotalCount));
+        if (corruptWarning) page.appendChild(corruptWarning);
         const timelineItems = [...analyses].reverse();
         const renderTimelineEntry = (analysis) => {
             const { snapshot, previous, tokenDelta, lore } = analysis;
@@ -4913,6 +5269,7 @@ export class DevToolsWindow {
             return content;
         });
         page.appendChild(snapshots);
+        page.appendChild(storageDetails);
         return page;
     }
 
@@ -9410,22 +9767,137 @@ export class DevToolsWindow {
         return section;
     }
 
+    renderSemanticInspectorDisclosure(snapshot, analysis, findings) {
+        const details = element('details', {
+            className: 'st-devtools-semantic-disclosure st-devtools-disclosure',
+        });
+        details.dataset.tourId = 'semantic-inspector';
+        details.appendChild(element('summary', {
+            text: t('rules.semanticDisclosureTitle'),
+        }));
+        attachLazyDetailsContent(details, () => this.renderSemanticInspector(
+            snapshot,
+            analysis,
+            findings,
+        ));
+        return details;
+    }
+
+    renderDeferredRuleSettings() {
+        const details = element('details', {
+            className: 'st-devtools-rule-settings',
+        });
+        details.open = this.ruleSettingsOpen;
+        details.addEventListener('toggle', () => {
+            this.ruleSettingsOpen = details.open;
+        });
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('rules.settingsTitle'),
+            t('rules.settingsDescription'),
+        ));
+        details.appendChild(summary);
+        attachLazyDetailsContent(details, () => {
+            const rendered = this.renderRuleSettings();
+            const renderedSummary = rendered.firstElementChild;
+            if (renderedSummary?.tagName === 'SUMMARY') renderedSummary.remove();
+            const fragment = document.createDocumentFragment();
+            fragment.append(...rendered.childNodes);
+            return fragment;
+        });
+        return details;
+    }
+
+    renderDeferredComparisonPolicySettings(snapshot) {
+        const details = element('details', {
+            className: 'st-devtools-rule-settings st-devtools-policy-settings',
+        });
+        details.open = this.comparisonPolicyOpen;
+        details.addEventListener('toggle', () => {
+            this.comparisonPolicyOpen = details.open;
+        });
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('comparison.title'),
+            [
+                t('comparison.description'),
+                t('comparison.precedence'),
+            ].join(' '),
+        ));
+        details.appendChild(summary);
+        attachLazyDetailsContent(details, () => {
+            const rendered = this.renderComparisonPolicySettings(snapshot);
+            const renderedSummary = rendered.firstElementChild;
+            if (renderedSummary?.tagName === 'SUMMARY') renderedSummary.remove();
+            const fragment = document.createDocumentFragment();
+            fragment.append(...rendered.childNodes);
+            return fragment;
+        });
+        return details;
+    }
+
+    renderRuleAdvancedAnalysis(snapshot, analysis) {
+        const details = element('details', {
+            className: 'st-devtools-rule-advanced st-devtools-disclosure',
+        });
+        details.appendChild(element('summary', {
+            text: t('rules.advancedAnalysisTitle'),
+        }));
+        attachLazyDetailsContent(details, () => {
+            const content = element('div', {
+                className: 'st-devtools-rule-advanced-content',
+            });
+            content.append(
+                this.renderComparisonAnalysis(snapshot, analysis?.comparison),
+                this.renderInstructionModel(analysis?.instructions),
+            );
+            return content;
+        });
+        return details;
+    }
+
+    appendRuleSupportingSections(
+        host,
+        snapshot,
+        analysis,
+        findings,
+        reviewResult,
+    ) {
+        host.append(
+            this.renderSemanticInspectorDisclosure(snapshot, analysis, findings),
+            this.renderRuleAdvancedAnalysis(snapshot, analysis),
+            this.renderDeferredRuleSettings(),
+            this.renderDeferredComparisonPolicySettings(snapshot),
+            this.renderReviewedFindings(snapshot, reviewResult),
+            this.renderRuleAuditLog(),
+        );
+        if (this.ruleReviewStatus) {
+            const status = element('p', {
+                className: this.ruleReviewStatusIsError
+                    ? 'st-devtools-rule-review-status is-error'
+                    : 'st-devtools-rule-review-status',
+                text: this.ruleReviewStatus,
+            });
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            host.appendChild(status);
+        }
+    }
+
     renderRules(snapshot, providedAnalysis = undefined) {
         const page = element('div', { className: 'st-devtools-page' });
-        page.append(
-            this.renderSnapshotPicker(),
-            this.renderRuleSettings(),
-            this.renderComparisonPolicySettings(snapshot),
-        );
+        page.appendChild(this.renderSnapshotPicker());
+        const host = element('div', {
+            className: 'st-devtools-rule-analysis-host',
+        });
+        host.dataset.tourId = 'rule-results';
+        page.appendChild(host);
         const effectiveRuleSettings = this.pendingImportedRuleSettings
             ?? this.ruleSettings;
         if (
             providedAnalysis === undefined
             && this.shouldUseAsyncAnalysis('rules', [snapshot])
         ) {
-            const host = element('div', {
-                className: 'st-devtools-rule-analysis-host',
-            });
             const status = element('p', {
                 className: 'st-devtools-analysis-status',
                 text: t('analysis.loading'),
@@ -9433,7 +9905,6 @@ export class DevToolsWindow {
             status.setAttribute('role', 'status');
             status.setAttribute('aria-live', 'polite');
             host.appendChild(status);
-            page.appendChild(host);
             const controller = new AbortController();
             const revision = this.analysisRevision;
             const snapshotId = snapshot.id;
@@ -9462,9 +9933,12 @@ export class DevToolsWindow {
                     snapshot,
                     response.result,
                 );
-                host.replaceChildren(
-                    ...[...completed.childNodes].slice(3),
+                const completedHost = completed.querySelector(
+                    '.st-devtools-rule-analysis-host',
                 );
+                if (completedHost) {
+                    host.replaceChildren(...[...completedHost.childNodes]);
+                }
             }).catch((error) => {
                 if (
                     controller.signal.aborted
@@ -9496,13 +9970,6 @@ export class DevToolsWindow {
         const findings = reviewResult.visible.filter(
             ({ review }) => review.decision !== 'false-positive',
         );
-        page.appendChild(this.renderComparisonAnalysis(snapshot, analysis?.comparison));
-        page.appendChild(this.renderInstructionModel(analysis?.instructions));
-        page.appendChild(this.renderSemanticInspector(
-            snapshot,
-            analysis,
-            findings,
-        ));
         const counts = findings.reduce((result, item) => {
             if (Object.prototype.hasOwnProperty.call(result, item.severity)) {
                 result[item.severity] += 1;
@@ -9553,7 +10020,7 @@ export class DevToolsWindow {
                 }),
             }),
         );
-        page.appendChild(summary);
+        host.appendChild(summary);
         if (Object.values(determinations).some((count) => count > 0)) {
             const determinationSummary = element('div', {
                 className: 'st-devtools-rule-determination-summary',
@@ -9564,7 +10031,7 @@ export class DevToolsWindow {
                     text: `${t(`rules.determination.${status}`)} ${count}`,
                 }));
             }
-            page.appendChild(determinationSummary);
+            host.appendChild(determinationSummary);
         }
 
         if (findings.length === 0) {
@@ -9584,22 +10051,14 @@ export class DevToolsWindow {
                     t(anyEnabled ? 'rules.cleanDescription' : 'rules.disabledDescription'),
                 ),
             );
-            page.appendChild(empty);
-            page.append(
-                this.renderReviewedFindings(snapshot, reviewResult),
-                this.renderRuleAuditLog(),
+            host.appendChild(empty);
+            this.appendRuleSupportingSections(
+                host,
+                snapshot,
+                analysis,
+                findings,
+                reviewResult,
             );
-            if (this.ruleReviewStatus) {
-                const status = element('p', {
-                    className: this.ruleReviewStatusIsError
-                        ? 'st-devtools-rule-review-status is-error'
-                        : 'st-devtools-rule-review-status',
-                    text: this.ruleReviewStatus,
-                });
-                status.setAttribute('role', 'status');
-                status.setAttribute('aria-live', 'polite');
-                page.appendChild(status);
-            }
             return page;
         }
 
@@ -9714,22 +10173,14 @@ export class DevToolsWindow {
             card.appendChild(this.renderFindingReviewControls(snapshot, item));
             list.appendChild(card);
         }
-        page.appendChild(list);
-        page.append(
-            this.renderReviewedFindings(snapshot, reviewResult),
-            this.renderRuleAuditLog(),
+        host.appendChild(list);
+        this.appendRuleSupportingSections(
+            host,
+            snapshot,
+            analysis,
+            findings,
+            reviewResult,
         );
-        if (this.ruleReviewStatus) {
-            const status = element('p', {
-                className: this.ruleReviewStatusIsError
-                    ? 'st-devtools-rule-review-status is-error'
-                    : 'st-devtools-rule-review-status',
-                text: this.ruleReviewStatus,
-            });
-            status.setAttribute('role', 'status');
-            status.setAttribute('aria-live', 'polite');
-            page.appendChild(status);
-        }
         return page;
     }
 
@@ -9749,16 +10200,20 @@ export class DevToolsWindow {
         const caseSensitive = element('input');
         caseSensitive.type = 'checkbox';
         caseLabel.append(caseSensitive, document.createTextNode(t('search.matchCase')));
-        const options = element('div', { className: 'st-devtools-search-options' });
-        options.append(
-            explainedTitle(
-                t('search.optionsTitle'),
-                t('search.optionsDescription'),
-                { className: 'st-devtools-search-options-title' },
-            ),
-            regexLabel,
-            caseLabel,
-        );
+        const options = element('details', {
+            className: 'st-devtools-search-options st-devtools-disclosure',
+        });
+        const optionsSummary = element('summary');
+        optionsSummary.appendChild(explainedTitle(
+            t('search.optionsTitle'),
+            t('search.optionsDescription'),
+            { className: 'st-devtools-search-options-title' },
+        ));
+        const optionsBody = element('div', {
+            className: 'st-devtools-search-options-body',
+        });
+        optionsBody.append(regexLabel, caseLabel);
+        options.append(optionsSummary, optionsBody);
         controls.append(input, options);
         const status = element('p', { className: 'st-devtools-search-status' });
         const statusId = `st-devtools-search-status-${++fieldSequence}`;

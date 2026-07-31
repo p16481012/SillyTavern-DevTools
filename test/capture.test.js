@@ -164,6 +164,60 @@ test('request-ready capture pairs settings without mutating event payloads', asy
     assert.equal(saved[0].profileContext.chat.key.includes('chat'), false);
 });
 
+test('capture status reports a bounded capturing-processing-saved sequence', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const statuses = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail);
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'private status payload' }],
+        request_id: 'private-status-id',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'private status payload' }],
+        request_id: 'private-status-id',
+    });
+    await waitFor(() => saved.length === 1);
+
+    assert.deepEqual(
+        statuses.map(({ state }) => state),
+        ['capturing', 'processing', 'saved'],
+    );
+    assert.deepEqual(Object.keys(statuses[0]).sort(), [
+        'at',
+        'promptType',
+        'state',
+    ]);
+    for (const detail of statuses.slice(1)) {
+        assert.deepEqual(Object.keys(detail).sort(), [
+            'at',
+            'promptType',
+            'stage',
+            'state',
+        ]);
+        assert.equal(detail.stage, 'backend-request-ready');
+    }
+    assert.equal(statuses.every((detail) => Object.isFrozen(detail)), true);
+    assert.equal(statuses.every((detail) => Number.isFinite(detail.at)), true);
+    const serialized = JSON.stringify(statuses);
+    assert.equal(serialized.includes('private status payload'), false);
+    assert.equal(serialized.includes('private-status-id'), false);
+    assert.equal(serialized.includes('test-model'), false);
+    assert.equal(serialized.includes('makersuite'), false);
+});
+
 test('capture namespaces a shared chat id by character or group owner', async () => {
     const captureContext = async (overrides) => {
         const eventSource = new FakeEventSource();
@@ -587,11 +641,15 @@ test('storage failures expose the same snapshot for an idempotent retry', async 
     };
     let failure = null;
     let success = null;
+    const statuses = [];
     controller.addEventListener('capture-error', (event) => {
         failure = event.detail;
     });
     controller.addEventListener('snapshot', (event) => {
         success = event.detail;
+    });
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail);
     });
 
     await assert.rejects(() => controller.storeSnapshot(snapshot), /IndexedDB unavailable/);
@@ -604,6 +662,9 @@ test('storage failures expose the same snapshot for an idempotent retry', async 
     assert.equal(retried.id, snapshot.id);
     assert.equal(success.id, snapshot.id);
     assert.notEqual(retried, snapshot);
+    assert.deepEqual(statuses.map(({ state }) => state), ['failed', 'saved']);
+    assert.equal(JSON.stringify(statuses).includes('retry-me'), false);
+    assert.equal(JSON.stringify(statuses).includes('IndexedDB unavailable'), false);
 });
 
 test('generation stop updates an already stored snapshot without changing its id', async () => {

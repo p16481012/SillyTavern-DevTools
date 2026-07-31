@@ -155,7 +155,80 @@ test('chat generateRaw prompt and request stay outside capture while user captur
     assert.equal(persisted.includes('ST_DEVTOOLS_SEMANTIC'), false);
 });
 
-test('a semantic prompt after the scan bound cannot fall back into a snapshot', async () => {
+test('semantic exclusions and safety skips expose bounded status only', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const statuses = [];
+    const gate = new SemanticCaptureGate({
+        crypto: deterministicCrypto(),
+        ttlMs: 1_000,
+    });
+    const context = contextFor(eventSource);
+    const controller = controllerFor(context, gate, saved, 5);
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail);
+    });
+    const armed = gate.arm({
+        prompt: 'private semantic status payload',
+        promptType: 'chat-completion',
+    });
+    const semanticMessages = [{ role: 'user', content: armed.prompt }];
+
+    eventSource.emit('chat_completion_prompt_ready', {
+        chat: semanticMessages,
+        dryRun: false,
+    });
+    eventSource.emit('chat_completion_settings_ready', {
+        messages: semanticMessages,
+    });
+    eventSource.emit('chat_completion_settings_ready', {
+        messages: semanticMessages,
+    });
+    await delay(10);
+
+    assert.deepEqual(
+        statuses.map(({ state }) => state),
+        ['excluded-semantic', 'excluded-semantic', 'excluded-semantic'],
+    );
+    assert.equal(statuses.every((detail) => (
+        Object.isFrozen(detail)
+        && Number.isFinite(detail.at)
+        && detail.promptType === 'chat-completion'
+        && typeof detail.stage === 'string'
+    )), true);
+    assert.equal(saved.length, 0);
+    const serialized = JSON.stringify(statuses);
+    assert.equal(serialized.includes('private semantic status payload'), false);
+    assert.equal(serialized.includes('ST_DEVTOOLS_SEMANTIC'), false);
+    assert.equal(serialized.includes('semantic-test-chat'), false);
+    assert.equal(serialized.includes('chat-model'), false);
+    assert.equal(serialized.includes('openrouter'), false);
+    gate.disarm(armed.ticket);
+
+    const safetyStatuses = [];
+    const safetyEventSource = new FakeEventSource();
+    const safetyContext = contextFor(safetyEventSource);
+    const safetyController = controllerFor(safetyContext, {
+        decide: () => 'ambiguous',
+    }, saved, 5);
+    safetyController.addEventListener('capture-status', (event) => {
+        safetyStatuses.push(event.detail);
+    });
+    safetyEventSource.emit('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'private ambiguous payload' }],
+        dryRun: false,
+    });
+    await delay(10);
+
+    assert.deepEqual(
+        safetyStatuses.map(({ state }) => state),
+        ['skipped-safety'],
+    );
+    assert.equal(JSON.stringify(safetyStatuses).includes('private ambiguous payload'), false);
+    assert.equal(saved.length, 0);
+});
+
+test('a semantic prompt after the legacy scan bound stays outside snapshots', async () => {
     const eventSource = new FakeEventSource();
     const saved = [];
     const gate = new SemanticCaptureGate({
@@ -196,6 +269,42 @@ test('a semantic prompt after the scan bound cannot fall back into a snapshot', 
     assert.equal(saved[0].payload[0].content, 'ordinary identified request');
     const persisted = JSON.stringify(saved);
     assert.equal(persisted.includes('semantic prompt hidden'), false);
+    assert.equal(persisted.includes('ST_DEVTOOLS_SEMANTIC'), false);
+    gate.disarm(armed.ticket);
+});
+
+test('a long ordinary chat still creates a fallback snapshot while a semantic call is active', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const gate = new SemanticCaptureGate({
+        crypto: deterministicCrypto(),
+        ttlMs: 1_000,
+    });
+    const context = contextFor(eventSource);
+    controllerFor(context, gate, saved, 5);
+    const armed = gate.arm({
+        prompt: 'slow semantic call still awaiting its prompt event',
+        promptType: 'chat-completion',
+    });
+    const messages = Array.from({ length: 130 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `ordinary long chat message ${index}`,
+    }));
+
+    eventSource.emit('chat_completion_prompt_ready', {
+        chat: messages,
+        dryRun: false,
+    });
+    await waitFor(() => saved.length === 1);
+
+    assert.equal(saved[0].capture.stage, 'prompt-ready');
+    assert.equal(saved[0].payload.length, messages.length);
+    assert.equal(
+        saved[0].payload.at(-1).content,
+        messages.at(-1).content,
+    );
+    const persisted = JSON.stringify(saved);
+    assert.equal(persisted.includes('slow semantic call'), false);
     assert.equal(persisted.includes('ST_DEVTOOLS_SEMANTIC'), false);
     gate.disarm(armed.ticket);
 });

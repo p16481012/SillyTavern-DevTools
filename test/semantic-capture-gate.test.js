@@ -262,13 +262,13 @@ test('bounded request scanning fails closed without invoking proxy traps unsafel
     );
 });
 
-test('an incomplete bounded scan never allows a semantic prompt hidden after 256 strings', () => {
+test('an incomplete bounded scan never allows a semantic prompt hidden after the expanded bound', () => {
     const gate = new SemanticCaptureGate({ crypto: deterministicCrypto() });
     const armed = gate.arm({
         prompt: 'semantic prompt after the bounded prefix',
         promptType: 'chat-completion',
     });
-    const messages = Array.from({ length: 130 }, (_, index) => ({
+    const messages = Array.from({ length: 2_050 }, (_, index) => ({
         role: 'user',
         content: `ordinary bounded prefix ${index}`,
     }));

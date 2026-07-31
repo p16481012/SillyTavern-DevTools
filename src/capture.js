@@ -16,6 +16,18 @@ import {
 import { transformSnapshotPrivacy } from './snapshot-privacy.js';
 
 const DEFAULT_SETTINGS_WAIT_MS = 1500;
+const CAPTURE_STATUS_STATES = new Set([
+    'capturing',
+    'processing',
+    'saved',
+    'failed',
+    'excluded-semantic',
+    'skipped-safety',
+]);
+const CAPTURE_PROMPT_TYPES = new Set([
+    'chat-completion',
+    'text-completion',
+]);
 
 function getEventTypes(context) {
     return context.eventTypes ?? context.event_types ?? {};
@@ -313,6 +325,24 @@ export class CaptureController extends EventTarget {
         }
     }
 
+    dispatchCaptureStatus(state, {
+        promptType = null,
+        stage = null,
+    } = {}) {
+        if (!CAPTURE_STATUS_STATES.has(state)) return null;
+        const detail = { state };
+        if (CAPTURE_PROMPT_TYPES.has(promptType)) {
+            detail.promptType = promptType;
+        }
+        if (typeof stage === 'string' && stage.length > 0 && stage.length <= 64) {
+            detail.stage = stage;
+        }
+        detail.at = Date.now();
+        Object.freeze(detail);
+        this.dispatchEvent(new CustomEvent('capture-status', { detail }));
+        return detail;
+    }
+
     start() {
         if (this.started) {
             return;
@@ -377,13 +407,26 @@ export class CaptureController extends EventTarget {
             if (data?.dryRun || !Array.isArray(data?.chat)) {
                 return;
             }
-            if (
-                this.semanticCaptureDecision(
-                    'prompt',
-                    'chat-completion',
-                    data.chat,
-                ) !== 'allow'
-            ) {
+            const semanticDecision = this.semanticCaptureDecision(
+                'prompt',
+                'chat-completion',
+                data.chat,
+            );
+            if (semanticDecision === 'suppress') {
+                this.dispatchCaptureStatus('excluded-semantic', {
+                    promptType: 'chat-completion',
+                    stage: 'prompt-ready',
+                });
+                return;
+            }
+            if (semanticDecision === 'ambiguous') {
+                this.dispatchCaptureStatus('skipped-safety', {
+                    promptType: 'chat-completion',
+                    stage: 'prompt-ready',
+                });
+                return;
+            }
+            if (semanticDecision !== 'allow') {
                 return;
             }
             this.enqueueCapture('chat-completion', data.chat, {
@@ -399,13 +442,26 @@ export class CaptureController extends EventTarget {
             if (current.mainApi === 'openai') {
                 return;
             }
-            if (
-                this.semanticCaptureDecision(
-                    'prompt',
-                    'text-completion',
-                    data.prompt,
-                ) !== 'allow'
-            ) {
+            const semanticDecision = this.semanticCaptureDecision(
+                'prompt',
+                'text-completion',
+                data.prompt,
+            );
+            if (semanticDecision === 'suppress') {
+                this.dispatchCaptureStatus('excluded-semantic', {
+                    promptType: 'text-completion',
+                    stage: 'prompt-ready',
+                });
+                return;
+            }
+            if (semanticDecision === 'ambiguous') {
+                this.dispatchCaptureStatus('skipped-safety', {
+                    promptType: 'text-completion',
+                    stage: 'prompt-ready',
+                });
+                return;
+            }
+            if (semanticDecision !== 'allow') {
                 return;
             }
             this.enqueueCapture('text-completion', data.prompt, {
@@ -452,6 +508,7 @@ export class CaptureController extends EventTarget {
     }
 
     enqueueCapture(promptType, mutablePayload, { correlationId = null } = {}) {
+        this.dispatchCaptureStatus('capturing', { promptType });
         const contextState = sanitizeCaptureValue(
             snapshotContext(this.getContext()),
             'contextState',
@@ -530,10 +587,14 @@ export class CaptureController extends EventTarget {
             promptType,
             mutableRequestBody,
         );
-        if (
-            semanticDecision === 'suppress'
-            || (semanticDecision === 'ambiguous' && !requestCorrelationId)
-        ) {
+        if (semanticDecision === 'suppress') {
+            this.dispatchCaptureStatus('excluded-semantic', {
+                promptType,
+                stage,
+            });
+            return;
+        }
+        if (semanticDecision === 'ambiguous' && !requestCorrelationId) {
             return;
         }
         const claim = this.generationLedger.claimRequest({
@@ -610,6 +671,10 @@ export class CaptureController extends EventTarget {
         });
 
         setTimeout(() => {
+            this.dispatchCaptureStatus('processing', {
+                promptType: pending.promptType,
+                stage,
+            });
             this.persistCapture({
                 contextState: pending.contextState,
                 payload,
@@ -940,6 +1005,10 @@ export class CaptureController extends EventTarget {
                 partitionChatId: snapshot.storageChatId,
             });
         } catch (error) {
+            this.dispatchCaptureStatus('failed', {
+                promptType: snapshot?.promptType,
+                stage: snapshot?.capture?.stage,
+            });
             this.dispatchEvent(new CustomEvent('capture-error', {
                 detail: {
                     operation: 'addSnapshot',
@@ -949,6 +1018,10 @@ export class CaptureController extends EventTarget {
             }));
             throw error;
         }
+        this.dispatchCaptureStatus('saved', {
+            promptType: snapshot?.promptType,
+            stage: snapshot?.capture?.stage,
+        });
         this.dispatchEvent(new CustomEvent('snapshot', { detail: snapshot }));
         return snapshot;
     }

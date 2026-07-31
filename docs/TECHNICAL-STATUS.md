@@ -1,4 +1,12 @@
-# v0.11.0 기술 구현 현황
+# v0.11.1 기술 구현 현황
+
+## v0.11.1 패치
+
+- 활성 AI semantic gate와 긴 일반 채팅이 겹칠 때 기존 256개 문자열 탐색 한계 때문에 prompt 전체가 `ambiguous`로 폐기되어 fallback 스냅샷도 만들어지지 않던 회귀 수정
+- gate 탐색 상한을 2MiB·8,192개 노드·4,096개 문자열로 유지해 일반적인 장문 채팅을 판별하고, 이 상한을 넘겨 exact AI 요청 여부를 확인할 수 없는 입력은 계속 fail-closed
+- `capture-status` 이벤트는 동결된 `{ state, promptType?, stage?, at }`만 전달하며 원문·snapshot/chat ID·provider/model·오류 메시지를 전달하지 않음
+- 6개 기능 탭을 `프롬프트`·`검사`·`기록`·`도구` 4개 작업과 세부 탐색으로 재구성하고 빠른 시작·도움말·캡처 상태 표시 추가
+- 규칙 결과를 설정보다 먼저 배치하고 AI·분석 상세·규칙 설정·비교 정책은 펼칠 때 렌더링하며, 검색 필터·타임라인 저장 관리·설정 고급 항목은 disclosure로 정리
 
 ## 구현 완료
 
@@ -181,6 +189,7 @@
 - 입력 토큰은 로컬 추정이고 응답 상한은 비용 상한과 같지 않습니다. 사용자 가격 override 비용도 실제 provider 청구를 보증하지 않습니다.
 - AbortSignal과 timeout은 호출자에게 논리적으로 취소를 제공하고 늦은 결과를 버리지만, 공개 `generateRaw()`가 이미 시작한 provider 계산·전송·과금을 물리적으로 중단한다고 보장하지 않습니다.
 - self-capture nonce gate는 호출별 ticket의 AI prompt·prompt type exact match와 그 semantic 호출의 exact duplicate만 제외합니다. 모호한 id-less 동시 요청은 fail-closed이므로 일부 capture가 미연결 상태로 남을 수 있지만 다른 pending 요청을 추측 소비하지 않습니다.
+- v0.11.1 gate는 최대 2MiB·8,192개 노드·4,096개 문자열을 검사합니다. 기존 256개 문자열 경계를 넘는 일반 장문 채팅은 정상 캡처하고, 새 상한도 넘어 exact nonce를 확인할 수 없으면 AI 원문 저장을 피하기 위해 prompt 단계에서 `skipped-safety`로 닫습니다.
 - AI 결과와 선택은 메모리 전용이며 새로고침하면 사라집니다. cache는 전체 raw prompt·provider response와 전용 `source.content`·`evidence.quote` 필드를 저장하지 않지만 title·summary·rationale 같은 정규화 제안 텍스트는 TTL 동안 유지하고 모델이 반복한 원문 표현을 포함할 수 있습니다. 영구 결과 이력·감사 로그 또는 익명화 경계가 아닙니다.
 - strict schema와 evidence offset 검증은 응답이 준비된 원문을 정확히 인용했는지 확인하는 경계입니다. 제안의 사실성·유용성·안전성 또는 자연어 의미 판단의 정확도를 보증하지 않습니다.
 
@@ -190,12 +199,12 @@
 
 - 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
 - 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- 정보 구조가 안정된 뒤 코치마크·워크스루를 구현할 수 있는 용어·진입점·건너뛰기·다시 보기 기반
+- v0.11.1의 4개 작업 탐색·빠른 시작·도움말에 대한 실사용 피드백 수집과 접근성 검증
 
-세부 기능은 v0.11.0 사용자 검토 결과 뒤 확정합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.11.1 사용자 검토 결과 뒤 확정합니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.11.0의 실제 provider별 동의·identity·취소·self-capture와 제안 품질을 사용자 체크리스트로 확인합니다.
-2. v0.12.0에서 평가 corpus·품질 회귀·온보딩 기반을 보강합니다.
+1. v0.11.1의 일반 요청 캡처, AI 요청 제외, 작업 중심 탐색과 도움말을 사용자 체크리스트로 확인합니다.
+2. v0.12.0에서 AI 평가 corpus·품질 회귀·provider 호환성·접근성을 보강합니다.
 3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.11.0의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.11.1의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -26,6 +26,10 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 11. 캡처 시점의 사용자 설정에 따라 완성된 스냅샷을 `full`·`redacted`·`metadata` 중 하나로 단방향 변환한 뒤, 원래 채팅 ID는 저장 partition 선택에만 사용하고 변환된 스냅샷을 타임라인에 저장합니다.
 12. 같은 채팅의 저장·읽기·삭제·비우기는 채팅 키 잠금으로 직렬화하고, 모든 저장 변경과 전체 삭제·정책 적용·archive 가져오기는 추가 전역 잠금으로 교차 실행을 막습니다. lifecycle·usage 후속 변경은 저장 identity를 유지하는 원자적 snapshot updater를 사용합니다.
 13. 저장에 실패하면 계산을 마친 동일 스냅샷과 오류를 UI에 전달하여 같은 ID로 재시도합니다.
+
+### 개인정보 없는 캡처 상태
+
+v0.11.1의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`로 제한합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장된 스냅샷 전달에, `capture-error`는 동일 스냅샷 재시도에 계속 사용합니다.
 
 ## 캡처 경계
 
@@ -192,6 +196,8 @@ v0.11.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 
 AI prompt와 동시에 식별자 없는 일반 사용자 요청이 도착해 어느 요청인지 안전하게 구분할 수 없으면 gate와 기존 generation ledger 모두 임의 FIFO 연결을 하지 않습니다. explicit public ID가 있는 정상 사용자 요청은 그대로 정확 연결합니다. 이 fail-closed 경계는 AI 호출을 숨기기 위해 다른 사용자의 capture를 소비하는 것을 막습니다.
 
+v0.11.1에서는 semantic payload 탐색을 최대 2MiB·8,192개 노드·4,096개 문자열로 제한합니다. 이는 기존 256개 문자열 경계 때문에 긴 일반 채팅 prompt 자체가 폐기되던 회귀를 막으면서도, 새 상한을 넘겨 nonce exact match 여부를 증명할 수 없는 입력은 `skipped-safety`로 닫아 AI 원문이 스냅샷으로 들어가지 않게 합니다.
+
 ### 정책 V2 모듈 경계
 
 | 모듈 | 책임 | 변경하지 않는 것 |
@@ -254,6 +260,12 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 - 미리보기와 정적 Rule Inspector는 자연어 의미 전체, 조건 논리, 실제 우선순위 승자를 판정하지 않습니다. 분석 상한 이후의 원자·관계는 생략될 수 있습니다.
 - 로컬 감사 기록은 최대 200건·256 KiB이며 설정 전체 대신 digest와 제한된 요약을 저장합니다. 같은 브라우저 사용자가 수정·삭제할 수 있으므로 보안 로그나 부인 방지 기록이 아닙니다.
 - 정책 가져오기는 Rule Inspector 설정 초안 교체입니다. IndexedDB 스냅샷 백업·복원, 타임라인 병합, 현재 정책과의 자동 merge 기능은 아닙니다.
+
+## 작업 중심 UI와 지연 공개
+
+1차 탐색은 `프롬프트`·`검사`·`기록`·`도구` 네 작업으로 제한하고 기존 세부 기능은 선택한 작업의 2차 탐색에 연결합니다. 첫 스냅샷 전 빠른 시작과 상단 도움말은 동일한 핵심 흐름을 설명하며 430px 이하에서는 버튼과 탐색 항목을 재배치합니다.
+
+규칙 검사는 결과를 먼저 렌더링하고 설정·비교 정책·분석 상세·AI 의미 검사 영역은 사용자가 펼칠 때 내용을 생성합니다. 검색 필터, 타임라인 저장 관리와 설정 고급 항목도 disclosure 안에 배치해 첫 화면의 설명·스크롤 부담을 줄입니다. 코치마크·워크스루는 이 정보 구조의 실사용 피드백을 받은 뒤 별도 접근성 계약과 함께 설계합니다.
 
 ## 불투명 테마
 

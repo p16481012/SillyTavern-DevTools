@@ -59,7 +59,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.11.0',
+        extensionVersion: '0.11.1',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -955,6 +955,14 @@ async function runSandboxExclusiveImport(owner, operation) {
 
 const capture = new EventTarget();
 capture.retrySnapshot = async (snapshot) => {
+    capture.dispatchEvent(new CustomEvent('capture-status', {
+        detail: {
+            state: 'saved',
+            promptType: snapshot?.promptType,
+            stage: snapshot?.capture?.stage,
+            at: Date.now(),
+        },
+    }));
     capture.dispatchEvent(new CustomEvent('snapshot', { detail: structuredClone(snapshot) }));
     return snapshot;
 };
@@ -1380,7 +1388,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.11.0',
+    version: '0.11.1',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1425,6 +1433,14 @@ document.body.dataset.fixtureFeatures = [
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
 document.getElementById('sandbox-storage-error').addEventListener('click', () => {
+    capture.dispatchEvent(new CustomEvent('capture-status', {
+        detail: {
+            state: 'failed',
+            promptType: timeline.at(-1)?.promptType,
+            stage: timeline.at(-1)?.capture?.stage,
+            at: Date.now(),
+        },
+    }));
     capture.dispatchEvent(new CustomEvent('capture-error', {
         detail: {
             operation: 'addSnapshot',
@@ -1508,7 +1524,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.11.0',
+        extensionVersion: '0.11.1',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,

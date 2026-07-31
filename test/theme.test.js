@@ -91,7 +91,7 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
     const panel = cssBlock(css, '.st-devtools-window');
     const activeTab = cssBlock(css, '.st-devtools-tab.active');
     const focusTab = cssBlock(css, '.st-devtools-tab:focus-visible');
-    const searchOptions = cssBlock(css, '.st-devtools-search-options');
+    const searchOptionsBody = cssBlock(css, '.st-devtools-search-options-body');
 
     assert.match(actionButton, /white-space:\s*normal/);
     assert.match(actionButton, /min-width:\s*0/);
@@ -102,8 +102,123 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
     assert.match(panel, /word-break:\s*keep-all/);
     assert.match(activeTab, /border-bottom-color:/);
     assert.doesNotMatch(focusTab, /background:/);
-    assert.match(searchOptions, /display:\s*flex/);
-    assert.match(ui, /className:\s*'st-devtools-search-options'/);
+    assert.match(searchOptionsBody, /display:\s*flex/);
+    assert.match(
+        ui,
+        /className:\s*'st-devtools-search-options st-devtools-disclosure'/,
+    );
+});
+
+test('beginner navigation, capture status, and quick start stay compact and accessible', async () => {
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
+    const panel = cssBlock(css, '.st-devtools-window');
+    const primaryTabs = cssBlock(css, '.st-devtools-primary-tabs');
+    const primaryTab = cssBlock(css, '.st-devtools-primary-tab');
+    const secondaryTabs = cssBlock(css, '.st-devtools-secondary-tabs');
+    const secondaryButton = cssBlock(css, '.st-devtools-secondary-tabs > button');
+    const headerAction = cssBlock(css, '.st-devtools-header-actions .menu_button');
+    const captureStatus = cssBlock(css, '.st-devtools-capture-status');
+    const helpPanel = cssBlock(css, '.st-devtools-help-panel');
+    const quickStartStep = cssBlock(css, '.st-devtools-quick-start-step');
+    const settingsGroupSummary = cssBlock(
+        css,
+        '.st-devtools-settings-group > summary',
+    );
+    const settingsGroupContent = cssBlock(
+        css,
+        '.st-devtools-settings-group-content',
+    );
+
+    assert.match(
+        panel,
+        /grid-template-rows:\s*auto auto auto auto minmax\(0, 1fr\)/,
+    );
+    assert.match(primaryTabs, /display:\s*grid/);
+    assert.match(
+        primaryTabs,
+        /grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/,
+    );
+    assert.match(primaryTabs, /overflow:\s*visible/);
+    assert.match(primaryTab, /min-height:\s*44px/);
+    assert.match(primaryTab, /word-break:\s*keep-all/);
+    assert.match(secondaryTabs, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+    assert.match(secondaryTabs, /overflow-x:\s*hidden/);
+    assert.match(secondaryButton, /min-height:\s*44px/);
+    assert.match(headerAction, /display:\s*inline-grid/);
+    assert.match(headerAction, /width:\s*2\.1rem/);
+    assert.match(headerAction, /height:\s*2\.1rem/);
+    assert.match(headerAction, /place-items:\s*center/);
+    assert.match(captureStatus, /border-left:\s*3px solid var\(--st-devtools-capture-color\)/);
+    assert.match(css, /\.st-devtools-capture-status\.is-saved[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-success\)/);
+    assert.match(css, /\.st-devtools-capture-status\.is-failed[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-danger\)/);
+    assert.match(css, /\.st-devtools-help-overlay\[hidden\][\s\S]*?display:\s*none/);
+    assert.match(helpPanel, /width:\s*min\(560px, 100%\)/);
+    assert.match(quickStartStep, /grid-template-columns:\s*1\.75rem minmax\(0, 1fr\)/);
+    assert.match(settingsGroupSummary, /min-height:\s*44px/);
+    assert.match(settingsGroupContent, /display:\s*grid/);
+    assert.match(
+        css,
+        /@media\s*\(max-width:\s*700px\)[\s\S]*?\.st-devtools-primary-tabs[\s\S]*?overflow-x:\s*hidden/,
+    );
+    assert.match(
+        css,
+        /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?animation-duration:\s*0\.01ms\s*!important/,
+    );
+    assert.match(css, /\.st-devtools-window :is\([\s\S]*?\):focus-visible/);
+
+    const expectedKorean = new Map([
+        ['nav.prompt', '프롬프트'],
+        ['nav.inspect', '검사'],
+        ['nav.history', '기록'],
+        ['nav.tools', '도구'],
+        ['nav.label', '주요 기능'],
+        ['nav.secondaryLabel', '세부 기능'],
+        ['tab.explorer', '전송 프롬프트'],
+        ['tab.timeline', '기록'],
+        ['tab.diff', '변경점'],
+        ['tab.context', '요청 상세'],
+        ['tab.search', '찾기'],
+        ['snapshot.label', '현재 요청'],
+        ['capture.status.label', '캡처 상태'],
+        ['action.refresh', '새로고침'],
+        ['action.help', '사용법'],
+        ['action.returnToChat', '채팅으로 돌아가기'],
+        ['rules.semanticDisclosureTitle', 'AI로 더 자세히 보기'],
+        ['rules.advancedAnalysisTitle', '분석 상세'],
+        ['timeline.storageDetailsTitle', '저장 상태와 관리'],
+        ['settings.group.basic', '기본'],
+        ['settings.group.snapshots', '스냅샷'],
+        ['settings.group.advanced', '고급 기능'],
+    ]);
+    for (const [key, value] of expectedKorean) {
+        assert.match(
+            i18n,
+            new RegExp(`'${key.replaceAll('.', '\\.')}':\\s*'${value}'`),
+        );
+    }
+    for (const key of [
+        'capture.status.waiting',
+        'capture.status.capturing',
+        'capture.status.processing',
+        'capture.status.saved',
+        'capture.status.failed',
+        'capture.status.excludedSemantic',
+        'capture.status.skippedSafety',
+        'help.title',
+        'help.description',
+        'help.step1Title',
+        'help.step1Description',
+        'help.step2Title',
+        'help.step2Description',
+        'help.step3Title',
+        'help.step3Description',
+        'help.semanticNote',
+        'help.troubleshootTitle',
+        'help.troubleshootDescription',
+    ]) {
+        assert.match(i18n, new RegExp(`'${key.replaceAll('.', '\\.')}':`));
+    }
 });
 
 test('help tooltips and nested disclosures keep responsive interaction contracts', async () => {
