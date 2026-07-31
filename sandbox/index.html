@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ST DevTools v0.11.1 UI Sandbox</title>
+    <title>ST DevTools v0.11.2 UI Sandbox</title>
     <link rel="stylesheet" href="../style.css">
     <style>
         body {
@@ -21,6 +21,23 @@
         body > p {
             flex-basis: 100%;
         }
+
+        /* Simulate broad SillyTavern theme rules loaded after the extension. */
+        .menu_button {
+            width: 100%;
+            flex: 1 1 100%;
+            writing-mode: vertical-rl;
+        }
+
+        details > summary {
+            justify-content: flex-end;
+            text-align: right;
+        }
+
+        button,
+        select {
+            min-width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -29,6 +46,7 @@
     <button id="sandbox-select-redacted" type="button">원문 제거본 fixture</button>
     <button id="sandbox-select-metadata" type="button">메타데이터 fixture</button>
     <button id="sandbox-storage-error" type="button">저장 실패 재현</button>
+    <button id="sandbox-capture-timeout" type="button">토큰 계산 멈춤 캡처 검사</button>
     <button id="sandbox-storage-mode" type="button">임시 저장 전환</button>
     <button id="sandbox-summary-mode" type="button">요약 재계산 재현</button>
     <button id="sandbox-theme" type="button">밝음·어두움 전환</button>
@@ -39,7 +57,7 @@
     <button id="sandbox-semantic-error" type="button">AI 검사 오류 fixture</button>
     <button id="sandbox-semantic-slow" type="button">AI 검사 취소 fixture</button>
     <p>
-        v0.11.1의 실제 AI 의미 검사 코어와 결정적 가짜 어댑터로 미리보기·매회 동의·
+        v0.11.2의 실제 AI 의미 검사 코어와 결정적 가짜 어댑터로 미리보기·매회 동의·
         엄격한 응답 검증·오류·취소 상태를 검토합니다. 실제 제공자·네트워크 호출은 없습니다.
     </p>
     <script type="module" src="./ui-harness.js"></script>

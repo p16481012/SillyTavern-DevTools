@@ -589,6 +589,50 @@ test('identity changes and aborts require a fresh UI decision without stored con
     assert.equal('consent' in inspector, false);
 });
 
+test('profile route identity binds consent and cache digests to one opaque profile', async () => {
+    const data = fixture();
+    const adapter = new FakeAdapter();
+    adapter.providerIdentity = {
+        status: 'available',
+        provider: 'openrouter',
+        model: 'example/model',
+        routeKind: 'profile',
+        connectionProfileId: 'profile-a',
+    };
+    const inspector = new SemanticInspector({ adapter });
+    const input = {
+        snapshot: data.snapshot,
+        analysis: data.analysis,
+        targetIds: [data.ids.finding],
+    };
+    const profileA = await inspector.prepare(input);
+
+    assert.equal(profileA.preview.providerIdentity.routeKind, 'profile');
+    assert.equal(
+        profileA.preview.providerIdentity.connectionProfileId,
+        'profile-a',
+    );
+    assert.doesNotMatch(profileA.prompt, /profile-a/u);
+
+    adapter.providerIdentity.connectionProfileId = 'profile-b';
+    const profileB = await inspector.prepare(input);
+    assert.notEqual(profileA.requestDigest, profileB.requestDigest);
+
+    adapter.providerIdentity = {
+        status: 'available',
+        provider: 'openrouter',
+        model: 'example/model',
+        routeKind: 'current',
+        connectionProfileId: null,
+    };
+    await assert.rejects(
+        inspector.inspect(profileA),
+        (error) => error.code === 'SEMANTIC_INVALID_INPUT'
+            && error.reason === 'provider-identity-changed',
+    );
+    assert.equal(adapter.calls.length, 0);
+});
+
 test('adapter failures are bounded and never expose provider error text', async () => {
     const data = fixture();
     const adapter = new FakeAdapter();
@@ -610,4 +654,32 @@ test('adapter failures are bounded and never expose provider error text', async 
             && !JSON.stringify(error).includes('secret provider')
         ),
     );
+});
+
+test('connection profile discovery is exposed as an optional UI-safe capability', () => {
+    const profileList = Object.freeze({
+        status: 'available',
+        profiles: Object.freeze([Object.freeze({
+            id: 'profile-id',
+            name: 'Profile',
+            provider: 'openrouter',
+            model: 'model',
+            completionType: 'chat-completion',
+        })]),
+    });
+    const withProfiles = new SemanticInspector({
+        adapter: {
+            generate: async () => '{}',
+            connectionProfiles: () => profileList,
+        },
+    });
+    assert.equal(withProfiles.connectionProfiles(), profileList);
+
+    const withoutProfiles = new SemanticInspector({
+        adapter: { generate: async () => '{}' },
+    });
+    assert.deepEqual(withoutProfiles.connectionProfiles(), {
+        status: 'unavailable',
+        profiles: [],
+    });
 });

@@ -1,4 +1,9 @@
 import { SemanticCaptureGateError } from './semantic-capture-gate.js';
+import {
+    listSemanticConnectionProfiles,
+    normalizeSemanticConnectionProfileId,
+    resolveSemanticConnectionProfile,
+} from './semantic-connection-profiles.js';
 
 const MIN_RESPONSE_TOKEN_CAP = 64;
 const MAX_RESPONSE_TOKEN_CAP = 2_048;
@@ -7,6 +12,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 5 * 60_000;
 const MAX_PROMPT_CHARS = 512 * 1024;
 const MAX_RESPONSE_CHARS = 2 * 1024 * 1024;
+const MAX_RESPONSE_DEPTH = 16;
+const MAX_RESPONSE_NODES = 4_096;
 const MAX_IDENTITY_CHARS = 256;
 const MAX_SCHEMA_DEPTH = 16;
 const MAX_SCHEMA_NODES = 1_024;
@@ -54,6 +61,8 @@ function unavailableIdentity() {
         status: 'unavailable',
         provider: null,
         model: null,
+        routeKind: 'current',
+        connectionProfileId: null,
     });
 }
 
@@ -68,6 +77,29 @@ function readChatModel(context, settings) {
     }
     return safeIdentityString(settings?.model)
         ?? safeIdentityString(settings?.openai_model);
+}
+
+function connectionProfileIdentity(profile) {
+    const provider = safeIdentityString(profile?.provider);
+    const model = safeIdentityString(profile?.model);
+    const connectionProfileId = normalizeSemanticConnectionProfileId(profile?.id);
+    if (!provider || !connectionProfileId) return unavailableIdentity();
+    if (!model) {
+        return Object.freeze({
+            status: 'partial',
+            provider,
+            model: null,
+            routeKind: 'profile',
+            connectionProfileId,
+        });
+    }
+    return Object.freeze({
+        status: 'available',
+        provider,
+        model,
+        routeKind: 'profile',
+        connectionProfileId,
+    });
 }
 
 export function readSemanticProviderIdentity(context) {
@@ -95,12 +127,16 @@ export function readSemanticProviderIdentity(context) {
                 status: 'partial',
                 provider,
                 model: null,
+                routeKind: 'current',
+                connectionProfileId: null,
             });
         }
         return Object.freeze({
             status: 'available',
             provider,
             model,
+            routeKind: 'current',
+            connectionProfileId: null,
         });
     } catch {
         return unavailableIdentity();
@@ -133,9 +169,12 @@ function validatedSignal(signal) {
     return signal;
 }
 
-function validJsonSchema(schema) {
-    if (schema === null || schema === undefined) return true;
-    const stack = [{ value: schema, depth: 0 }];
+function validJsonData(root, {
+    maximumDepth,
+    maximumNodes,
+    maximumChars,
+}) {
+    const stack = [{ value: root, depth: 0 }];
     const seen = new WeakSet();
     let nodes = 0;
     let chars = 0;
@@ -148,16 +187,16 @@ function validJsonSchema(schema) {
         }
         if (typeof value === 'string') {
             chars += value.length;
-            if (chars > MAX_SCHEMA_CHARS) return false;
+            if (chars > maximumChars) return false;
             continue;
         }
-        if (!value || typeof value !== 'object' || depth >= MAX_SCHEMA_DEPTH) {
+        if (!value || typeof value !== 'object' || depth >= maximumDepth) {
             return false;
         }
         if (seen.has(value)) return false;
         seen.add(value);
         nodes += 1;
-        if (nodes > MAX_SCHEMA_NODES) return false;
+        if (nodes > maximumNodes) return false;
 
         let prototype;
         let descriptors;
@@ -188,6 +227,53 @@ function validJsonSchema(schema) {
         }
     }
     return true;
+}
+
+function validJsonSchema(schema) {
+    if (schema === null || schema === undefined) return true;
+    return validJsonData(schema, {
+        maximumDepth: MAX_SCHEMA_DEPTH,
+        maximumNodes: MAX_SCHEMA_NODES,
+        maximumChars: MAX_SCHEMA_CHARS,
+    });
+}
+
+function profileResponseText(response) {
+    if (!response || typeof response !== 'object') return null;
+    let descriptor;
+    try {
+        descriptor = Object.getOwnPropertyDescriptor(response, 'content');
+    } catch {
+        return null;
+    }
+    if (!descriptor || !('value' in descriptor)) return null;
+    if (typeof descriptor.value === 'string') return descriptor.value;
+    if (
+        !descriptor.value
+        || typeof descriptor.value !== 'object'
+        || !validJsonData(descriptor.value, {
+            maximumDepth: MAX_RESPONSE_DEPTH,
+            maximumNodes: MAX_RESPONSE_NODES,
+            maximumChars: MAX_RESPONSE_CHARS,
+        })
+    ) {
+        return null;
+    }
+    try {
+        return JSON.stringify(descriptor.value);
+    } catch {
+        return null;
+    }
+}
+
+function generatedResponseText(response, routeKind) {
+    const text = routeKind === 'profile'
+        ? profileResponseText(response)
+        : response;
+    if (typeof text !== 'string' || text.length > MAX_RESPONSE_CHARS) {
+        return null;
+    }
+    return text;
 }
 
 function validatedRequest({
@@ -240,10 +326,12 @@ export class SemanticProviderAdapter {
     constructor({
         getContext,
         captureGate,
+        getConnectionProfileId = () => null,
         defaultTimeoutMs = DEFAULT_TIMEOUT_MS,
     }) {
         if (
             typeof getContext !== 'function'
+            || typeof getConnectionProfileId !== 'function'
             || !captureGate
             || typeof captureGate.arm !== 'function'
             || typeof captureGate.disarm !== 'function'
@@ -255,7 +343,28 @@ export class SemanticProviderAdapter {
         }
         this.getContext = getContext;
         this.captureGate = captureGate;
+        this.getConnectionProfileId = getConnectionProfileId;
         this.defaultTimeoutMs = defaultTimeoutMs;
+    }
+
+    selectedConnectionProfileId() {
+        try {
+            return normalizeSemanticConnectionProfileId(
+                this.getConnectionProfileId(),
+            );
+        } catch {
+            return null;
+        }
+    }
+
+    connectionProfiles() {
+        let context;
+        try {
+            context = this.getContext();
+        } catch {
+            context = null;
+        }
+        return listSemanticConnectionProfiles(context);
     }
 
     identity() {
@@ -265,7 +374,13 @@ export class SemanticProviderAdapter {
         } catch {
             return unavailableIdentity();
         }
-        return readSemanticProviderIdentity(context);
+        const connectionProfile = resolveSemanticConnectionProfile(
+            context,
+            this.selectedConnectionProfileId(),
+        );
+        return connectionProfile
+            ? connectionProfileIdentity(connectionProfile.profile)
+            : readSemanticProviderIdentity(context);
     }
 
     generate({
@@ -297,16 +412,35 @@ export class SemanticProviderAdapter {
         } catch {
             return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
         }
-        let generateRaw;
-        try {
-            generateRaw = context?.generateRaw;
-        } catch {
-            return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
+        const connectionProfile = resolveSemanticConnectionProfile(
+            context,
+            this.selectedConnectionProfileId(),
+        );
+        let route;
+        if (connectionProfile) {
+            route = {
+                kind: 'profile',
+                service: connectionProfile.service,
+                profile: connectionProfile.profile,
+            };
+        } else {
+            let generateRaw;
+            try {
+                generateRaw = context?.generateRaw;
+            } catch {
+                return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
+            }
+            if (typeof generateRaw !== 'function') {
+                return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
+            }
+            route = {
+                kind: 'current',
+                generateRaw,
+            };
         }
-        if (typeof generateRaw !== 'function') {
-            return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
-        }
-        const promptType = promptTypeForContext(context);
+        const promptType = route.kind === 'profile'
+            ? route.profile.completionType
+            : promptTypeForContext(context);
         if (!promptType) {
             return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
         }
@@ -372,12 +506,40 @@ export class SemanticProviderAdapter {
 
             let underlying;
             try {
-                underlying = Promise.resolve(generateRaw.call(context, {
-                    prompt: armed.prompt,
-                    responseLength: request.responseTokenCap,
-                    trimNames: true,
-                    jsonSchema: request.jsonSchema,
-                }));
+                if (route.kind === 'profile') {
+                    const isTextProfile = (
+                        route.profile.completionType === 'text-completion'
+                    );
+                    const profilePrompt = isTextProfile
+                        ? armed.prompt
+                        : [{ role: 'user', content: armed.prompt }];
+                    const overridePayload = (
+                        route.profile.completionType === 'chat-completion'
+                        && request.jsonSchema
+                    )
+                        ? { json_schema: request.jsonSchema }
+                        : {};
+                    underlying = Promise.resolve(route.service.sendRequest(
+                        route.profile.id,
+                        profilePrompt,
+                        request.responseTokenCap,
+                        {
+                            stream: false,
+                            signal: request.signal,
+                            extractData: true,
+                            includePreset: true,
+                            includeInstruct: !isTextProfile,
+                        },
+                        overridePayload,
+                    ));
+                } else {
+                    underlying = Promise.resolve(route.generateRaw.call(context, {
+                        prompt: armed.prompt,
+                        responseLength: request.responseTokenCap,
+                        trimNames: true,
+                        jsonSchema: request.jsonSchema,
+                    }));
+                }
             } catch {
                 safeDisarm();
                 settled = true;
@@ -392,14 +554,12 @@ export class SemanticProviderAdapter {
                     if (logicallyCancelled) return;
                     settled = true;
                     cleanupLogicalListeners();
-                    if (
-                        typeof response !== 'string'
-                        || response.length > MAX_RESPONSE_CHARS
-                    ) {
+                    const text = generatedResponseText(response, route.kind);
+                    if (text === null) {
                         reject(error(SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE));
                         return;
                     }
-                    resolve(response);
+                    resolve(text);
                 },
                 () => {
                     safeDisarm();

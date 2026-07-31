@@ -17,12 +17,13 @@ test('v0.11 wires the optional semantic service without making startup depend on
     assert.doesNotMatch(source, /generateQuietPrompt|generateRawData|api[_-]?key/iu);
 });
 
-test('v4 preference bootstrap recognizes v3 data before legacy retention fallback', async () => {
+test('v5 preference bootstrap recognizes v4 data before legacy retention fallback', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 
-    assert.match(source, /V3_UI_PREFERENCES_KEY/u);
+    assert.match(source, /V4_UI_PREFERENCES_KEY/u);
     assert.match(
         source,
-        /localStorage\.getItem\(V3_UI_PREFERENCES_KEY\) != null/u,
+        /localStorage\.getItem\(V4_UI_PREFERENCES_KEY\) != null/u,
     );
+    assert.match(source, /currentPreferences\(\)\.semanticConnectionProfileId/u);
 });

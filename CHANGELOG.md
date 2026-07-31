@@ -1,5 +1,29 @@
 # 변경 기록
 
+## 0.11.2 - 2026-07-31
+
+### 캡처 영구 대기 방지
+
+- SillyTavern prompt tokenizer의 Promise가 끝나지 않으면 5초 뒤 UTF-8 byte/3.35 로컬 추정으로 전환하고, 같은 패널 세션에서는 멈춘 tokenizer를 다시 호출하지 않도록 최초 probe로 가용성 판정
+- 개인정보 변환과 스냅샷 저장 작업에 각각 30초 제한을 적용하고, 저장 전 예외·동기 callback 실패·저장소 timeout을 포함한 모든 캡처 경로가 개인정보 없는 `saved` 또는 `failed` 상태로 종결되도록 보강
+- tokenizer·개인정보 처리·저장소의 미종료 Promise와 동시 캡처를 재현해 저장 성공 또는 실패 종결과 상태 detail의 원문 비노출을 검증하는 회귀 테스트 추가
+- 요청 준비가 실패해도 generation ledger의 prompt와 fallback timer를 함께 종료해 다음 요청 상관관계와 세션 정리를 오염시키지 않도록 보강
+
+### 간결한 헤더와 테마 방어
+
+- 설정 옆 헤더 도움말 버튼과 별도 도움말 모달을 제거하고 새로고침·설정·닫기 세 버튼만 유지. 필드별 도움말과 첫 스냅샷 전 빠른 시작은 계속 제공
+- disclosure 제목을 좌측 정렬로 통일하고 기본 펼침 표시자는 유지하며, SillyTavern 전역 테마가 패널 안 `button`·`select`·`.menu_button`의 폭·flex·writing-mode를 덮어쓰지 못하도록 패널 범위 스타일 방어
+- 여러 테마와 430px 화면에서 헤더·disclosure·버튼 배치를 확인하는 UI 회귀 검증 보강
+
+### AI 연결 프로필 선택
+
+- SillyTavern Connection Manager 공개 서비스가 제공하는 지원 프로필을 이름으로 선택해 AI 의미 검사에 사용할 수 있는 설정 추가
+- 설정 V1~V4를 V5로 이전하고 ST DevTools에는 최대 256자의 불투명 profile ID만 저장. API 키·URL·비밀번호·proxy 등 연결 비밀값은 읽거나 저장하지 않도록 프로필 목록을 제한된 표시 필드로 정제
+- 공개 프로필 API가 미지원이거나 저장한 프로필이 사라진 경우 요청 전에 현재 채팅 연결을 사용하고, 선택한 프로필 요청이 시작된 뒤 실패하면 현재 연결로 자동 재시도하지 않아 이중 호출·과금 방지
+- Text Completion 프로필에는 동의 미리보기의 semantic prompt 문자열을 그대로 넘기고 별도 instruct 재구성을 끄며, 연결 프로필의 sampler preset만 적용해 미리보기·토큰 추정·자가 캡처 경계를 일치
+- 미리보기 identity와 cache digest에 현재 연결/프로필 경로 및 opaque profile ID를 결속해 같은 provider/model의 다른 프로필로 바뀌어도 전송 전 실패하고 결과 cache가 섞이지 않도록 보강. 프로필 목록을 일시적으로 읽지 못한 설정 화면은 저장 ID를 노출하지 않은 채 선택을 보존
+- Chat Completion·Text Completion 프로필, 목록 미지원·프로필 소실·프로필 요청 실패와 현재 연결 무재시도 경계를 자동 검증
+
 ## 0.11.1 - 2026-07-31
 
 ### 캡처 회귀 수정과 상태 안내

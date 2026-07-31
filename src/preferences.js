@@ -1,9 +1,14 @@
-export const UI_PREFERENCES_KEY = 'st-devtools:preferences:v4';
+import {
+    normalizeSemanticConnectionProfileId,
+} from './semantic-connection-profiles.js';
+
+export const UI_PREFERENCES_KEY = 'st-devtools:preferences:v5';
+export const V4_UI_PREFERENCES_KEY = 'st-devtools:preferences:v4';
 export const V3_UI_PREFERENCES_KEY = 'st-devtools:preferences:v3';
 export const V2_UI_PREFERENCES_KEY = 'st-devtools:preferences:v2';
 export const V1_UI_PREFERENCES_KEY = 'st-devtools:preferences:v1';
 // Kept for callers that only know about one previous preference version.
-export const LEGACY_UI_PREFERENCES_KEY = V3_UI_PREFERENCES_KEY;
+export const LEGACY_UI_PREFERENCES_KEY = V4_UI_PREFERENCES_KEY;
 export const MIN_TIMELINE_READ_LIMIT = 1;
 export const MAX_TIMELINE_READ_LIMIT = 5_000;
 export const MIN_TIMELINE_RETENTION_LIMIT = 1;
@@ -30,6 +35,8 @@ export const DEFAULT_UI_PREFERENCES = Object.freeze({
     themeMode: 'auto',
     semanticInspectorEnabled: false,
     semanticResponseTokenCap: DEFAULT_SEMANTIC_RESPONSE_TOKEN_CAP,
+    // null deliberately means "use the connection currently active in SillyTavern".
+    semanticConnectionProfileId: null,
 });
 
 function clampInteger(value, fallback, minimum, maximum) {
@@ -46,6 +53,8 @@ function clampDisabledInteger(value, fallback, maximum, minimumWhenEnabled = 1) 
     if (integer <= 0) return 0;
     return Math.min(maximum, Math.max(minimumWhenEnabled, integer));
 }
+
+export { normalizeSemanticConnectionProfileId };
 
 export function normalizeUiPreferences(value = {}) {
     const timelineRetentionLimit = clampInteger(
@@ -89,6 +98,9 @@ export function normalizeUiPreferences(value = {}) {
         MIN_SEMANTIC_RESPONSE_TOKEN_CAP,
         MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
     );
+    const semanticConnectionProfileId = normalizeSemanticConnectionProfileId(
+        value?.semanticConnectionProfileId,
+    );
     return {
         timelineRetentionLimit,
         timelineReadLimit,
@@ -98,7 +110,12 @@ export function normalizeUiPreferences(value = {}) {
         themeMode,
         semanticInspectorEnabled,
         semanticResponseTokenCap,
+        semanticConnectionProfileId,
     };
+}
+
+export function migrateV4UiPreferences(value = {}) {
+    return normalizeUiPreferences(value);
 }
 
 export function migrateV3UiPreferences(value = {}) {
@@ -132,6 +149,8 @@ export function readUiPreferencesFromStorage(storage = globalThis.localStorage) 
     };
     const current = read(UI_PREFERENCES_KEY);
     if (current) return normalizeUiPreferences(current);
+    const v4 = read(V4_UI_PREFERENCES_KEY);
+    if (v4) return migrateV4UiPreferences(v4);
     const v3 = read(V3_UI_PREFERENCES_KEY);
     if (v3) return migrateV3UiPreferences(v3);
     const v2 = read(V2_UI_PREFERENCES_KEY);

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.11.1 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.11.2 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.11.1 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.11\.1'/);
+    assert.match(harness, /extensionVersion:\s*'0\.11\.2'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.11\.1'/);
+    assert.match(harness, /version:\s*'0\.11\.2'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -41,6 +41,8 @@ test('v0.11.1 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /runExclusiveImport\(operation\)/);
     assert.match(harness, /runArchiveImportSmokeTest/);
     assert.match(harness, /runArchiveRollbackSmokeTest/);
+    assert.match(harness, /runHungTokenizerCaptureSmokeTest/);
+    assert.match(harness, /getTokenCountAsync:\s*\(\) => new Promise\(\(\) => \{\}\)/);
     assert.match(harness, /usage-local-estimate/);
     assert.match(harness, /pricing-user-override/);
     assert.match(harness, /pricing-overrides:v1/);
@@ -49,6 +51,8 @@ test('v0.11.1 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /super\.prepare\(options\)/);
     assert.match(harness, /super\.inspect\(prepared,\s*\{\s*signal\s*\}\)/);
     assert.match(harness, /const sandboxSemanticAdapter = \{/);
+    assert.match(harness, /connectionProfiles\(\)/);
+    assert.match(harness, /name:\s*'빠른 검사 프로필'/);
     assert.match(harness, /async generate\(\{\s*prompt,\s*signal\s*\}\)/);
     assert.match(harness, /semanticRequestFromPrompt\(prompt\)/);
     assert.match(harness, /document\.body\.dataset\.semanticCore/);
@@ -63,7 +67,7 @@ test('v0.11.1 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /setSemanticFixtureMode/);
     assert.match(harness, /new CustomEvent\('capture-status'/);
 
-    assert.match(html, /ST DevTools v0\.11\.1 UI Sandbox/);
+    assert.match(html, /ST DevTools v0\.11\.2 UI Sandbox/);
     assert.match(html, /실제 제공자·네트워크 호출은 없습니다/);
     assert.match(html, /sandbox-archive-import-valid/);
     assert.match(html, /sandbox-semantic-success/);

@@ -1,6 +1,8 @@
 import { DevToolsWindow } from '../src/ui.js';
+import { CaptureController } from '../src/capture.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 import { createProfileContext } from '../src/profile-context.js';
+import { createCaptureBoundary } from '../src/request.js';
 import { transformSnapshotPrivacy } from '../src/snapshot-privacy.js';
 import {
     createSnapshotArchive,
@@ -59,7 +61,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.11.1',
+        extensionVersion: '0.11.2',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1270,6 +1272,24 @@ function semanticRequestFromPrompt(prompt) {
     return JSON.parse(prompt.slice(markerIndex + marker.length));
 }
 const sandboxSemanticAdapter = {
+    connectionProfiles() {
+        return {
+            status: 'available',
+            profiles: [{
+                id: 'sandbox-profile-fast',
+                name: '빠른 검사 프로필',
+                provider: 'claude',
+                model: 'claude-sonnet-4',
+                completionType: 'chat-completion',
+            }, {
+                id: 'sandbox-profile-careful',
+                name: '정밀 검사 프로필',
+                provider: 'openrouter',
+                model: 'sandbox-semantic-model',
+                completionType: 'chat-completion',
+            }],
+        };
+    },
     identity() {
         return {
             status: 'available',
@@ -1388,7 +1408,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.11.1',
+    version: '0.11.2',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1421,6 +1441,7 @@ document.body.dataset.fixtureFeatures = [
     'semantic-error',
     'semantic-cancel',
     'semantic-no-provider-call',
+    'semantic-profile-selection',
     'privacy-redacted',
     'privacy-metadata',
     'retention-policy',
@@ -1524,7 +1545,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.11.1',
+        extensionVersion: '0.11.2',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1560,6 +1581,78 @@ async function runArchiveRollbackSmokeTest() {
     return restored;
 }
 
+async function runHungTokenizerCaptureSmokeTest() {
+    const statuses = [];
+    let storedSnapshot = null;
+    const controller = new CaptureController({
+        getContext: () => ({
+            getTokenCountAsync: () => new Promise(() => {}),
+        }),
+        store: {
+            async addSnapshot(snapshot) {
+                storedSnapshot = snapshot;
+            },
+        },
+        version: '0.11.2',
+        tokenCounterWaitMs: 25,
+        storageWaitMs: 1_000,
+    });
+    controller.addEventListener('capture-status', ({ detail }) => {
+        statuses.push(detail.state);
+    });
+    controller.dispatchCaptureStatus('processing', {
+        promptType: 'chat-completion',
+        stage: 'backend-request-ready',
+    });
+    await controller.persistCapture({
+        contextState: {
+            chatId: 'sandbox-hung-tokenizer',
+            messageCount: 1,
+            mainApi: 'openai',
+            model: 'sandbox-model',
+            maxContext: 4_096,
+            maxOutput: 512,
+            chatCompletionSettings: { prompts: [], prompt_order: [] },
+            extensionPrompts: {},
+            chat: [],
+        },
+        payload: [{ role: 'user', content: '캡처 영구 대기 회귀 검사' }],
+        promptType: 'chat-completion',
+        generationType: 'normal',
+        activatedLore: [],
+        capture: createCaptureBoundary({
+            eventName: 'CHAT_COMPLETION_SETTINGS_READY',
+            stage: 'backend-request-ready',
+            requestBodyAvailable: false,
+            fallback: true,
+        }),
+        request: null,
+    });
+    const result = {
+        saved: Boolean(storedSnapshot),
+        states: statuses,
+        totalTokens: storedSnapshot?.stats?.totalTokens ?? null,
+    };
+    document.body.dataset.hungTokenizerCapture = JSON.stringify(result);
+    return result;
+}
+
+document.getElementById('sandbox-capture-timeout')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = '캡처 대기 회귀 검사 중';
+    try {
+        const result = await runHungTokenizerCaptureSmokeTest();
+        button.textContent = result.saved && result.states.at(-1) === 'saved'
+            ? '캡처 대기 회귀 통과'
+            : '캡처 대기 회귀 실패';
+    } catch {
+        button.textContent = '캡처 대기 회귀 실패';
+    } finally {
+        button.disabled = false;
+    }
+});
+
 document.getElementById('sandbox-archive-import-valid')?.addEventListener('click', async () => {
     await runArchiveImportSmokeTest();
 });
@@ -1594,6 +1687,7 @@ globalThis.devToolsSandboxFixtures = {
     },
     runArchiveImportSmokeTest,
     runArchiveRollbackSmokeTest,
+    runHungTokenizerCaptureSmokeTest,
     performance: {
         fixtureSize: timeline.length,
         sourceCount: Number(document.body.dataset.sourceCount),

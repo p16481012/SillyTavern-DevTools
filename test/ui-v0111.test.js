@@ -78,7 +78,7 @@ test('capture status producer emits only bounded public metadata', () => {
     const controller = new CaptureController({
         getContext: () => ({}),
         store: {},
-        version: '0.11.1-test',
+        version: '0.11.2-test',
     });
     const emitted = [];
     controller.addEventListener('capture-status', (event) => {
@@ -123,7 +123,7 @@ test('beginner UI consumes only the capture-status whitelist', () => {
             getContext: () => ({ chatId: 'beginner-chat' }),
             store: {},
             capture,
-            version: '0.11.1-test',
+            version: '0.11.2-test',
         });
 
         assert.equal(capture.listeners.has('capture-status'), true);
@@ -186,7 +186,7 @@ test('header actions and capture status expose explicit accessible names', async
     const ui = await readFile(UI_SOURCE_URL, 'utf8');
     const build = sourceBlock(ui, '\n    build() {', '\n    buildCaptureStatus() {');
 
-    for (const action of ['help', 'settings', 'refresh', 'close']) {
+    for (const action of ['settings', 'refresh', 'close']) {
         assert.match(
             build,
             new RegExp(
@@ -195,6 +195,7 @@ test('header actions and capture status expose explicit accessible names', async
             ),
         );
     }
+    assert.doesNotMatch(build, /action\.help|openHelp|st-devtools-help-overlay/u);
     assert.match(build, /primaryTabs\.setAttribute\('aria-label',\s*t\('nav\.label'\)\)/u);
     assert.match(build, /tabList\.setAttribute\('aria-label',\s*t\('nav\.secondaryLabel'\)\)/u);
 
@@ -226,7 +227,7 @@ test('empty state provides concise quick start and recovery actions', async () =
     const quickStart = sourceBlock(
         ui,
         '\n    renderQuickStart(',
-        '\n    openHelp() {',
+        '\n    syncOpaqueTheme() {',
     );
     assert.match(quickStart, /for \(const index of \[1, 2, 3\]\)/u);
     assert.match(quickStart, /className: 'st-devtools-quick-start-step'/u);
@@ -312,7 +313,6 @@ test('search regex and case options stay collapsed behind a native disclosure', 
 test('beginner UI labels cover navigation, quick start, capture, and recovery states', async () => {
     const i18n = await readFile(I18N_SOURCE_URL, 'utf8');
     const keys = [
-        'action.help',
         'action.returnToChat',
         'nav.label',
         'nav.secondaryLabel',
@@ -340,5 +340,12 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
     ];
     for (const key of keys) {
         assert.equal(i18n.includes(`'${key}':`), true, `missing i18n key: ${key}`);
+    }
+    for (const removedKey of ['action.help', 'help.title', 'help.description']) {
+        assert.equal(
+            i18n.includes(`'${removedKey}':`),
+            false,
+            `removed header help key remains: ${removedKey}`,
+        );
     }
 });

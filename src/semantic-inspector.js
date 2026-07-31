@@ -15,6 +15,7 @@ import {
 } from './pricing-overrides.js';
 import { normalizeProviderId } from './provider-capabilities.js';
 import { sanitizePromptPayload } from './request.js';
+import { normalizeSemanticConnectionProfileId } from './semantic-connection-profiles.js';
 import { canonicalJson, sha256Hex } from './snapshot-privacy.js';
 
 export const SEMANTIC_INSPECTOR_PROTOCOL_VERSION = 1;
@@ -926,6 +927,27 @@ function normalizeIdentity(value, fallback = {}) {
     const modelValue = identity
         ? optionalValue(identity, 'model', null)
         : fallback.model;
+    const routeKindValue = identity
+        ? optionalValue(identity, 'routeKind', null)
+        : (fallback.routeKind ?? null);
+    const connectionProfileIdValue = identity
+        ? optionalValue(identity, 'connectionProfileId', null)
+        : (fallback.connectionProfileId ?? null);
+    const routeKind = routeKindValue == null
+        ? (connectionProfileIdValue == null ? 'current' : 'profile')
+        : routeKindValue;
+    if (!['current', 'profile'].includes(routeKind)) {
+        fail('SEMANTIC_INVALID_INPUT', 'invalid-provider-route');
+    }
+    const connectionProfileId = routeKind === 'profile'
+        ? normalizeSemanticConnectionProfileId(connectionProfileIdValue)
+        : null;
+    if (
+        (routeKind === 'profile' && !connectionProfileId)
+        || (routeKind === 'current' && connectionProfileIdValue != null)
+    ) {
+        fail('SEMANTIC_INVALID_INPUT', 'invalid-provider-route');
+    }
     const provider = providerValue == null ? null : normalizeProviderId(providerValue);
     const model = modelValue == null ? null : normalizeModelId(modelValue);
     if (
@@ -935,11 +957,23 @@ function normalizeIdentity(value, fallback = {}) {
         || (status === 'partial' && model !== null)
     ) {
         if (status === 'unavailable') {
-            return Object.freeze({ status, provider: null, model: null });
+            return Object.freeze({
+                status,
+                provider: null,
+                model: null,
+                routeKind,
+                connectionProfileId,
+            });
         }
         fail('SEMANTIC_INVALID_INPUT', 'invalid-provider-identity');
     }
-    return Object.freeze({ status, provider, model });
+    return Object.freeze({
+        status,
+        provider,
+        model,
+        routeKind,
+        connectionProfileId,
+    });
 }
 
 function previewCost(pricingOverrides, identity, inputTokens, responseTokenCap) {
@@ -1630,7 +1664,9 @@ function hydrateCachedResult(cached, prepared) {
 function sameIdentity(left, right) {
     return left?.status === right?.status
         && left?.provider === right?.provider
-        && left?.model === right?.model;
+        && left?.model === right?.model
+        && left?.routeKind === right?.routeKind
+        && left?.connectionProfileId === right?.connectionProfileId;
 }
 
 function adapterError(error, signal) {
@@ -1730,6 +1766,31 @@ export class SemanticInspector {
         return typeof this.cache.status === 'function'
             ? this.cache.status()
             : Object.freeze({ storage: 'memory-only' });
+    }
+
+    connectionProfiles() {
+        if (typeof this.adapter.connectionProfiles !== 'function') {
+            return Object.freeze({
+                status: 'unavailable',
+                profiles: Object.freeze([]),
+            });
+        }
+        try {
+            const result = this.adapter.connectionProfiles();
+            if (
+                result
+                && ['available', 'unavailable'].includes(result.status)
+                && Array.isArray(result.profiles)
+            ) {
+                return result;
+            }
+        } catch {
+            // Optional profile discovery must not disable the inspector.
+        }
+        return Object.freeze({
+            status: 'unavailable',
+            profiles: Object.freeze([]),
+        });
     }
 
     clearCache() {

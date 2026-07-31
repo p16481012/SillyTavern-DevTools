@@ -8,11 +8,13 @@ import {
     MAX_TIMELINE_READ_LIMIT,
     MAX_TIMELINE_RETENTION_LIMIT,
     migrateLegacyUiPreferences,
+    migrateV4UiPreferences,
     migrateV3UiPreferences,
     migrateV1UiPreferences,
     migrateV2UiPreferences,
     legacyUiPreferencesForExistingData,
     normalizeUiPreferences,
+    normalizeSemanticConnectionProfileId,
     readUiPreferencesFromStorage,
 } from '../src/preferences.js';
 
@@ -30,6 +32,7 @@ test('retention and read limits use separate defaults and clamp to supported ran
         themeMode: 'auto',
         semanticInspectorEnabled: false,
         semanticResponseTokenCap: 512,
+        semanticConnectionProfileId: null,
     });
     assert.deepEqual(normalizeUiPreferences({
         timelineRetentionLimit: 12.9,
@@ -43,6 +46,7 @@ test('retention and read limits use separate defaults and clamp to supported ran
         themeMode: 'auto',
         semanticInspectorEnabled: false,
         semanticResponseTokenCap: 512,
+        semanticConnectionProfileId: null,
     });
     assert.deepEqual(normalizeUiPreferences({
         timelineRetentionLimit: 999,
@@ -56,6 +60,7 @@ test('retention and read limits use separate defaults and clamp to supported ran
         themeMode: 'auto',
         semanticInspectorEnabled: false,
         semanticResponseTokenCap: 512,
+        semanticConnectionProfileId: null,
     });
     assert.equal(
         normalizeUiPreferences({
@@ -96,10 +101,20 @@ test('v0.8.9 read preferences retain the legacy 100 snapshot storage cap', () =>
         themeMode: 'auto',
         semanticInspectorEnabled: false,
         semanticResponseTokenCap: 512,
+        semanticConnectionProfileId: null,
     });
 });
 
-test('v3, v2 and v1 preferences migrate non-destructively to v4 defaults', () => {
+test('v4 through v1 preferences migrate non-destructively to v5 defaults', () => {
+    assert.deepEqual(migrateV4UiPreferences({
+        timelineRetentionLimit: 36,
+        semanticConnectionProfileId: 'profile-from-v4-compatible-data',
+    }), {
+        ...DEFAULT_UI_PREFERENCES,
+        timelineRetentionLimit: 36,
+        timelineReadLimit: 20,
+        semanticConnectionProfileId: 'profile-from-v4-compatible-data',
+    });
     assert.deepEqual(migrateV3UiPreferences({
         timelineRetentionLimit: 42,
         semanticInspectorEnabled: true,
@@ -124,6 +139,7 @@ test('v3, v2 and v1 preferences migrate non-destructively to v4 defaults', () =>
         themeMode: 'dark',
         semanticInspectorEnabled: false,
         semanticResponseTokenCap: 512,
+        semanticConnectionProfileId: null,
     });
     assert.deepEqual(migrateV1UiPreferences({
         timelineReadLimit: 9,
@@ -137,7 +153,26 @@ test('v3, v2 and v1 preferences migrate non-destructively to v4 defaults', () =>
         themeMode: 'light',
         semanticInspectorEnabled: false,
         semanticResponseTokenCap: 512,
+        semanticConnectionProfileId: null,
     });
+});
+
+test('semantic connection selection stores only a bounded opaque profile id', () => {
+    assert.equal(normalizeSemanticConnectionProfileId('profile-id'), 'profile-id');
+    assert.equal(normalizeSemanticConnectionProfileId(''), null);
+    assert.equal(normalizeSemanticConnectionProfileId('bad\nprofile'), null);
+    assert.equal(normalizeSemanticConnectionProfileId('x'.repeat(257)), null);
+    assert.equal(normalizeSemanticConnectionProfileId({ id: 'not-a-string' }), null);
+
+    const selected = normalizeUiPreferences({
+        semanticConnectionProfileId: 'opaque-profile-id',
+        semanticConnectionProfile: {
+            name: 'must not be persisted',
+            secret: 'must not be persisted',
+        },
+    });
+    assert.equal(selected.semanticConnectionProfileId, 'opaque-profile-id');
+    assert.equal(Object.hasOwn(selected, 'semanticConnectionProfile'), false);
 });
 
 test('age, byte and capture policies clamp safely and use zero as disabled', () => {
@@ -165,6 +200,12 @@ test('age, byte and capture policies clamp safely and use zero as disabled', () 
 
 test('storage reads fall through malformed newer preferences without lowering legacy retention', () => {
     const values = new Map([
+        ['st-devtools:preferences:v5', '{malformed'],
+        ['st-devtools:preferences:v4', JSON.stringify({
+            timelineRetentionLimit: 77,
+            timelineReadLimit: 10,
+            semanticConnectionProfileId: 'saved-profile',
+        })],
         ['st-devtools:preferences:v3', '{malformed'],
         ['st-devtools:preferences:v2', JSON.stringify({
             timelineRetentionLimit: 88,
@@ -176,9 +217,9 @@ test('storage reads fall through malformed newer preferences without lowering le
         getItem: (key) => values.get(key) ?? null,
     });
 
-    assert.equal(preferences.timelineRetentionLimit, 88);
-    assert.equal(preferences.timelineReadLimit, 11);
-    assert.equal(preferences.themeMode, 'dark');
+    assert.equal(preferences.timelineRetentionLimit, 77);
+    assert.equal(preferences.timelineReadLimit, 10);
+    assert.equal(preferences.semanticConnectionProfileId, 'saved-profile');
     assert.equal(
         legacyUiPreferencesForExistingData().timelineRetentionLimit,
         LEGACY_TIMELINE_RETENTION_LIMIT,

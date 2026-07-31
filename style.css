@@ -103,7 +103,8 @@
 }
 
 .st-devtools-window .menu_button {
-    flex: 0 1 auto;
+    box-sizing: border-box;
+    flex: 0 0 auto;
     width: auto;
     min-width: 0;
     max-width: 100%;
@@ -111,6 +112,39 @@
     word-break: keep-all;
     overflow-wrap: normal;
     writing-mode: horizontal-tb;
+}
+
+.st-devtools-window button,
+.st-devtools-window select {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+    writing-mode: horizontal-tb;
+}
+
+.st-devtools-window button {
+    flex-grow: 0;
+    flex-shrink: 0;
+}
+
+.st-devtools-window select {
+    flex: 0 1 auto;
+}
+
+.st-devtools-window :where(
+    .st-devtools-settings-actions,
+    .st-devtools-settings-tool-controls,
+    .st-devtools-empty-actions,
+    .st-devtools-tool-row-actions,
+    .st-devtools-toolbar-actions,
+    .st-devtools-rule-setting-actions,
+    .st-devtools-rule-actions,
+    .st-devtools-semantic-controls,
+    .st-devtools-semantic-state,
+    .st-devtools-semantic-consent-actions
+) > button {
+    flex: 0 0 auto;
+    width: auto;
 }
 
 .st-devtools-header-actions .menu_button {
@@ -258,11 +292,27 @@
 }
 
 .st-devtools-semantic-toggle,
+.st-devtools-semantic-profile,
 .st-devtools-semantic-cap {
     display: flex;
     min-width: 0;
     align-items: center;
     gap: 0.5rem;
+}
+
+.st-devtools-semantic-profile {
+    display: grid;
+    align-items: stretch;
+    gap: 0.35rem;
+}
+
+.st-devtools-semantic-profile > select {
+    width: 100%;
+    max-width: 100%;
+}
+
+.st-devtools-semantic-profile-status {
+    margin: 0;
 }
 
 .st-devtools-semantic-cap {
@@ -273,6 +323,7 @@
     width: min(9rem, 45%);
 }
 
+.st-devtools-semantic-profile.is-disabled,
 .st-devtools-semantic-cap.is-disabled {
     opacity: 0.58;
 }
@@ -880,102 +931,6 @@
     }
 }
 
-.st-devtools-header-actions > .st-devtools-help-trigger {
-    box-sizing: border-box;
-    width: 2.1rem;
-    min-width: 2.1rem;
-    height: 2.1rem;
-    min-height: 2.1rem;
-    border: 1px solid var(--st-devtools-border);
-    border-radius: 5px;
-    background: var(--st-devtools-surface);
-    cursor: pointer;
-}
-
-.st-devtools-header-actions > .st-devtools-help-trigger:hover,
-.st-devtools-header-actions > .st-devtools-help-trigger:focus {
-    border: 1px solid var(--SmartThemeQuoteColor, #60a5fa);
-    background: var(--st-devtools-hover);
-}
-
-.st-devtools-header-actions > .st-devtools-help-trigger::before {
-    width: 1.25rem;
-    height: 1.25rem;
-    border: 0;
-    background: transparent;
-    font-size: 0.78rem;
-}
-
-.st-devtools-help-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 25;
-    display: grid;
-    place-items: center;
-    padding: 1rem;
-    background: rgb(0 0 0 / 55%);
-}
-
-.st-devtools-help-overlay[hidden] {
-    display: none;
-}
-
-.st-devtools-help-panel {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    box-sizing: border-box;
-    width: min(560px, 100%);
-    max-width: 100%;
-    max-height: 100%;
-    min-width: 0;
-    overflow: hidden;
-    border: 1px solid var(--st-devtools-border);
-    border-radius: 9px;
-    background: var(--st-devtools-panel-bg);
-    box-shadow: 0 18px 55px rgb(0 0 0 / 50%);
-    color: var(--st-devtools-text);
-}
-
-.st-devtools-help-header {
-    display: flex;
-    min-width: 0;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.85rem 0.95rem;
-    border-bottom: 1px solid var(--st-devtools-border);
-    background: var(--st-devtools-surface);
-}
-
-.st-devtools-help-header h2,
-.st-devtools-help-header p {
-    min-width: 0;
-    margin: 0;
-}
-
-.st-devtools-help-header h2 {
-    font-size: 1.05rem;
-}
-
-.st-devtools-help-header p {
-    margin-top: 0.3rem;
-    opacity: 0.78;
-    line-height: 1.45;
-}
-
-.st-devtools-help-body {
-    display: grid;
-    gap: 0.85rem;
-    min-width: 0;
-    overflow: auto;
-    padding: 0.9rem;
-}
-
-.st-devtools-help-body > p {
-    margin: 0;
-    line-height: 1.5;
-}
-
 .st-devtools-quick-start {
     display: grid;
     gap: 0.7rem;
@@ -1166,6 +1121,20 @@
 
 .st-devtools-window details:not([open]) > :not(summary) {
     display: none !important;
+}
+
+.st-devtools-window :where(details > summary) {
+    display: list-item;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    writing-mode: horizontal-tb;
+}
+
+.st-devtools-window :where(details > summary > *) {
+    min-width: 0;
+    text-align: left;
 }
 
 .st-devtools-disclosure > summary,
@@ -3958,14 +3927,6 @@
         margin: 0.45rem 0.55rem 0;
     }
 
-    .st-devtools-help-overlay {
-        padding: 0.45rem;
-    }
-
-    .st-devtools-help-panel {
-        width: 100%;
-    }
-
     .st-devtools-diff-selectors,
     .st-devtools-search-controls,
     .st-devtools-rule-thresholds,
@@ -4128,8 +4089,7 @@
         gap: 0.25rem;
     }
 
-    .st-devtools-header-actions .menu_button,
-    .st-devtools-header-actions > .st-devtools-help-trigger {
+    .st-devtools-header-actions .menu_button {
         width: 2rem;
         min-width: 2rem;
         height: 2rem;
@@ -4152,10 +4112,6 @@
 
     .st-devtools-empty-actions > .menu_button {
         width: 100%;
-    }
-
-    .st-devtools-help-body {
-        padding: 0.7rem;
     }
 
     .st-devtools-settings-header,

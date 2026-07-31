@@ -1,12 +1,12 @@
 # 아키텍처
 
-이 문서는 v0.11.1의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.11.2의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
 ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이벤트 payload를 수정하지 않습니다. Prompt-ready 리스너는 캡처 대기 항목을 만들고 즉시 반환합니다. 요청 설정 객체는 같은 이벤트의 동기적 후속 변경이 반영될 수 있도록 리스너 반환 직후 복제하며, 토큰 계산과 IndexedDB 쓰기는 이벤트 처리 흐름 밖에서 실행됩니다.
 
-선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 별도의 공개 `getContext().generateRaw()`를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
+선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 ## 캡처 파이프라인
 
@@ -22,14 +22,14 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 7. credential 형태의 필드, 토큰 형태 값, Authorization, URL query 비밀값과 PEM 개인 키를 요청·컨텍스트·로어북·payload 전체에서 제거하고 경로를 기록합니다.
 8. 요청 설정 이벤트가 일정 시간 안에 없으면 prompt-ready payload를 대체 캡처합니다.
 9. `GENERATION_STOPPED` 또는 `GENERATION_ENDED`를 받으면 정확히 식별되거나 하나로 한정된 generation에 연결된 스냅샷의 lifecycle을 같은 ID로 갱신합니다.
-10. prompt tokenizer의 입력 토큰, 소스 연결 상태·payload 구조 위치·멀티모달 토큰 추정치를 비동기로 계산합니다. 유효한 `MESSAGE_RECEIVED` 출력 토큰은 하나의 활성 generation만 고를 수 있을 때 별도 후속 usage로 병합합니다.
-11. 캡처 시점의 사용자 설정에 따라 완성된 스냅샷을 `full`·`redacted`·`metadata` 중 하나로 단방향 변환한 뒤, 원래 채팅 ID는 저장 partition 선택에만 사용하고 변환된 스냅샷을 타임라인에 저장합니다.
+10. prompt tokenizer의 입력 토큰, 소스 연결 상태·payload 구조 위치·멀티모달 토큰 추정치를 비동기로 계산합니다. 패널 세션의 첫 tokenizer 호출을 공유 가용성 probe로 사용하고 5초 안에 끝나지 않으면 나머지 호출을 시작하지 않은 채 같은 세션의 입력 토큰을 `ceil(UTF-8 bytes / 3.35)`로 추정합니다. 유효한 `MESSAGE_RECEIVED` 출력 토큰은 하나의 활성 generation만 고를 수 있을 때 별도 후속 usage로 병합합니다.
+11. 캡처 시점의 사용자 설정에 따라 완성된 스냅샷을 `full`·`redacted`·`metadata` 중 하나로 단방향 변환한 뒤, 원래 채팅 ID는 저장 partition 선택에만 사용하고 변환된 스냅샷을 타임라인에 저장합니다. 개인정보 변환 Promise는 30초 뒤 실패로 닫습니다.
 12. 같은 채팅의 저장·읽기·삭제·비우기는 채팅 키 잠금으로 직렬화하고, 모든 저장 변경과 전체 삭제·정책 적용·archive 가져오기는 추가 전역 잠금으로 교차 실행을 막습니다. lifecycle·usage 후속 변경은 저장 identity를 유지하는 원자적 snapshot updater를 사용합니다.
-13. 저장에 실패하면 계산을 마친 동일 스냅샷과 오류를 UI에 전달하여 같은 ID로 재시도합니다.
+13. `store.addSnapshot()`은 30초 안에 끝나지 않아도 실패로 닫습니다. 저장에 실패하면 계산을 마친 동일 스냅샷과 오류를 UI에 전달하여 같은 ID로 재시도합니다. 저장 전 단계의 오류도 별도 재시도용 원문을 노출하지 않고 terminal `failed` 상태를 보냅니다.
 
 ### 개인정보 없는 캡처 상태
 
-v0.11.1의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`로 제한합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장된 스냅샷 전달에, `capture-error`는 동일 스냅샷 재시도에 계속 사용합니다.
+v0.11.2의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`로 제한합니다. 실제 저장을 시작한 모든 경로는 tokenizer·privacy·storage Promise의 미종료를 포함해 `saved` 또는 `failed`로 종결합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장된 스냅샷 전달에, `capture-error`는 계산을 마친 동일 스냅샷 재시도에 계속 사용합니다.
 
 ## 캡처 경계
 
@@ -167,16 +167,17 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.11.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v4`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다.
+v0.11.2의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
 
 처리 흐름은 다음과 같습니다.
 
 1. UI가 개인정보 모드가 `full`인 현재 스냅샷과 사용자가 직접 체크한 `finding:<id>` 또는 `cluster:<id>`만 `SemanticInspector.prepare()`에 전달합니다. redacted·metadata v7 스냅샷은 코어에서도 다시 거부합니다.
-2. `SemanticInspector`는 adapter의 현재 identity를 동기적으로 읽습니다. provider를 확인할 수 없는 `unavailable`은 지원하지 않는 상태로 실패하고, provider만 확인되는 `partial`은 model과 비용을 추측하지 않은 채 그대로 유지합니다.
+2. `SemanticInspector`는 adapter의 선택된 Connection Manager 프로필 또는 현재 연결 identity를 동기적으로 읽습니다. 공개 프로필 서비스가 없거나 저장한 프로필 ID가 resolve되지 않으면 요청 시작 전에 현재 연결을 사용합니다. provider를 확인할 수 없는 `unavailable`은 지원하지 않는 상태로 실패하고, provider만 확인되는 `partial`은 model과 비용을 추측하지 않은 채 그대로 유지합니다.
+   Text Completion 프로필에는 consent에서 검토한 semantic prompt를 문자열로 그대로 전달하고 `includeInstruct: false`로 별도 instruct template 재구성을 막습니다. `includePreset: true`는 sampler·stop 설정에만 사용하며 prompt·model·응답 상한은 명시적 요청값을 유지합니다.
 3. `semantic-inspector.js`가 target을 실제 로컬 finding/cluster에 연결하고 source·atom·relation closure를 계산합니다. 활성 상태·실제 요청 포함·대안 제외·분석 capability·금지된 final/chat-history 유형을 검사하며, closure 밖 소스는 정확한 label과 제외 이유만 미리보기에 남깁니다.
 4. closure에 필요한 source는 일부를 조용히 생략하거나 자르지 않습니다. source별·선택 전체·요청 전체 상한을 넘거나 필수 source에서 민감 토큰을 발견하면 준비 전체를 `SEMANTIC_INVALID_INPUT`으로 실패시켜 quote offset을 바꾸는 부분 정제를 금지합니다.
 5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한과 정확히 일치한 사용자 가격 override 비용을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
-6. 전송 직전에 adapter identity를 다시 읽어 준비 시점과 달라졌으면 실패로 닫습니다. 같은 요청 digest의 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출합니다.
+6. 전송 직전에 adapter identity를 다시 읽어 provider·model·현재 연결/프로필 경로·opaque profile ID 중 하나라도 준비 시점과 달라졌으면 실패로 닫습니다. 이 identity 전체가 요청 digest에 포함되므로 같은 provider/model을 쓰는 다른 프로필의 cache도 재사용하지 않습니다. 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출하며, 선택한 프로필의 `sendRequest()`가 시작된 뒤 실패하면 현재 연결 `generateRaw()`로 자동 재시도하지 않습니다.
 7. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. 모든 evidence의 `start`·`end`와 `quote`가 해당 source content의 정확한 slice여야 하며 하나라도 실패하면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
 8. 통과한 결과는 `origin: ai`와 요청 digest를 가진 별도 `AI 제안`으로만 반환합니다. UI에는 정적 finding 카드와 다른 영역으로 렌더링하며 정적 finding, 판정·무시, 비교 정책, 원본 프롬프트를 갱신하는 컨트롤을 두지 않습니다.
 
@@ -185,14 +186,15 @@ v0.11.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 | 모듈 | 책임 | 변경하거나 저장하지 않는 것 |
 |---|---|---|
 | `semantic-inspector.js` | target closure, 정확한 전송 preview, bounded prompt, strict JSON/evidence 검증, memory cache | SillyTavern 원본, 정적 finding/review/policy, 전체 raw prompt·provider response의 영구 저장 |
-| `semantic-provider-adapter.js` | 공개 `getContext().generateRaw()` 호출, identity 판독, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code | 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
+| `semantic-connection-profiles.js` | 공개 `ConnectionManagerRequestService`의 지원 프로필 목록·해결, bounded ID·name·provider·model·completion type 정제 | API key·URL·비밀번호·proxy·private settings 읽기 또는 저장 |
+| `semantic-provider-adapter.js` | 선택한 공개 profile `sendRequest()` 또는 현재 `getContext().generateRaw()` 단일 경로 호출, identity 판독, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code | 프로필 실패 뒤 현재 연결 재시도, 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
 | `semantic-capture-gate.js` | 호출별 nonce identity ticket, prompt·prompt type exact match, 같은 semantic 호출의 exact duplicate 억제, TTL·용량·identity-exact 소비·해제 | 모든 생성의 전역 캡처 중단, 모호한 요청의 임의 연결 |
 | `capture.js` 연동 | AI request와 정확히 일치한 settings/data event 및 그 duplicate만 자기 캡처에서 제외 | 동시에 진행되는 일반 사용자 generation의 정상 캡처 |
 | `ui.js` | 기본 OFF 설정, 수동 선택, 매 호출 미리보기·동의, 취소·재시도, 별도 결과 표시 | 동의 저장, 자동 대상 선택·자동 수정·정책 변경 |
 
 `SemanticInspectorMemoryCache`의 key는 protocol·provider identity·응답 상한·bounded prompt를 포함한 digest입니다. 값에는 전체 raw prompt·전체 raw provider response와 전용 `source.content`·`evidence.quote` 필드를 넣지 않고 검증된 ID·offset과 title·summary·rationale 같은 정규화 제안 텍스트를 제한된 LRU/TTL로 보관합니다. 모델이 제안 텍스트 안에 입력 원문의 표현을 반복할 가능성까지 제거하지는 않으므로 이 cache는 익명화 경계가 아닙니다. cache hit의 evidence quote는 현재 준비 source의 검증된 offset에서 다시 구성하며 새로고침하면 cache 전체가 사라집니다.
 
-취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 `generateRaw()`에는 provider 계산을 강제로 중단하는 별도 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
+취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 profile `sendRequest()`와 `generateRaw()`에는 provider 계산을 강제로 중단하는 공통 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
 
 AI prompt와 동시에 식별자 없는 일반 사용자 요청이 도착해 어느 요청인지 안전하게 구분할 수 없으면 gate와 기존 generation ledger 모두 임의 FIFO 연결을 하지 않습니다. explicit public ID가 있는 정상 사용자 요청은 그대로 정확 연결합니다. 이 fail-closed 경계는 AI 호출을 숨기기 위해 다른 사용자의 capture를 소비하는 것을 막습니다.
 
@@ -263,12 +265,12 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 
 ## 작업 중심 UI와 지연 공개
 
-1차 탐색은 `프롬프트`·`검사`·`기록`·`도구` 네 작업으로 제한하고 기존 세부 기능은 선택한 작업의 2차 탐색에 연결합니다. 첫 스냅샷 전 빠른 시작과 상단 도움말은 동일한 핵심 흐름을 설명하며 430px 이하에서는 버튼과 탐색 항목을 재배치합니다.
+1차 탐색은 `프롬프트`·`검사`·`기록`·`도구` 네 작업으로 제한하고 기존 세부 기능은 선택한 작업의 2차 탐색에 연결합니다. 첫 스냅샷 전에는 빠른 시작을 표시하고 짧은 설명은 필드별 tooltip으로 제공합니다. 헤더는 새로고침·설정·닫기 세 버튼만 유지하며 별도 도움말 모달은 없습니다. 430px 이하에서는 버튼과 탐색 항목을 재배치합니다.
 
 규칙 검사는 결과를 먼저 렌더링하고 설정·비교 정책·분석 상세·AI 의미 검사 영역은 사용자가 펼칠 때 내용을 생성합니다. 검색 필터, 타임라인 저장 관리와 설정 고급 항목도 disclosure 안에 배치해 첫 화면의 설명·스크롤 부담을 줄입니다. 코치마크·워크스루는 이 정보 구조의 실사용 피드백을 받은 뒤 별도 접근성 계약과 함께 설계합니다.
 
 ## 불투명 테마
 
-SillyTavern 테마의 `--SmartThemeBlurTintColor`에는 알파 값이 포함될 수 있으므로 패널 배경에 직접 사용하지 않습니다. 자동 모드에서는 본문 글자의 계산된 명도를 확인한 후 밝은 글자에는 어두운 패널, 어두운 글자에는 밝은 패널을 사용합니다. 사용자는 같은 설정 저장소에서 패널을 항상 밝게 또는 항상 어둡게 고정할 수 있으며, 고정 모드에서는 매 렌더마다 SillyTavern 색상을 다시 계산하지 않습니다.
+SillyTavern 테마의 `--SmartThemeBlurTintColor`에는 알파 값이 포함될 수 있으므로 패널 배경에 직접 사용하지 않습니다. 자동 모드에서는 본문 글자의 계산된 명도를 확인한 후 밝은 글자에는 어두운 패널, 어두운 글자에는 밝은 패널을 사용합니다. 사용자는 같은 설정 저장소에서 패널을 항상 밝게 또는 항상 어둡게 고정할 수 있으며, 고정 모드에서는 매 렌더마다 SillyTavern 색상을 다시 계산하지 않습니다. 패널 범위의 `button`·`select`·`.menu_button`은 폭·flex·writing-mode를 명시해 SillyTavern 전역 테마의 세로 글자·강제 전체 폭 규칙이 내부 control을 덮지 못하게 합니다. disclosure summary도 패널 안에서 좌측 정렬합니다.
 
 구버전 스냅샷의 매크로 템플릿 provenance는 브라우저 정규식 엔진이 안전하게 처리할 수 있는 길이까지만 시도합니다. 정규식 생성 또는 실제 매칭 시점에 엔진 한계가 발생하면 스냅샷 마이그레이션 자체를 실패시키지 않고 해당 소스만 `unmatched`로 유지합니다.

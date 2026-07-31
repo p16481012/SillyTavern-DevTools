@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CaptureController, getConfiguredPrompts } from '../src/capture.js';
+import { GenerationLedger } from '../src/generation-ledger.js';
 
 class FakeEventSource {
     constructor() {
@@ -216,6 +217,222 @@ test('capture status reports a bounded capturing-processing-saved sequence', asy
     assert.equal(serialized.includes('private-status-id'), false);
     assert.equal(serialized.includes('test-model'), false);
     assert.equal(serialized.includes('makersuite'), false);
+});
+
+test('a token counter that never settles falls back and still saves the snapshot', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const statuses = [];
+    const context = createContext(eventSource);
+    let tokenCounterCalls = 0;
+    context.getTokenCountAsync = () => {
+        tokenCounterCalls += 1;
+        return new Promise(() => {});
+    };
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 50,
+        tokenCounterWaitMs: 5,
+    });
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail);
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Tokenizer must not block storage.' }],
+        request_id: 'hung-token-counter-1',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Tokenizer must not block storage.' }],
+        request_id: 'hung-token-counter-1',
+    });
+    await waitFor(() => saved.length === 1);
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'The fallback remains active.' }],
+        request_id: 'hung-token-counter-2',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'The fallback remains active.' }],
+        request_id: 'hung-token-counter-2',
+    });
+    await waitFor(() => saved.length === 2);
+
+    assert.deepEqual(
+        statuses.map(({ state }) => state),
+        ['capturing', 'processing', 'saved', 'capturing', 'processing', 'saved'],
+    );
+    assert.ok(saved[0].stats.totalTokens > 0);
+    assert.ok(saved[1].stats.totalTokens > 0);
+    assert.equal(tokenCounterCalls, 1);
+});
+
+test('concurrent captures share one bounded token counter probe', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    let tokenCounterCalls = 0;
+    context.getTokenCountAsync = () => {
+        tokenCounterCalls += 1;
+        return new Promise(() => {});
+    };
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 50,
+        tokenCounterWaitMs: 5,
+    });
+    controller.start();
+
+    for (const requestId of ['concurrent-token-1', 'concurrent-token-2']) {
+        eventSource.emitSynchronously('chat_completion_prompt_ready', {
+            chat: [{ role: 'user', content: requestId }],
+            request_id: requestId,
+            dryRun: false,
+        });
+        eventSource.emitSynchronously('chat_completion_settings_ready', {
+            messages: [{ role: 'user', content: requestId }],
+            request_id: requestId,
+        });
+    }
+    await waitFor(() => saved.length === 2);
+
+    assert.equal(tokenCounterCalls, 1);
+    assert.equal(saved.every(({ stats }) => stats.totalTokens > 0), true);
+});
+
+test('request preparation failure settles its ledger prompt and clears its fallback timer', async () => {
+    const eventSource = new FakeEventSource();
+    const statuses = [];
+    const ledger = new GenerationLedger();
+    const settlePrompt = ledger.settlePrompt.bind(ledger);
+    let settleCalls = 0;
+    ledger.settlePrompt = (...args) => {
+        settleCalls += 1;
+        return settlePrompt(...args);
+    };
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async () => assert.fail('failed capture must not save') },
+        version: 'test',
+        settingsWaitMs: 10_000,
+        generationLedger: ledger,
+    });
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail.state);
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'request preparation failure' }],
+        dryRun: false,
+    });
+    const invalidRequest = {
+        messages: [{ role: 'user', content: 'request preparation failure' }],
+    };
+    Object.defineProperty(invalidRequest, 'invalid', {
+        enumerable: true,
+        get() {
+            throw new Error('test request getter failure');
+        },
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', invalidRequest);
+    await waitFor(() => statuses.at(-1) === 'failed');
+
+    assert.deepEqual(statuses, ['capturing', 'failed']);
+    assert.equal(settleCalls, 1);
+});
+
+test('a privacy failure terminates processing without exposing capture data in status', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const statuses = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 50,
+        getCaptureMode: () => 'unsupported-test-mode',
+    });
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail);
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'private failed capture payload' }],
+        request_id: 'private-failed-request-id',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'private failed capture payload' }],
+        request_id: 'private-failed-request-id',
+    });
+    await waitFor(() => statuses.at(-1)?.state === 'failed');
+
+    assert.deepEqual(
+        statuses.map(({ state }) => state),
+        ['capturing', 'processing', 'failed'],
+    );
+    assert.equal(saved.length, 0);
+    const serialized = JSON.stringify(statuses);
+    assert.equal(serialized.includes('private failed capture payload'), false);
+    assert.equal(serialized.includes('private-failed-request-id'), false);
+    assert.equal(serialized.includes('unsupported-test-mode'), false);
+});
+
+test('a storage operation that never settles reaches failed instead of staying processing', async () => {
+    const eventSource = new FakeEventSource();
+    const statuses = [];
+    const failures = [];
+    const snapshots = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: () => new Promise(() => {}) },
+        version: 'test',
+        settingsWaitMs: 50,
+        storageWaitMs: 5,
+    });
+    controller.addEventListener('capture-status', (event) => {
+        statuses.push(event.detail);
+    });
+    controller.addEventListener('capture-error', (event) => {
+        failures.push(event.detail);
+    });
+    controller.addEventListener('snapshot', (event) => {
+        snapshots.push(event.detail);
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Storage timeout private payload' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Storage timeout private payload' }],
+    });
+    await waitFor(() => statuses.at(-1)?.state === 'failed');
+
+    assert.deepEqual(
+        statuses.map(({ state }) => state),
+        ['capturing', 'processing', 'failed'],
+    );
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].operation, 'addSnapshot');
+    assert.equal(failures[0].error.code, 'capture-storage-timeout');
+    assert.equal(snapshots.length, 0);
+    const serialized = JSON.stringify(statuses);
+    assert.equal(serialized.includes('Storage timeout private payload'), false);
+    assert.equal(serialized.includes('capture-storage-timeout'), false);
 });
 
 test('capture namespaces a shared chat id by character or group owner', async () => {

@@ -5,6 +5,7 @@ import {
     V1_UI_PREFERENCES_KEY,
     V2_UI_PREFERENCES_KEY,
     V3_UI_PREFERENCES_KEY,
+    V4_UI_PREFERENCES_KEY,
     legacyUiPreferencesForExistingData,
     readUiPreferencesFromStorage,
 } from './src/preferences.js';
@@ -16,7 +17,7 @@ import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.11.1';
+const VERSION = '0.11.2';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',
@@ -39,6 +40,7 @@ async function preserveLegacyRetentionForExistingData(store) {
     try {
         if (
             localStorage.getItem(UI_PREFERENCES_KEY) != null
+            || localStorage.getItem(V4_UI_PREFERENCES_KEY) != null
             || localStorage.getItem(V3_UI_PREFERENCES_KEY) != null
             || localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
             || localStorage.getItem(V1_UI_PREFERENCES_KEY) != null
@@ -150,6 +152,9 @@ async function initialize() {
         const semanticProviderAdapter = new SemanticProviderAdapter({
             getContext: () => globalThis.SillyTavern.getContext(),
             captureGate: semanticCaptureGate,
+            getConnectionProfileId: () => (
+                currentPreferences().semanticConnectionProfileId
+            ),
         });
         semanticInspector = new SemanticInspector({
             adapter: semanticProviderAdapter,

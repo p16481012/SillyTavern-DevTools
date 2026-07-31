@@ -1,4 +1,15 @@
-# v0.11.1 기술 구현 현황
+# v0.11.2 기술 구현 현황
+
+## v0.11.2 패치
+
+- prompt tokenizer가 끝나지 않으면 패널 세션의 최초 probe를 5초로 제한하고 같은 세션의 이후 토큰 수를 UTF-8 byte/3.35로 추정해 저장을 계속함
+- 개인정보 변환과 `store.addSnapshot()`을 각각 30초로 제한하고, 저장 전 예외·event callback 실패·저장 timeout을 모두 개인정보 없는 `failed`로 종결함. 정상 경로는 `saved`로 종결함
+- 동시 캡처는 하나의 tokenizer probe를 공유하며 요청 준비 실패는 pending timer와 generation ledger prompt까지 함께 정리함
+- 헤더 도움말 버튼·모달을 제거해 새로고침·설정·닫기만 유지하고, 필드별 tooltip과 빈 상태 빠른 시작은 보존함
+- disclosure 제목을 좌측 정렬로 통일하되 기본 펼침 표시자를 유지하고 패널 범위의 button·select·`.menu_button` 폭·flex·writing-mode를 SillyTavern 전역 테마에서 방어함
+- SillyTavern 공개 `ConnectionManagerRequestService`의 지원 프로필을 이름으로 선택하는 AI 연결 설정을 추가함. 설정에는 불투명 profile ID만 저장하며 API 키·URL·연결 비밀값은 읽거나 저장하지 않음
+- 프로필 기능 미지원·저장 프로필 소실은 요청 전에 현재 연결을 사용하지만, 선택한 프로필 요청 실패 뒤에는 현재 연결로 재시도하지 않아 이중 provider 호출·과금을 막음
+- 준비·전송 사이에는 provider/model뿐 아니라 현재 연결/프로필 경로와 opaque profile ID까지 다시 비교하고, 이 identity 전체를 cache digest에 포함함. 프로필 목록의 일시적 조회 실패는 설정의 저장 ID를 지우지 않음
 
 ## v0.11.1 패치
 
@@ -20,6 +31,7 @@
 - v1~v6 레코드의 지연 v7 이전, 성공 레코드만 1회 write-back하고 손상 레코드는 원본 보존
 - generation별 불투명 handle과 개수·수명 제한 ledger에 prompt·request·lore·lifecycle·usage 상태 격리
 - 양쪽의 같은 공개 ID만 정확 연결하고, ID 충돌·한쪽 누락은 실패로 닫으며 id-less prompt→request에만 유형별 FIFO 사용
+- tokenizer Promise는 최초 5초 probe 뒤 미종료 시 byte/3.35 추정으로 전환하고 개인정보 변환·저장 Promise는 각각 30초 뒤 실패로 닫아 캡처 상태가 `saved` 또는 `failed`로 끝남
 
 ### Usage·비용과 correlation
 
@@ -88,7 +100,7 @@
 
 ### 선택적 AI Semantic Inspector
 
-- `st-devtools:preferences:v4`의 기본 OFF opt-in과 64~2,048 범위의 응답 토큰 상한
+- `st-devtools:preferences:v5`의 기본 OFF opt-in, 64~2,048 범위의 응답 토큰 상한과 선택적 opaque connection profile ID
 - 사용자가 직접 선택한 정적 finding·지시 cluster만 준비하고 아무 대상도 자동 선택하지 않는 UI
 - full snapshot만 허용하며 redacted·metadata v7 입력은 UI와 core 모두 준비 전에 거부
 - 개인정보 메타데이터 없이 v7로 지연 이전된 과거 기록도 원문 보존 상태를 추측하지 않고 AI 준비 전에 거부하며, AI 검사는 새 full snapshot 재캡처 필요
@@ -96,7 +108,11 @@
 - closure에 필요한 source의 정확한 전체 content, 제외 목록, provider/model identity, 입력 토큰 추정, 응답 상한과 exact user override 비용 preview
 - 필수 source에 민감 토큰이 있으면 offset을 바꾸는 부분 redaction 대신 요청 전체를 거부
 - 미리보기마다 선택 해제되는 호출별 1회 동의, 취소 시 provider call 0회와 retry의 새 prepare/preview/consent
-- 공개 `getContext().generateRaw()`만 사용하는 provider adapter와 준비·inspect 사이 identity 변경 fail-closed
+- 공개 Connection Manager profile `sendRequest()` 또는 현재 연결 `getContext().generateRaw()` 중 하나만 사용하는 provider adapter와 준비·inspect 사이 identity 변경 fail-closed
+- 공개 Connection Manager 서비스의 지원 프로필 목록과 이름 선택, 선택한 Chat/Text Completion 프로필의 `sendRequest()` 호출 및 현재 연결을 변경하지 않는 라우팅
+- Text Completion profile route는 consent prompt 문자열을 그대로 전달하고 `includeInstruct: false`로 추가 prompt 재구성을 막으며, sampler preset은 유지
+- 프로필 표시값은 bounded ID·name·provider·model·completion type만 허용하고 설정에는 opaque ID만 저장. credential·API URL·private Connection Manager 설정에는 접근하지 않음
+- 프로필 API가 없거나 저장된 ID가 더 이상 resolve되지 않으면 요청 전 현재 연결을 사용하지만, profile `sendRequest()`가 실패한 뒤에는 현재 연결 `generateRaw()`로 fallback하지 않음
 - provider만 확인되는 partial identity는 model·비용을 추측하지 않고, provider identity 자체가 unavailable이면 unsupported
 - protocol·필드·크기·깊이·노드·허용 enum·known ID를 검사하는 strict JSON response validator
 - 모든 evidence의 source ID·start/end·quote가 전송 source의 정확한 substring인지 검증하고 하나라도 틀리면 전체 response 거부
@@ -119,10 +135,12 @@
 - 캡처 모드별 UI 기능 차단, 설정 preview-first 순서와 origin quota/확장 추정치 구분
 - ledger의 동시 generation·ID 충돌·FIFO 경계·unlinked usage와 atomic snapshot update
 - usage·pricing 상한·정규형·정확 일치와 v1~v6→v7 개인정보 이전
-- AI 기본 OFF·V3→V4 설정 이전, full-only와 secret-bearing required source의 fail-closed
+- AI 기본 OFF·V1~V4→V5 설정 이전, full-only와 secret-bearing required source의 fail-closed
 - target closure·정확한 preview·현재 identity 재확인, strict JSON/known-ID/evidence offset 검증과 memory-only cache
 - 동의 취소 no-send, retry 새 동의, logical timeout·abort와 늦은 결과 폐기
 - nonce gate identity-exact consume·TTL·capacity·exact duplicate 억제, explicit-ID 정상 요청 보존과 모호한 id-less 동시성 fail-closed
+- tokenizer 미종료 1회 probe·로컬 추정 저장, privacy/storage 미종료 timeout과 모든 캡처 terminal 상태
+- Connection Manager 프로필 표시 필드·opaque ID 저장, Chat/Text 프로필 라우팅, 미지원·소실 시 현재 연결과 profile 요청 실패의 무재시도
 
 ### 릴리스 전 결정적 UI 샌드박스 검토 대상
 
@@ -133,6 +151,7 @@
 - usage 상태·비용 출처·capability matrix, 가격 override 추가·삭제·재로드와 모바일 배치
 - 실제 `SemanticInspector`·strict validator·memory cache에 결정적 fake adapter를 주입한 AI preview·동의·성공·오류·취소
 - `semanticCore=true`, validated result count와 provider/network call 0회 dataset으로 샌드박스 경계 확인
+- 헤더 새로고침·설정·닫기 세 버튼, 좌측 정렬 disclosure와 여러 SillyTavern 테마·430px에서 패널 control 폭·writing-mode 방어
 
 샌드박스는 가짜 저장 backend와 결정적 semantic adapter를 사용합니다. Semantic Inspector 코어의 closure·preview·strict response/evidence 검증·memory cache는 실제 구현을 통과하지만 SillyTavern의 실제 `generateRaw`, 사용자의 IndexedDB, 브라우저 비공개 모드와 provider 응답 품질·과금은 대신 검증하지 않습니다.
 
@@ -145,10 +164,13 @@
 - 실제 provider/model별 구조 provenance, 선택 소스, assistant prefill과 캡처 lifecycle 정확성
 - 단일·동시 generation에서 `MESSAGE_RECEIVED` 출력 추정이 다른 스냅샷에 섞이지 않는지
 - 가격 override의 provider·model·currency 정확 일치, 불일치와 복수 통화 산정 불가 상태
-- AI 설정의 기본 OFF, full snapshot 선택, 실제 현재 provider/model preview와 매 호출 선택 해제 동의
+- AI 설정의 기본 OFF, full snapshot 선택, 선택한 프로필 또는 현재 연결의 실제 provider/model preview와 매 호출 선택 해제 동의
 - 동의 취소 시 요청이 발생하지 않고 성공 결과가 정적 finding·review·policy를 바꾸지 않는지
 - 실제 provider별 JSON schema 지원·오류 code·응답 상한과 취소 뒤 provider 계산/청구의 실제 동작
 - AI 호출 중 일반 generation을 겹쳤을 때 AI self-capture가 생기거나 일반 generation의 snapshot이 사라지지 않는지
+- 일반 요청이 10초 안에 `saved` 또는 `failed`로 끝나고 tokenizer가 느린 환경에서도 `processing`에 영구 고정되지 않는지
+- AI 연결 프로필을 선택·저장·재진입했을 때 같은 이름이 선택되고 실제 profile route를 사용하는지, 프로필 삭제·요청 실패 때 이중 호출이 없는지
+- 밝은·어두운 사용자 테마와 약 430px에서 헤더 세 버튼·disclosure·패널 버튼이 세로 글자나 강제 전체 폭으로 깨지지 않는지
 
 ## 부분 구현 또는 알려진 경계
 
@@ -184,8 +206,9 @@
 
 ### AI Semantic Inspector
 
-- AI 검사는 full snapshot의 선택된 closure 원문을 현재 provider에 전송하는 기능입니다. redacted·metadata에서 사용할 수 없고 일반 개인정보 익명화 도구가 아닙니다.
-- partial identity는 provider만 표시하고 model·비용을 추측하지 않습니다. identity unavailable 또는 준비 뒤 identity 변경은 fail-closed이며 다른 provider/model로 자동 fallback하지 않습니다.
+- AI 검사는 full snapshot의 선택된 closure 원문을 선택한 Connection Manager 프로필 또는 현재 provider에 전송하는 기능입니다. redacted·metadata에서 사용할 수 없고 일반 개인정보 익명화 도구가 아닙니다.
+- 선택 가능한 프로필 목록은 SillyTavern 공개 서비스가 제공하는 범위뿐이며 ST DevTools는 opaque ID 외 credential·URL·연결 비밀값을 저장하지 않습니다. 프로필 API가 없거나 선택한 ID가 요청 전에 사라지면 현재 연결을 사용합니다.
+- partial identity는 provider만 표시하고 model·비용을 추측하지 않습니다. identity unavailable 또는 준비 뒤 identity 변경은 fail-closed입니다. 선택한 프로필 요청이 시작된 뒤 실패해도 현재 연결로 재시도하지 않습니다.
 - 입력 토큰은 로컬 추정이고 응답 상한은 비용 상한과 같지 않습니다. 사용자 가격 override 비용도 실제 provider 청구를 보증하지 않습니다.
 - AbortSignal과 timeout은 호출자에게 논리적으로 취소를 제공하고 늦은 결과를 버리지만, 공개 `generateRaw()`가 이미 시작한 provider 계산·전송·과금을 물리적으로 중단한다고 보장하지 않습니다.
 - self-capture nonce gate는 호출별 ticket의 AI prompt·prompt type exact match와 그 semantic 호출의 exact duplicate만 제외합니다. 모호한 id-less 동시 요청은 fail-closed이므로 일부 capture가 미연결 상태로 남을 수 있지만 다른 pending 요청을 추측 소비하지 않습니다.
@@ -199,12 +222,12 @@
 
 - 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
 - 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- v0.11.1의 4개 작업 탐색·빠른 시작·도움말에 대한 실사용 피드백 수집과 접근성 검증
+- v0.11.2의 4개 작업 탐색·빈 상태 빠른 시작·필드별 도움말에 대한 실사용 피드백 수집과 접근성 검증
 
-세부 기능은 v0.11.1 사용자 검토 결과 뒤 확정합니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.11.2 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.11.1의 일반 요청 캡처, AI 요청 제외, 작업 중심 탐색과 도움말을 사용자 체크리스트로 확인합니다.
+1. v0.11.2의 캡처 terminal 상태, 연결 프로필 선택, 작업 중심 탐색·필드별 도움말과 테마 방어를 사용자 체크리스트로 확인합니다.
 2. v0.12.0에서 AI 평가 corpus·품질 회귀·provider 호환성·접근성을 보강합니다.
 3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

@@ -50,6 +50,7 @@ function adapterFor(context, options = {}) {
         adapter: new SemanticProviderAdapter({
             getContext: () => context,
             captureGate,
+            getConnectionProfileId: options.getConnectionProfileId ?? (() => null),
             defaultTimeoutMs: options.defaultTimeoutMs ?? 100,
         }),
     };
@@ -61,6 +62,8 @@ test('provider identity uses public context values and fails closed or partial',
         status: 'available',
         provider: 'openrouter',
         model: 'semantic-model',
+        routeKind: 'current',
+        connectionProfileId: null,
     });
     assert.equal(Object.isFrozen(available), true);
 
@@ -74,6 +77,8 @@ test('provider identity uses public context values and fails closed or partial',
         status: 'available',
         provider: 'aphrodite',
         model: 'text-model',
+        routeKind: 'current',
+        connectionProfileId: null,
     });
     assert.deepEqual(readSemanticProviderIdentity({
         mainApi: 'kobold',
@@ -82,6 +87,8 @@ test('provider identity uses public context values and fails closed or partial',
         status: 'partial',
         provider: 'kobold',
         model: null,
+        routeKind: 'current',
+        connectionProfileId: null,
     });
     assert.deepEqual(readSemanticProviderIdentity({
         mainApi: 'openai',
@@ -96,11 +103,15 @@ test('provider identity uses public context values and fails closed or partial',
         status: 'available',
         provider: 'anthropic',
         model: 'settings-fallback-model',
+        routeKind: 'current',
+        connectionProfileId: null,
     });
     assert.deepEqual(readSemanticProviderIdentity({}), {
         status: 'unavailable',
         provider: null,
         model: null,
+        routeKind: 'current',
+        connectionProfileId: null,
     });
 });
 
@@ -127,6 +138,8 @@ test('generate calls only public generateRaw with the bounded v1.13.5 contract',
         status: 'available',
         provider: 'openrouter',
         model: 'semantic-model',
+        routeKind: 'current',
+        connectionProfileId: null,
     });
     assert.equal(await resultPromise, '{"ok":true}');
     assert.equal(captureGate.activeCount, 0);
@@ -141,6 +154,203 @@ test('generate calls only public generateRaw with the bounded v1.13.5 contract',
     assert.equal(calls[0].jsonSchema, schema);
     assert.match(calls[0].prompt, /^inspect these rules/u);
     assert.match(calls[0].prompt, /ST_DEVTOOLS_SEMANTIC:[0-9a-f]{32}/u);
+});
+
+test('selected Connection Manager profile is listed, identified, and called without changing the current connection', async () => {
+    const calls = [];
+    let currentCalls = 0;
+    const schema = {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+    };
+    const profile = {
+        id: 'semantic-profile',
+        mode: 'cc',
+        name: 'Semantic only',
+        api: 'openai',
+        model: 'profile-model',
+        'secret-id': 'not-returned-or-stored',
+        'api-url': 'https://not-returned.invalid',
+    };
+    const service = {
+        getSupportedProfiles: () => [profile],
+        validateProfile: () => ({
+            selected: 'openai',
+            source: 'openrouter',
+        }),
+        async sendRequest(...args) {
+            calls.push(args);
+            return { content: { ok: true }, reasoning: 'ignored' };
+        },
+    };
+    const context = {
+        ...chatContext(async () => {
+            currentCalls += 1;
+            return 'current connection must not run';
+        }),
+        ConnectionManagerRequestService: service,
+    };
+    const { adapter, captureGate } = adapterFor(context, {
+        getConnectionProfileId: () => 'semantic-profile',
+    });
+
+    assert.deepEqual(adapter.connectionProfiles(), {
+        status: 'available',
+        profiles: [{
+            id: 'semantic-profile',
+            name: 'Semantic only',
+            provider: 'openrouter',
+            model: 'profile-model',
+            completionType: 'chat-completion',
+        }],
+    });
+    assert.deepEqual(adapter.identity(), {
+        status: 'available',
+        provider: 'openrouter',
+        model: 'profile-model',
+        routeKind: 'profile',
+        connectionProfileId: 'semantic-profile',
+    });
+    assert.equal(await adapter.generate({
+        prompt: 'inspect through selected profile',
+        jsonSchema: schema,
+        responseTokenCap: 640,
+    }), '{"ok":true}');
+
+    assert.equal(currentCalls, 0);
+    assert.equal(captureGate.activeCount, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'semantic-profile');
+    assert.equal(calls[0][1][0].role, 'user');
+    assert.match(calls[0][1][0].content, /^inspect through selected profile/u);
+    assert.match(calls[0][1][0].content, /ST_DEVTOOLS_SEMANTIC:[0-9a-f]{32}/u);
+    assert.equal(calls[0][2], 640);
+    assert.deepEqual(calls[0][3], {
+        stream: false,
+        signal: null,
+        extractData: true,
+        includePreset: true,
+        includeInstruct: true,
+    });
+    assert.deepEqual(calls[0][4], { json_schema: schema });
+});
+
+test('text profiles omit chat-only schema payloads and return extracted text', async () => {
+    const calls = [];
+    const service = {
+        getSupportedProfiles: () => [{
+            id: 'text-profile',
+            mode: 'tc',
+            name: 'Text profile',
+            api: 'aphrodite',
+            model: 'text-model',
+        }],
+        async sendRequest(...args) {
+            calls.push(args);
+            return { content: '{"ok":true}' };
+        },
+    };
+    const context = {
+        ...chatContext(async () => 'must not run'),
+        ConnectionManagerRequestService: service,
+    };
+    const { adapter } = adapterFor(context, {
+        getConnectionProfileId: () => 'text-profile',
+    });
+
+    assert.equal(await adapter.generate({
+        prompt: 'text semantic request',
+        jsonSchema: { type: 'object' },
+    }), '{"ok":true}');
+    assert.equal(typeof calls[0][1], 'string');
+    assert.match(calls[0][1], /^text semantic request/u);
+    assert.equal(
+        [...calls[0][1].matchAll(/ST_DEVTOOLS_SEMANTIC:[0-9a-f]{32}/gu)].length,
+        1,
+    );
+    assert.deepEqual(calls[0][3], {
+        stream: false,
+        signal: null,
+        extractData: true,
+        includePreset: true,
+        includeInstruct: false,
+    });
+    assert.deepEqual(calls[0][4], {});
+    assert.deepEqual(adapter.identity(), {
+        status: 'available',
+        provider: 'aphrodite',
+        model: 'text-model',
+        routeKind: 'profile',
+        connectionProfileId: 'text-profile',
+    });
+});
+
+test('unsupported or stale profile selection falls back to the current public connection', async () => {
+    for (const service of [null, {
+        getSupportedProfiles: () => [],
+        sendRequest: async () => {
+            throw new Error('must not run');
+        },
+    }]) {
+        let currentCalls = 0;
+        const context = chatContext(async () => {
+            currentCalls += 1;
+            return 'current fallback';
+        });
+        if (service) context.ConnectionManagerRequestService = service;
+        const { adapter } = adapterFor(context, {
+            getConnectionProfileId: () => 'missing-profile',
+        });
+
+        assert.deepEqual(adapter.identity(), {
+            status: 'available',
+            provider: 'openrouter',
+            model: 'semantic-model',
+            routeKind: 'current',
+            connectionProfileId: null,
+        });
+        assert.equal(await adapter.generate({ prompt: 'fallback request' }), 'current fallback');
+        assert.equal(currentCalls, 1);
+    }
+});
+
+test('profile request failure is never retried through the current connection', async () => {
+    let currentCalls = 0;
+    let profileCalls = 0;
+    const service = {
+        getSupportedProfiles: () => [{
+            id: 'failing-profile',
+            mode: 'cc',
+            name: 'Failing',
+            api: 'openrouter',
+            model: 'profile-model',
+        }],
+        async sendRequest() {
+            profileCalls += 1;
+            throw new Error('private provider failure');
+        },
+    };
+    const context = {
+        ...chatContext(async () => {
+            currentCalls += 1;
+            return 'must not retry';
+        }),
+        ConnectionManagerRequestService: service,
+    };
+    const { adapter } = adapterFor(context, {
+        getConnectionProfileId: () => 'failing-profile',
+    });
+
+    await assert.rejects(
+        adapter.generate({ prompt: 'single dispatch only' }),
+        (value) => (
+            value.code === SEMANTIC_PROVIDER_ERROR_CODES.PROVIDER_ERROR
+            && !value.message.includes('private provider failure')
+        ),
+    );
+    assert.equal(profileCalls, 1);
+    assert.equal(currentCalls, 0);
 });
 
 test('missing generateRaw is explicitly unsupported without legacy fallback access', async () => {

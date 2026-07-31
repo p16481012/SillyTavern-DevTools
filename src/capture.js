@@ -16,6 +16,9 @@ import {
 import { transformSnapshotPrivacy } from './snapshot-privacy.js';
 
 const DEFAULT_SETTINGS_WAIT_MS = 1500;
+const DEFAULT_TOKEN_COUNTER_WAIT_MS = 5_000;
+const DEFAULT_STORAGE_WAIT_MS = 30_000;
+const MAX_ASYNC_WAIT_MS = 120_000;
 const CAPTURE_STATUS_STATES = new Set([
     'capturing',
     'processing',
@@ -28,6 +31,32 @@ const CAPTURE_PROMPT_TYPES = new Set([
     'chat-completion',
     'text-completion',
 ]);
+
+function boundedAsyncWait(value, fallback) {
+    return Number.isSafeInteger(value) && value >= 1 && value <= MAX_ASYNC_WAIT_MS
+        ? value
+        : fallback;
+}
+
+async function withCaptureTimeout(operation, waitMs, code) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            const error = new Error(code);
+            error.code = code;
+            reject(error);
+        }, waitMs);
+        timer?.unref?.();
+    });
+    try {
+        return await Promise.race([
+            Promise.resolve().then(operation),
+            timeout,
+        ]);
+    } finally {
+        if (timer !== null) clearTimeout(timer);
+    }
+}
 
 function getEventTypes(context) {
     return context.eventTypes ?? context.event_types ?? {};
@@ -299,6 +328,8 @@ export class CaptureController extends EventTarget {
         getCaptureMode = () => 'full',
         generationLedger = null,
         semanticCaptureGate = null,
+        tokenCounterWaitMs = DEFAULT_TOKEN_COUNTER_WAIT_MS,
+        storageWaitMs = DEFAULT_STORAGE_WAIT_MS,
     }) {
         super();
         this.getContext = getContext;
@@ -308,6 +339,16 @@ export class CaptureController extends EventTarget {
         this.getCaptureMode = getCaptureMode;
         this.started = false;
         this.semanticCaptureGate = semanticCaptureGate;
+        this.tokenCounterWaitMs = boundedAsyncWait(
+            tokenCounterWaitMs,
+            DEFAULT_TOKEN_COUNTER_WAIT_MS,
+        );
+        this.tokenCounterProbe = null;
+        this.tokenCounterUnavailable = false;
+        this.storageWaitMs = boundedAsyncWait(
+            storageWaitMs,
+            DEFAULT_STORAGE_WAIT_MS,
+        );
         this.generationLedger = generationLedger ?? new GenerationLedger({
             sessionTimeoutMs: Math.max(120_000, settingsWaitMs * 4),
         });
@@ -341,6 +382,27 @@ export class CaptureController extends EventTarget {
         Object.freeze(detail);
         this.dispatchEvent(new CustomEvent('capture-status', { detail }));
         return detail;
+    }
+
+    reportCaptureFailure(promptType, stage = null) {
+        return this.dispatchCaptureStatus('failed', {
+            promptType,
+            stage,
+        });
+    }
+
+    failPendingCapture(pending, promptType, stage = null) {
+        if (pending) {
+            pending.settled = true;
+            clearTimeout(pending.timer);
+            pending.timer = null;
+            try {
+                this.generationLedger.settlePrompt(pending.ledgerPromptHandle);
+            } catch {
+                // A cleanup failure must not leave the visible capture state pending.
+            }
+        }
+        return this.reportCaptureFailure(promptType, stage);
     }
 
     start() {
@@ -429,9 +491,14 @@ export class CaptureController extends EventTarget {
             if (semanticDecision !== 'allow') {
                 return;
             }
-            this.enqueueCapture('chat-completion', data.chat, {
-                correlationId: extractRequestCorrelationId(data),
-            });
+            try {
+                this.enqueueCapture('chat-completion', data.chat, {
+                    correlationId: extractRequestCorrelationId(data),
+                });
+            } catch (error) {
+                this.reportCaptureFailure('chat-completion', 'prompt-ready');
+                console.error('[ST DevTools] Failed to begin prompt capture.', error);
+            }
         });
 
         context.eventSource.on(events.GENERATE_AFTER_COMBINE_PROMPTS, (data) => {
@@ -464,43 +531,72 @@ export class CaptureController extends EventTarget {
             if (semanticDecision !== 'allow') {
                 return;
             }
-            this.enqueueCapture('text-completion', data.prompt, {
-                correlationId: extractRequestCorrelationId(data),
-            });
+            try {
+                this.enqueueCapture('text-completion', data.prompt, {
+                    correlationId: extractRequestCorrelationId(data),
+                });
+            } catch (error) {
+                this.reportCaptureFailure('text-completion', 'prompt-ready');
+                console.error('[ST DevTools] Failed to begin prompt capture.', error);
+            }
         });
 
         if (events.CHAT_COMPLETION_SETTINGS_READY) {
             context.eventSource.on(events.CHAT_COMPLETION_SETTINGS_READY, (data) => {
-                this.attachRequestBody(
-                    'chat-completion',
-                    data,
-                    'CHAT_COMPLETION_SETTINGS_READY',
-                    'backend-request-ready',
-                );
+                try {
+                    this.attachRequestBody(
+                        'chat-completion',
+                        data,
+                        'CHAT_COMPLETION_SETTINGS_READY',
+                        'backend-request-ready',
+                    );
+                } catch (error) {
+                    this.reportCaptureFailure(
+                        'chat-completion',
+                        'backend-request-ready',
+                    );
+                    console.error('[ST DevTools] Failed to attach capture request.', error);
+                }
             });
         }
 
         if (events.TEXT_COMPLETION_SETTINGS_READY) {
             context.eventSource.on(events.TEXT_COMPLETION_SETTINGS_READY, (data) => {
-                this.attachRequestBody(
-                    'text-completion',
-                    data,
-                    'TEXT_COMPLETION_SETTINGS_READY',
-                    'backend-request-ready',
-                );
+                try {
+                    this.attachRequestBody(
+                        'text-completion',
+                        data,
+                        'TEXT_COMPLETION_SETTINGS_READY',
+                        'backend-request-ready',
+                    );
+                } catch (error) {
+                    this.reportCaptureFailure(
+                        'text-completion',
+                        'backend-request-ready',
+                    );
+                    console.error('[ST DevTools] Failed to attach capture request.', error);
+                }
             });
         }
 
         if (events.GENERATE_AFTER_DATA) {
             context.eventSource.on(events.GENERATE_AFTER_DATA, (data, dryRun) => {
                 if (dryRun) return;
-                this.attachRequestBody(
-                    'text-completion',
-                    data,
-                    'GENERATE_AFTER_DATA',
-                    'generation-data-ready',
-                    (pending) => pending.contextState.mainApi !== 'openai',
-                );
+                try {
+                    this.attachRequestBody(
+                        'text-completion',
+                        data,
+                        'GENERATE_AFTER_DATA',
+                        'generation-data-ready',
+                        (pending) => pending.contextState.mainApi !== 'openai',
+                    );
+                } catch (error) {
+                    this.reportCaptureFailure(
+                        'text-completion',
+                        'generation-data-ready',
+                    );
+                    console.error('[ST DevTools] Failed to attach capture request.', error);
+                }
             });
         }
 
@@ -548,17 +644,22 @@ export class CaptureController extends EventTarget {
         pending.generationHandle = opened.sessionHandle;
         pending.ledgerPromptHandle = opened.promptHandle;
         pending.timer = setTimeout(() => {
-            const promptReady = this.sanitizePendingPrompt(pending);
-            this.finishPending(pending, {
-                payload: promptReady.value,
-                request: null,
-                eventName: promptType === 'chat-completion'
-                    ? 'CHAT_COMPLETION_PROMPT_READY'
-                    : 'GENERATE_AFTER_COMBINE_PROMPTS',
-                stage: 'prompt-ready',
-                fallback: true,
-                correlationMethod: 'prompt-only',
-            });
+            try {
+                const promptReady = this.sanitizePendingPrompt(pending);
+                this.finishPending(pending, {
+                    payload: promptReady.value,
+                    request: null,
+                    eventName: promptType === 'chat-completion'
+                        ? 'CHAT_COMPLETION_PROMPT_READY'
+                        : 'GENERATE_AFTER_COMBINE_PROMPTS',
+                    stage: 'prompt-ready',
+                    fallback: true,
+                    correlationMethod: 'prompt-only',
+                });
+            } catch (error) {
+                this.failPendingCapture(pending, promptType, 'prompt-ready');
+                console.error('[ST DevTools] Failed to prepare fallback capture.', error);
+            }
         }, this.settingsWaitMs);
     }
 
@@ -610,21 +711,26 @@ export class CaptureController extends EventTarget {
 
         setTimeout(() => {
             if (pending.settled) return;
-            const request = createRequestRecord(mutableRequestBody);
-            const requestPayload = extractPromptPayload(
-                request.body,
-                promptType,
-                null,
-            );
-            const payload = requestPayload ?? this.sanitizePendingPrompt(pending).value;
-            this.finishPending(pending, {
-                payload,
-                request,
-                eventName,
-                stage,
-                fallback: false,
-                correlationMethod: claim.method,
-            });
+            try {
+                const request = createRequestRecord(mutableRequestBody);
+                const requestPayload = extractPromptPayload(
+                    request.body,
+                    promptType,
+                    null,
+                );
+                const payload = requestPayload ?? this.sanitizePendingPrompt(pending).value;
+                this.finishPending(pending, {
+                    payload,
+                    request,
+                    eventName,
+                    stage,
+                    fallback: false,
+                    correlationMethod: claim.method,
+                });
+            } catch (error) {
+                this.failPendingCapture(pending, promptType, stage);
+                console.error('[ST DevTools] Failed to prepare request capture.', error);
+            }
         }, 0);
     }
 
@@ -671,22 +777,27 @@ export class CaptureController extends EventTarget {
         });
 
         setTimeout(() => {
-            this.dispatchCaptureStatus('processing', {
-                promptType: pending.promptType,
-                stage,
-            });
-            this.persistCapture({
-                contextState: pending.contextState,
-                payload,
-                promptType: pending.promptType,
-                generationType: pending.generationType,
-                activatedLore: pending.activatedLore,
-                capture,
-                request: normalizedRequest,
-                generationHandle: pending.generationHandle,
-            }).catch((error) => {
-                console.error('[ST DevTools] Failed to persist prompt snapshot.', error);
-            });
+            try {
+                this.dispatchCaptureStatus('processing', {
+                    promptType: pending.promptType,
+                    stage,
+                });
+                this.persistCapture({
+                    contextState: pending.contextState,
+                    payload,
+                    promptType: pending.promptType,
+                    generationType: pending.generationType,
+                    activatedLore: pending.activatedLore,
+                    capture,
+                    request: normalizedRequest,
+                    generationHandle: pending.generationHandle,
+                }).catch((error) => {
+                    console.error('[ST DevTools] Failed to persist prompt snapshot.', error);
+                });
+            } catch (error) {
+                this.reportCaptureFailure(pending.promptType, stage);
+                console.error('[ST DevTools] Failed to schedule prompt persistence.', error);
+            }
         }, 0);
     }
 
@@ -700,30 +811,79 @@ export class CaptureController extends EventTarget {
         request,
         generationHandle = null,
     }) {
-        const context = this.getContext();
-        const generation = this.generationLedger.getSessionView(generationHandle);
-        if (generation) {
-            capture.generationStatus = generation.status;
-            capture.statusEvent = generation.statusEvent;
-            capture.statusUpdatedAt = generation.statusUpdatedAt;
+        let finalizedSnapshot;
+        let snapshot;
+        try {
+            const context = this.getContext();
+            const generation = this.generationLedger.getSessionView(generationHandle);
+            if (generation) {
+                capture.generationStatus = generation.status;
+                capture.statusEvent = generation.statusEvent;
+                capture.statusUpdatedAt = generation.statusUpdatedAt;
+            }
+            const fallbackTokenCounter = async (text) => (
+                Math.ceil(new TextEncoder().encode(text).length / 3.35)
+            );
+            const tokenCounter = typeof context.getTokenCountAsync === 'function'
+                ? async (text) => {
+                    if (this.tokenCounterUnavailable) {
+                        return fallbackTokenCounter(text);
+                    }
+                    if (this.tokenCounterProbe === null) {
+                        this.tokenCounterProbe = withCaptureTimeout(
+                            () => context.getTokenCountAsync(text),
+                            this.tokenCounterWaitMs,
+                            'capture-token-counter-timeout',
+                        ).then(
+                            (value) => ({ available: true, value }),
+                            () => {
+                                this.tokenCounterUnavailable = true;
+                                return { available: false, value: null };
+                            },
+                        );
+                        const probe = await this.tokenCounterProbe;
+                        return probe.available
+                            ? probe.value
+                            : fallbackTokenCounter(text);
+                    }
+                    await this.tokenCounterProbe;
+                    if (this.tokenCounterUnavailable) {
+                        return fallbackTokenCounter(text);
+                    }
+                    try {
+                        return await withCaptureTimeout(
+                            () => context.getTokenCountAsync(text),
+                            this.tokenCounterWaitMs,
+                            'capture-token-counter-timeout',
+                        );
+                    } catch {
+                        this.tokenCounterUnavailable = true;
+                        return fallbackTokenCounter(text);
+                    }
+                }
+                : fallbackTokenCounter;
+            finalizedSnapshot = await finalizeSnapshot({
+                contextState,
+                payload,
+                promptType,
+                generationType,
+                activatedLore,
+                extensionVersion: this.version,
+                tokenCounter,
+                capture,
+                request,
+            });
+            snapshot = await withCaptureTimeout(
+                () => transformSnapshotPrivacy(finalizedSnapshot, {
+                    mode: this.getCaptureMode(),
+                }),
+                this.storageWaitMs,
+                'capture-privacy-timeout',
+            );
+        } catch (error) {
+            this.reportCaptureFailure(promptType, capture?.stage);
+            throw error;
         }
-        const tokenCounter = typeof context.getTokenCountAsync === 'function'
-            ? (text) => context.getTokenCountAsync(text)
-            : async (text) => Math.ceil(new TextEncoder().encode(text).length / 3.35);
-        const finalizedSnapshot = await finalizeSnapshot({
-            contextState,
-            payload,
-            promptType,
-            generationType,
-            activatedLore,
-            extensionVersion: this.version,
-            tokenCounter,
-            capture,
-            request,
-        });
-        const snapshot = await transformSnapshotPrivacy(finalizedSnapshot, {
-            mode: this.getCaptureMode(),
-        });
         await this.storeSnapshot(snapshot, {
             storageChatId: finalizedSnapshot.chatId,
         });
@@ -999,11 +1159,15 @@ export class CaptureController extends EventTarget {
     async storeSnapshot(snapshot, {
         storageChatId = snapshot?.storageChatId ?? snapshot?.chatId,
     } = {}) {
-        attachStorageChatId(snapshot, storageChatId);
         try {
-            await this.store.addSnapshot(snapshot, {
-                partitionChatId: snapshot.storageChatId,
-            });
+            attachStorageChatId(snapshot, storageChatId);
+            await withCaptureTimeout(
+                () => this.store.addSnapshot(snapshot, {
+                    partitionChatId: snapshot.storageChatId,
+                }),
+                this.storageWaitMs,
+                'capture-storage-timeout',
+            );
         } catch (error) {
             this.dispatchCaptureStatus('failed', {
                 promptType: snapshot?.promptType,

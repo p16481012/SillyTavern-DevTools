@@ -119,7 +119,6 @@ test('beginner navigation, capture status, and quick start stay compact and acce
     const secondaryButton = cssBlock(css, '.st-devtools-secondary-tabs > button');
     const headerAction = cssBlock(css, '.st-devtools-header-actions .menu_button');
     const captureStatus = cssBlock(css, '.st-devtools-capture-status');
-    const helpPanel = cssBlock(css, '.st-devtools-help-panel');
     const quickStartStep = cssBlock(css, '.st-devtools-quick-start-step');
     const settingsGroupSummary = cssBlock(
         css,
@@ -152,8 +151,7 @@ test('beginner navigation, capture status, and quick start stay compact and acce
     assert.match(captureStatus, /border-left:\s*3px solid var\(--st-devtools-capture-color\)/);
     assert.match(css, /\.st-devtools-capture-status\.is-saved[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-success\)/);
     assert.match(css, /\.st-devtools-capture-status\.is-failed[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-danger\)/);
-    assert.match(css, /\.st-devtools-help-overlay\[hidden\][\s\S]*?display:\s*none/);
-    assert.match(helpPanel, /width:\s*min\(560px, 100%\)/);
+    assert.doesNotMatch(css, /\.st-devtools-help-(?:overlay|panel|header|body)/);
     assert.match(quickStartStep, /grid-template-columns:\s*1\.75rem minmax\(0, 1fr\)/);
     assert.match(settingsGroupSummary, /min-height:\s*44px/);
     assert.match(settingsGroupContent, /display:\s*grid/);
@@ -182,7 +180,6 @@ test('beginner navigation, capture status, and quick start stay compact and acce
         ['snapshot.label', '현재 요청'],
         ['capture.status.label', '캡처 상태'],
         ['action.refresh', '새로고침'],
-        ['action.help', '사용법'],
         ['action.returnToChat', '채팅으로 돌아가기'],
         ['rules.semanticDisclosureTitle', 'AI로 더 자세히 보기'],
         ['rules.advancedAnalysisTitle', '분석 상세'],
@@ -205,8 +202,6 @@ test('beginner navigation, capture status, and quick start stay compact and acce
         'capture.status.failed',
         'capture.status.excludedSemantic',
         'capture.status.skippedSafety',
-        'help.title',
-        'help.description',
         'help.step1Title',
         'help.step1Description',
         'help.step2Title',
@@ -219,6 +214,38 @@ test('beginner navigation, capture status, and quick start stay compact and acce
     ]) {
         assert.match(i18n, new RegExp(`'${key.replaceAll('.', '\\.')}':`));
     }
+    assert.doesNotMatch(i18n, /'action\.help'|'help\.(?:title|description)'/);
+});
+
+test('panel controls and disclosure headings resist host theme layout rules', async () => {
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    const menuButton = cssBlock(css, '.st-devtools-window .menu_button');
+    const button = cssBlock(css, '.st-devtools-window button');
+    const summary = cssBlock(css, '.st-devtools-window :where(details > summary)');
+    const summaryChildren = cssBlock(
+        css,
+        '.st-devtools-window :where(details > summary > *)',
+    );
+    const customSummary = cssBlock(css, '.st-devtools-settings-group > summary');
+
+    assert.match(menuButton, /box-sizing:\s*border-box/);
+    assert.match(menuButton, /flex:\s*0 0 auto/);
+    assert.match(menuButton, /width:\s*auto/);
+    assert.match(button, /flex-grow:\s*0/);
+    assert.match(button, /flex-shrink:\s*0/);
+    assert.match(
+        css,
+        /\.st-devtools-window select\s*\{\s*flex:\s*0 1 auto/,
+    );
+    assert.match(
+        css,
+        /\.st-devtools-window button,\s*\.st-devtools-window select\s*\{[\s\S]*?box-sizing:\s*border-box[\s\S]*?writing-mode:\s*horizontal-tb/,
+    );
+    assert.match(summary, /display:\s*list-item/);
+    assert.match(summary, /width:\s*100%/);
+    assert.match(summary, /text-align:\s*left/);
+    assert.match(summaryChildren, /text-align:\s*left/);
+    assert.match(customSummary, /display:\s*flex/);
 });
 
 test('help tooltips and nested disclosures keep responsive interaction contracts', async () => {

@@ -105,6 +105,7 @@ import {
     V1_UI_PREFERENCES_KEY,
     V2_UI_PREFERENCES_KEY,
     V3_UI_PREFERENCES_KEY,
+    V4_UI_PREFERENCES_KEY,
     normalizeUiPreferences,
     readUiPreferencesFromStorage,
 } from './preferences.js';
@@ -125,6 +126,7 @@ import {
     createUnavailableUsage,
     normalizeUsageRecord,
 } from './provider-usage.js';
+import { normalizeSemanticConnectionProfileId } from './semantic-connection-profiles.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -145,6 +147,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
+    V4_UI_PREFERENCES_KEY,
     V3_UI_PREFERENCES_KEY,
     V2_UI_PREFERENCES_KEY,
     V1_UI_PREFERENCES_KEY,
@@ -788,9 +791,6 @@ export class DevToolsWindow {
         this.settingsOverlay = null;
         this.settingsPanel = null;
         this.settingsRefreshTimer = null;
-        this.helpOverlay = null;
-        this.helpPanel = null;
-        this.helpPreviouslyFocused = null;
         this.themeModeInput = null;
         this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
@@ -798,6 +798,8 @@ export class DevToolsWindow {
         this.retentionMaxBytesMiBInput = null;
         this.captureModeInput = null;
         this.semanticInspectorEnabledInput = null;
+        this.semanticConnectionProfileInput = null;
+        this.semanticConnectionProfileStatus = null;
         this.semanticResponseTokenCapInput = null;
         this.resetPricingEditor = null;
         this.semanticInspectionState = {
@@ -1366,7 +1368,8 @@ export class DevToolsWindow {
                 current = null;
             }
             const hasLegacy = (
-                localStorage.getItem(V3_UI_PREFERENCES_KEY) != null
+                localStorage.getItem(V4_UI_PREFERENCES_KEY) != null
+                || localStorage.getItem(V3_UI_PREFERENCES_KEY) != null
                 || localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
                 || localStorage.getItem(V1_UI_PREFERENCES_KEY) != null
             );
@@ -1375,6 +1378,7 @@ export class DevToolsWindow {
                     UI_PREFERENCES_KEY,
                     JSON.stringify(preferences),
                 );
+                localStorage.removeItem(V4_UI_PREFERENCES_KEY);
                 localStorage.removeItem(V3_UI_PREFERENCES_KEY);
                 localStorage.removeItem(V2_UI_PREFERENCES_KEY);
                 localStorage.removeItem(V1_UI_PREFERENCES_KEY);
@@ -1411,6 +1415,7 @@ export class DevToolsWindow {
             storage = globalThis.localStorage;
             backup = new Map([
                 [UI_PREFERENCES_KEY, storage.getItem(UI_PREFERENCES_KEY)],
+                [V4_UI_PREFERENCES_KEY, storage.getItem(V4_UI_PREFERENCES_KEY)],
                 [V3_UI_PREFERENCES_KEY, storage.getItem(V3_UI_PREFERENCES_KEY)],
                 [V2_UI_PREFERENCES_KEY, storage.getItem(V2_UI_PREFERENCES_KEY)],
                 [V1_UI_PREFERENCES_KEY, storage.getItem(V1_UI_PREFERENCES_KEY)],
@@ -1426,11 +1431,13 @@ export class DevToolsWindow {
             ) {
                 throw new Error('settings-storage-write-not-observed');
             }
+            storage.removeItem(V4_UI_PREFERENCES_KEY);
             storage.removeItem(V3_UI_PREFERENCES_KEY);
             storage.removeItem(V2_UI_PREFERENCES_KEY);
             storage.removeItem(V1_UI_PREFERENCES_KEY);
             if (
-                storage.getItem(V3_UI_PREFERENCES_KEY) !== null
+                storage.getItem(V4_UI_PREFERENCES_KEY) !== null
+                || storage.getItem(V3_UI_PREFERENCES_KEY) !== null
                 || storage.getItem(V2_UI_PREFERENCES_KEY) !== null
                 || storage.getItem(V1_UI_PREFERENCES_KEY) !== null
             ) {
@@ -1455,6 +1462,73 @@ export class DevToolsWindow {
             error.code = 'settings-storage-write-failed';
             throw error;
         }
+    }
+
+    semanticConnectionProfiles() {
+        try {
+            const result = this.semanticInspector?.connectionProfiles?.();
+            if (
+                result
+                && ['available', 'unavailable'].includes(result.status)
+                && Array.isArray(result.profiles)
+            ) {
+                return result;
+            }
+        } catch {
+            // Connection profiles are optional; the current connection remains usable.
+        }
+        return { status: 'unavailable', profiles: [] };
+    }
+
+    populateSemanticConnectionProfiles(select, selectedId = null, status = null) {
+        if (!select) return null;
+        const result = this.semanticConnectionProfiles();
+        const profiles = result.profiles.filter((profile) => (
+            profile
+            && typeof profile.id === 'string'
+            && profile.id.length > 0
+        ));
+        select.replaceChildren();
+        const current = element('option', {
+            text: t('settings.semanticConnectionProfile.current'),
+        });
+        current.value = '';
+        select.appendChild(current);
+        const preservedSelectedId = result.status === 'unavailable'
+            ? normalizeSemanticConnectionProfileId(selectedId)
+            : null;
+        if (preservedSelectedId) {
+            const savedUnavailable = element('option', {
+                text: t('settings.semanticConnectionProfile.savedUnavailable'),
+            });
+            savedUnavailable.value = preservedSelectedId;
+            savedUnavailable.disabled = true;
+            select.appendChild(savedUnavailable);
+        }
+        for (const profile of profiles) {
+            const option = element('option', {
+                text: typeof profile.name === 'string' && profile.name.trim()
+                    ? profile.name.trim()
+                    : t('settings.semanticConnectionProfile.unnamed'),
+            });
+            option.value = profile.id;
+            select.appendChild(option);
+        }
+        const selectedAvailable = typeof selectedId === 'string'
+            && profiles.some(({ id }) => id === selectedId);
+        select.value = selectedAvailable || preservedSelectedId
+            ? selectedId
+            : '';
+        if (status) {
+            status.textContent = result.status === 'unavailable'
+                ? preservedSelectedId
+                    ? t('settings.semanticConnectionProfile.unavailablePreserved')
+                    : t('settings.semanticConnectionProfile.unavailable')
+                : profiles.length === 0
+                    ? t('settings.semanticConnectionProfile.empty')
+                    : t('settings.semanticConnectionProfile.privacy');
+        }
+        return select.value || null;
     }
 
     buildPricingSettingsEditor() {
@@ -1834,6 +1908,28 @@ export class DevToolsWindow {
             semanticToggle,
             element('span', { text: t('settings.semanticEnabled') }),
         );
+        const semanticProfileLabel = element('label', {
+            className: 'st-devtools-semantic-profile',
+        });
+        semanticProfileLabel.appendChild(explainedTitle(
+            t('settings.semanticConnectionProfile'),
+            t('settings.semanticConnectionProfileDescription'),
+        ));
+        const semanticProfileSelect = element('select');
+        semanticProfileSelect.id = 'st-devtools-settings-semantic-profile';
+        semanticProfileSelect.setAttribute(
+            'aria-label',
+            t('settings.semanticConnectionProfile'),
+        );
+        const semanticProfileStatus = proseElement('small', '', {
+            className: 'st-devtools-semantic-profile-status',
+        });
+        semanticProfileLabel.appendChild(semanticProfileSelect);
+        this.populateSemanticConnectionProfiles(
+            semanticProfileSelect,
+            this.preferences.semanticConnectionProfileId,
+            semanticProfileStatus,
+        );
         const semanticCapLabel = element('label', {
             className: 'st-devtools-semantic-cap',
         });
@@ -1859,7 +1955,12 @@ export class DevToolsWindow {
             },
         ));
         const syncSemanticSettings = () => {
+            semanticProfileSelect.disabled = !semanticToggle.checked;
             semanticCapInput.disabled = !semanticToggle.checked;
+            semanticProfileLabel.classList.toggle(
+                'is-disabled',
+                semanticProfileSelect.disabled,
+            );
             semanticCapLabel.classList.toggle(
                 'is-disabled',
                 semanticCapInput.disabled,
@@ -1869,6 +1970,8 @@ export class DevToolsWindow {
         syncSemanticSettings();
         semanticField.append(
             semanticToggleLabel,
+            semanticProfileLabel,
+            semanticProfileStatus,
             semanticCapLabel,
             semanticCapHint,
             proseElement('small', t('settings.semanticPrivacyWarning'), {
@@ -1939,6 +2042,11 @@ export class DevToolsWindow {
             );
             captureSelect.value = DEFAULT_UI_PREFERENCES.captureMode;
             semanticToggle.checked = DEFAULT_UI_PREFERENCES.semanticInspectorEnabled;
+            this.populateSemanticConnectionProfiles(
+                semanticProfileSelect,
+                DEFAULT_UI_PREFERENCES.semanticConnectionProfileId,
+                semanticProfileStatus,
+            );
             semanticCapInput.value = String(
                 DEFAULT_UI_PREFERENCES.semanticResponseTokenCap,
             );
@@ -2001,6 +2109,7 @@ export class DevToolsWindow {
                 retentionMaxBytes: Number(byteInput.value) * MEBIBYTE,
                 captureMode: captureSelect.value,
                 semanticInspectorEnabled: semanticToggle.checked,
+                semanticConnectionProfileId: semanticProfileSelect.value || null,
                 semanticResponseTokenCap: semanticCapInput.value,
             });
             const retentionPolicy = {
@@ -2023,6 +2132,8 @@ export class DevToolsWindow {
             const semanticSettingsChanged = (
                 requested.semanticInspectorEnabled
                     !== previousPreferences.semanticInspectorEnabled
+                || requested.semanticConnectionProfileId
+                    !== previousPreferences.semanticConnectionProfileId
                 || requested.semanticResponseTokenCap
                     !== previousPreferences.semanticResponseTokenCap
             );
@@ -2138,6 +2249,11 @@ export class DevToolsWindow {
                 ));
                 captureSelect.value = preferences.captureMode;
                 semanticToggle.checked = preferences.semanticInspectorEnabled;
+                this.populateSemanticConnectionProfiles(
+                    semanticProfileSelect,
+                    preferences.semanticConnectionProfileId,
+                    semanticProfileStatus,
+                );
                 semanticCapInput.value = String(
                     preferences.semanticResponseTokenCap,
                 );
@@ -2199,6 +2315,8 @@ export class DevToolsWindow {
         this.retentionMaxBytesMiBInput = byteInput;
         this.captureModeInput = captureSelect;
         this.semanticInspectorEnabledInput = semanticToggle;
+        this.semanticConnectionProfileInput = semanticProfileSelect;
+        this.semanticConnectionProfileStatus = semanticProfileStatus;
         this.semanticResponseTokenCapInput = semanticCapInput;
         this.resetPricingEditor = () => {
             pricingEditor.details.open = false;
@@ -2714,6 +2832,19 @@ export class DevToolsWindow {
         this.semanticInspectorEnabledInput.checked = (
             this.preferences.semanticInspectorEnabled
         );
+        this.populateSemanticConnectionProfiles(
+            this.semanticConnectionProfileInput,
+            this.preferences.semanticConnectionProfileId,
+            this.semanticConnectionProfileStatus,
+        );
+        this.semanticConnectionProfileInput.disabled = (
+            !this.preferences.semanticInspectorEnabled
+        );
+        this.semanticConnectionProfileInput.closest('.st-devtools-semantic-profile')
+            ?.classList.toggle(
+                'is-disabled',
+                this.semanticConnectionProfileInput.disabled,
+            );
         this.semanticResponseTokenCapInput.value = String(
             this.preferences.semanticResponseTokenCap,
         );
@@ -3085,7 +3216,6 @@ export class DevToolsWindow {
         this.closeSemanticConsent(false, { restoreFocus: false });
         this.cancelSemanticInspection();
         this.closeSettings({ restoreFocus: false });
-        this.closeHelp({ restoreFocus: false });
         if (this.root) {
             this.root.hidden = true;
         }
@@ -3118,15 +3248,6 @@ export class DevToolsWindow {
         );
 
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
-        const help = element('button', {
-            className: 'menu_button st-devtools-help-trigger',
-            title: t('action.help'),
-            type: 'button',
-        });
-        help.setAttribute('aria-label', t('action.help'));
-        help.dataset.tourId = 'help';
-        help.appendChild(element('i', { className: 'fa-solid fa-circle-question' }));
-        help.addEventListener('click', () => this.openHelp());
         const settings = element('button', {
             className: 'menu_button',
             title: t('action.settings'),
@@ -3143,7 +3264,7 @@ export class DevToolsWindow {
         close.setAttribute('aria-label', t('action.close'));
         close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
         close.addEventListener('click', () => this.close());
-        headerActions.append(help, settings, refresh, close);
+        headerActions.append(settings, refresh, close);
         header.append(title, headerActions);
 
         const primaryTabs = element('nav', {
@@ -3203,7 +3324,6 @@ export class DevToolsWindow {
             this.content,
             this.buildSettingsPanel(),
             this.buildSemanticConsentDialog(),
-            this.buildHelpPanel(),
         );
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
@@ -3284,50 +3404,6 @@ export class DevToolsWindow {
         if (copy) copy.textContent = t(`capture.status.${keySuffix}`);
     }
 
-    buildHelpPanel() {
-        const overlay = element('div', {
-            className: 'st-devtools-help-overlay',
-        });
-        overlay.hidden = true;
-        overlay.addEventListener('pointerdown', (event) => {
-            if (event.target === overlay) this.closeHelp();
-        });
-        const panel = element('section', {
-            className: 'st-devtools-help-panel',
-        });
-        panel.setAttribute('role', 'dialog');
-        panel.setAttribute('aria-modal', 'true');
-        panel.setAttribute('aria-labelledby', 'st-devtools-help-title');
-        const header = element('header', {
-            className: 'st-devtools-help-header',
-        });
-        const heading = element('h2', {
-            text: t('help.title'),
-        });
-        heading.id = 'st-devtools-help-title';
-        const close = element('button', {
-            className: 'menu_button',
-            title: t('action.close'),
-            type: 'button',
-        });
-        close.setAttribute('aria-label', t('action.close'));
-        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
-        close.addEventListener('click', () => this.closeHelp());
-        header.append(heading, close);
-        const body = element('div', {
-            className: 'st-devtools-help-body',
-        });
-        body.append(
-            proseElement('p', t('help.description')),
-            this.renderQuickStart(),
-        );
-        panel.append(header, body);
-        overlay.appendChild(panel);
-        this.helpOverlay = overlay;
-        this.helpPanel = panel;
-        return overlay;
-    }
-
     renderQuickStart({ showHeading = false } = {}) {
         const section = element('section', {
             className: 'st-devtools-quick-start',
@@ -3362,36 +3438,6 @@ export class DevToolsWindow {
         );
         section.append(steps, note, diagnostics);
         return section;
-    }
-
-    openHelp() {
-        if (!this.helpOverlay || !this.helpPanel) return;
-        this.helpPreviouslyFocused = document.activeElement;
-        this.window.setAttribute('aria-modal', 'false');
-        for (const region of this.primaryRegions) {
-            region.inert = true;
-            region.setAttribute('aria-hidden', 'true');
-        }
-        this.helpOverlay.hidden = false;
-        queueMicrotask(() => this.helpPanel.querySelector('button')?.focus());
-    }
-
-    closeHelp({ restoreFocus = true } = {}) {
-        if (!this.helpOverlay || this.helpOverlay.hidden) return;
-        this.helpOverlay.hidden = true;
-        this.window.setAttribute('aria-modal', 'true');
-        for (const region of this.primaryRegions) {
-            region.inert = false;
-            region.removeAttribute('aria-hidden');
-        }
-        if (
-            restoreFocus
-            && this.helpPreviouslyFocused?.isConnected
-            && typeof this.helpPreviouslyFocused.focus === 'function'
-        ) {
-            this.helpPreviouslyFocused.focus();
-        }
-        this.helpPreviouslyFocused = null;
     }
 
     syncOpaqueTheme() {
@@ -3830,6 +3876,17 @@ export class DevToolsWindow {
                 this.preferences.semanticInspectorEnabled
             );
         }
+        if (this.semanticConnectionProfileInput) {
+            this.populateSemanticConnectionProfiles(
+                this.semanticConnectionProfileInput,
+                this.preferences.semanticConnectionProfileId,
+                this.semanticConnectionProfileStatus,
+            );
+            this.semanticConnectionProfileInput.disabled = true;
+            this.semanticConnectionProfileInput
+                .closest('.st-devtools-semantic-profile')
+                ?.classList.add('is-disabled');
+        }
         if (this.semanticResponseTokenCapInput) {
             this.semanticResponseTokenCapInput.value = String(
                 this.preferences.semanticResponseTokenCap,
@@ -3868,9 +3925,7 @@ export class DevToolsWindow {
             ? this.semanticConsentPanel
             : this.settingsOverlay && !this.settingsOverlay.hidden
                 ? this.settingsPanel
-                : this.helpOverlay && !this.helpOverlay.hidden
-                    ? this.helpPanel
-                    : this.window;
+                : this.window;
         return [...scope.querySelectorAll(
             'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
             'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
@@ -3894,8 +3949,6 @@ export class DevToolsWindow {
                 this.closeSemanticConsent(false);
             } else if (this.settingsOverlay && !this.settingsOverlay.hidden) {
                 this.closeSettings();
-            } else if (this.helpOverlay && !this.helpOverlay.hidden) {
-                this.closeHelp();
             } else {
                 this.close();
             }
@@ -3917,9 +3970,7 @@ export class DevToolsWindow {
             ? this.semanticConsentPanel
             : this.settingsOverlay && !this.settingsOverlay.hidden
                 ? this.settingsPanel
-                : this.helpOverlay && !this.helpOverlay.hidden
-                    ? this.helpPanel
-                    : this.window;
+                : this.window;
         if (!focusScope.contains(active)) {
             event.preventDefault();
             (event.shiftKey ? last : first).focus();
