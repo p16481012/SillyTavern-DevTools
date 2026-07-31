@@ -85,16 +85,20 @@ test('a delayed refresh for chat A cannot overwrite a newer chat B timeline', as
     assert.deepEqual(devTools.timeline.map(({ id }) => id), ['b']);
 });
 
-test('refresh uses the saved snapshot read limit and keeps the retained total', async () => {
+test('refresh migrates v0.8.9 read settings without lowering retention', async () => {
     globalThis.localStorage = memoryLocalStorage();
     localStorage.setItem(
         'st-devtools:preferences:v1',
         JSON.stringify({ timelineReadLimit: 7 }),
     );
     const calls = [];
+    const retentionLimits = [];
     const devTools = new DevToolsWindow({
         getContext: () => ({ chatId: 'chat-a' }),
         store: {
+            setMaxSnapshotsPerChat(limit) {
+                retentionLimits.push(limit);
+            },
             async getTimelinePage(chatId, options) {
                 calls.push([chatId, options]);
                 return {
@@ -115,6 +119,31 @@ test('refresh uses the saved snapshot read limit and keeps the retained total', 
     assert.deepEqual(calls, [['chat-a', { limit: 7 }]]);
     assert.equal(devTools.timeline.length, 7);
     assert.equal(devTools.timelineTotalCount, 42);
+    assert.deepEqual(retentionLimits, [100]);
+    assert.equal(localStorage.getItem('st-devtools:preferences:v1'), null);
+    assert.deepEqual(
+        JSON.parse(localStorage.getItem('st-devtools:preferences:v2')),
+        { timelineRetentionLimit: 100, timelineReadLimit: 7 },
+    );
+});
+
+test('a fresh profile configures the new 30 snapshot retention default', () => {
+    globalThis.localStorage = memoryLocalStorage();
+    const limits = [];
+    const devTools = new DevToolsWindow({
+        getContext: () => ({ chatId: 'chat-a' }),
+        store: {
+            setMaxSnapshotsPerChat(limit) {
+                limits.push(limit);
+            },
+        },
+        capture: { addEventListener() {} },
+        version: 'test',
+    });
+
+    assert.equal(devTools.preferences.timelineRetentionLimit, 30);
+    assert.equal(devTools.preferences.timelineReadLimit, 20);
+    assert.deepEqual(limits, [30]);
 });
 
 test('timeline refresh is not blocked by a slow all-chat storage summary', async () => {

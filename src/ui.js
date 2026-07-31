@@ -48,9 +48,13 @@ import {
 import { snapshotExportPreview } from './export-preview.js';
 import {
     DEFAULT_UI_PREFERENCES,
+    LEGACY_UI_PREFERENCES_KEY,
+    MAX_TIMELINE_RETENTION_LIMIT,
     MAX_TIMELINE_READ_LIMIT,
+    MIN_TIMELINE_RETENTION_LIMIT,
     MIN_TIMELINE_READ_LIMIT,
     UI_PREFERENCES_KEY,
+    migrateLegacyUiPreferences,
     normalizeUiPreferences,
 } from './preferences.js';
 
@@ -65,6 +69,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
+    LEGACY_UI_PREFERENCES_KEY,
 ];
 const COMPARISON_MODES = ['alternative', 'ignore', 'normal'];
 const COMPARISON_TARGETS = ['configured', 'all'];
@@ -535,6 +540,7 @@ export class DevToolsWindow {
             rebuilding: false,
         };
         this.preferences = this.loadUiPreferences();
+        this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
@@ -550,6 +556,7 @@ export class DevToolsWindow {
         this.settingsPreviouslyFocused = null;
         this.settingsOverlay = null;
         this.settingsPanel = null;
+        this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
         this.primaryRegions = [];
         this.storageErrors = [];
@@ -600,7 +607,18 @@ export class DevToolsWindow {
     loadUiPreferences() {
         try {
             const stored = JSON.parse(localStorage.getItem(UI_PREFERENCES_KEY) ?? 'null');
-            return normalizeUiPreferences(stored ?? DEFAULT_UI_PREFERENCES);
+            if (stored) return normalizeUiPreferences(stored);
+
+            const legacy = JSON.parse(
+                localStorage.getItem(LEGACY_UI_PREFERENCES_KEY) ?? 'null',
+            );
+            if (legacy) {
+                const migrated = migrateLegacyUiPreferences(legacy);
+                localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify(migrated));
+                localStorage.removeItem(LEGACY_UI_PREFERENCES_KEY);
+                return migrated;
+            }
+            return normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
         } catch {
             return normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
         }
@@ -610,6 +628,7 @@ export class DevToolsWindow {
         this.preferences = normalizeUiPreferences(value);
         try {
             localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify(this.preferences));
+            localStorage.removeItem(LEGACY_UI_PREFERENCES_KEY);
         } catch {
             // The current browser may not allow persistent local storage.
         }
@@ -650,39 +669,92 @@ export class DevToolsWindow {
         heading.append(titleGroup, close);
 
         const form = element('form', { className: 'st-devtools-settings-form' });
-        const field = element('div', { className: 'st-devtools-settings-field' });
-        const label = element('label');
-        label.htmlFor = 'st-devtools-settings-timeline-limit';
-        label.appendChild(element('strong', { text: t('settings.timelineReadLimit') }));
-        const description = proseElement(
+        const retentionField = element('div', { className: 'st-devtools-settings-field' });
+        const retentionLabel = element('label');
+        retentionLabel.htmlFor = 'st-devtools-settings-retention-limit';
+        retentionLabel.appendChild(element('strong', {
+            text: t('settings.timelineRetentionLimit'),
+        }));
+        const retentionDescription = proseElement(
+            'span',
+            t('settings.timelineRetentionLimitDescription'),
+            { className: 'st-devtools-settings-description' },
+        );
+        retentionDescription.id = 'st-devtools-settings-retention-limit-description';
+        const retentionInput = element('input');
+        retentionInput.id = 'st-devtools-settings-retention-limit';
+        retentionInput.type = 'number';
+        retentionInput.min = String(MIN_TIMELINE_RETENTION_LIMIT);
+        retentionInput.max = String(MAX_TIMELINE_RETENTION_LIMIT);
+        retentionInput.step = '1';
+        retentionInput.inputMode = 'numeric';
+        retentionInput.required = true;
+        retentionInput.value = String(this.preferences.timelineRetentionLimit);
+        retentionInput.setAttribute(
+            'aria-describedby',
+            'st-devtools-settings-retention-limit-description ' +
+            'st-devtools-settings-retention-limit-hint',
+        );
+        const retentionHint = proseElement(
+            'small',
+            t('settings.timelineRetentionLimitHint', {
+                min: MIN_TIMELINE_RETENTION_LIMIT,
+                max: MAX_TIMELINE_RETENTION_LIMIT,
+            }),
+        );
+        retentionHint.id = 'st-devtools-settings-retention-limit-hint';
+        retentionField.append(
+            retentionLabel,
+            retentionDescription,
+            retentionInput,
+            retentionHint,
+        );
+
+        const readField = element('div', { className: 'st-devtools-settings-field' });
+        const readLabel = element('label');
+        readLabel.htmlFor = 'st-devtools-settings-timeline-limit';
+        readLabel.appendChild(element('strong', { text: t('settings.timelineReadLimit') }));
+        const readDescription = proseElement(
             'span',
             t('settings.timelineReadLimitDescription'),
             { className: 'st-devtools-settings-description' },
         );
-        description.id = 'st-devtools-settings-timeline-limit-description';
-        const input = element('input');
-        input.id = 'st-devtools-settings-timeline-limit';
-        input.type = 'number';
-        input.min = String(MIN_TIMELINE_READ_LIMIT);
-        input.max = String(MAX_TIMELINE_READ_LIMIT);
-        input.step = '1';
-        input.inputMode = 'numeric';
-        input.required = true;
-        input.value = String(this.preferences.timelineReadLimit);
-        input.setAttribute(
+        readDescription.id = 'st-devtools-settings-timeline-limit-description';
+        const readInput = element('input');
+        readInput.id = 'st-devtools-settings-timeline-limit';
+        readInput.type = 'number';
+        readInput.min = String(MIN_TIMELINE_READ_LIMIT);
+        readInput.max = String(this.preferences.timelineRetentionLimit);
+        readInput.step = '1';
+        readInput.inputMode = 'numeric';
+        readInput.required = true;
+        readInput.value = String(this.preferences.timelineReadLimit);
+        readInput.setAttribute(
             'aria-describedby',
             'st-devtools-settings-timeline-limit-description ' +
             'st-devtools-settings-timeline-limit-hint',
         );
-        const hint = proseElement(
-            'small',
-            t('settings.timelineReadLimitHint', {
+        const readHint = proseElement('small');
+        readHint.id = 'st-devtools-settings-timeline-limit-hint';
+        readField.append(readLabel, readDescription, readInput, readHint);
+
+        const syncReadLimit = () => {
+            const retentionLimit = normalizeUiPreferences({
+                timelineRetentionLimit: retentionInput.value,
+                timelineReadLimit: readInput.value,
+            }).timelineRetentionLimit;
+            readInput.max = String(Math.min(MAX_TIMELINE_READ_LIMIT, retentionLimit));
+            if (Number(readInput.value) > retentionLimit) {
+                readInput.value = String(retentionLimit);
+            }
+            readHint.textContent = t('settings.timelineReadLimitHint', {
                 min: MIN_TIMELINE_READ_LIMIT,
-                max: MAX_TIMELINE_READ_LIMIT,
-            }),
-        );
-        hint.id = 'st-devtools-settings-timeline-limit-hint';
-        field.append(label, description, input, hint);
+                max: retentionLimit,
+            });
+        };
+        retentionInput.addEventListener('input', syncReadLimit);
+        readInput.addEventListener('input', syncReadLimit);
+        syncReadLimit();
 
         const actions = element('div', { className: 'st-devtools-settings-actions' });
         const reset = element('button', {
@@ -691,8 +763,10 @@ export class DevToolsWindow {
             type: 'button',
         });
         reset.addEventListener('click', () => {
-            input.value = String(DEFAULT_UI_PREFERENCES.timelineReadLimit);
-            input.focus();
+            retentionInput.value = String(DEFAULT_UI_PREFERENCES.timelineRetentionLimit);
+            readInput.value = String(DEFAULT_UI_PREFERENCES.timelineReadLimit);
+            syncReadLimit();
+            retentionInput.focus();
         });
         const cancel = element('button', {
             className: 'menu_button',
@@ -706,30 +780,113 @@ export class DevToolsWindow {
             type: 'submit',
         });
         actions.append(reset, cancel, apply);
-        form.append(field, actions);
+        form.append(retentionField, readField, actions);
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
-            const preferences = this.saveUiPreferences({
-                timelineReadLimit: input.value,
+            if (apply.disabled) return;
+            apply.disabled = true;
+            const requested = normalizeUiPreferences({
+                timelineRetentionLimit: retentionInput.value,
+                timelineReadLimit: readInput.value,
             });
-            input.value = String(preferences.timelineReadLimit);
-            this.closeSettings();
-            await this.refresh();
-            globalThis.toastr?.success?.(t('settings.saved'), 'ST DevTools');
+            try {
+                const previousRetention = Number(this.store.maxSnapshotsPerChat)
+                    || this.preferences.timelineRetentionLimit;
+                let pruneResult = {
+                    snapshotCount: 0,
+                    affectedChatCount: 0,
+                    approximateBytes: 0,
+                };
+                const isLoweringRetention = (
+                    requested.timelineRetentionLimit < previousRetention
+                );
+                if (
+                    isLoweringRetention
+                    && typeof this.store.getRetentionPrunePreview === 'function'
+                    && typeof this.store.applyRetentionLimit === 'function'
+                ) {
+                    while (true) {
+                        const preview = await this.store.getRetentionPrunePreview(
+                            requested.timelineRetentionLimit,
+                        );
+                        if (
+                            preview.snapshotCount > 0
+                            && !confirm(t('settings.timelineRetentionDecreaseConfirm', {
+                                limit: requested.timelineRetentionLimit,
+                                chats: preview.affectedChatCount,
+                                count: preview.snapshotCount,
+                                size: formatBytes(preview.approximateBytes),
+                            }))
+                        ) {
+                            return;
+                        }
+                        try {
+                            pruneResult = await this.store.applyRetentionLimit(
+                                requested.timelineRetentionLimit,
+                                { expectedRevision: preview.revision },
+                            );
+                            break;
+                        } catch (error) {
+                            if (error?.code === 'retention-preview-stale') continue;
+                            throw error;
+                        }
+                    }
+                } else if (typeof this.store.applyRetentionLimit === 'function') {
+                    pruneResult = await this.store.applyRetentionLimit(
+                        requested.timelineRetentionLimit,
+                    );
+                } else {
+                    this.store.setMaxSnapshotsPerChat?.(
+                        requested.timelineRetentionLimit,
+                    );
+                }
+                this.storageSummaryGeneration += 1;
+                this.storageSummaryRebuildScheduled = false;
+                this.storageSummaryRefreshPromise = null;
+                const preferences = this.saveUiPreferences(requested);
+                retentionInput.value = String(preferences.timelineRetentionLimit);
+                readInput.value = String(preferences.timelineReadLimit);
+                syncReadLimit();
+                this.closeSettings();
+                await this.refresh();
+                globalThis.toastr?.success?.(
+                    pruneResult.snapshotCount > 0
+                        ? t('settings.savedWithPrune', {
+                            count: pruneResult.snapshotCount,
+                        })
+                        : t('settings.saved'),
+                    'ST DevTools',
+                );
+            } catch (error) {
+                console.error('[ST DevTools] Failed to apply storage settings.', error);
+                globalThis.toastr?.error?.(
+                    t('settings.saveFailed', {
+                        message: error?.message || t('storage.unknownError'),
+                    }),
+                    'ST DevTools',
+                );
+            } finally {
+                apply.disabled = false;
+            }
         });
 
         panel.append(heading, form);
         overlay.appendChild(panel);
         this.settingsOverlay = overlay;
         this.settingsPanel = panel;
-        this.timelineReadLimitInput = input;
+        this.timelineRetentionLimitInput = retentionInput;
+        this.timelineReadLimitInput = readInput;
         return overlay;
     }
 
     openSettings() {
         if (!this.settingsOverlay || !this.settingsPanel) return;
         this.settingsPreviouslyFocused = document.activeElement;
+        this.timelineRetentionLimitInput.value = String(
+            this.preferences.timelineRetentionLimit,
+        );
         this.timelineReadLimitInput.value = String(this.preferences.timelineReadLimit);
+        this.timelineReadLimitInput.max = String(this.preferences.timelineRetentionLimit);
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
             region.inert = true;
@@ -737,8 +894,8 @@ export class DevToolsWindow {
         }
         this.settingsOverlay.hidden = false;
         queueMicrotask(() => {
-            this.timelineReadLimitInput?.focus();
-            this.timelineReadLimitInput?.select();
+            this.timelineRetentionLimitInput?.focus();
+            this.timelineRetentionLimitInput?.select();
         });
     }
 
@@ -1241,8 +1398,17 @@ export class DevToolsWindow {
             preview: false,
         };
         this.preferences = normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+        this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
+        if (this.timelineRetentionLimitInput) {
+            this.timelineRetentionLimitInput.value = String(
+                this.preferences.timelineRetentionLimit,
+            );
+        }
         if (this.timelineReadLimitInput) {
             this.timelineReadLimitInput.value = String(this.preferences.timelineReadLimit);
+            this.timelineReadLimitInput.max = String(
+                this.preferences.timelineRetentionLimit,
+            );
         }
         this.importedDiagnostics = null;
         this.diagnosticImportError = null;

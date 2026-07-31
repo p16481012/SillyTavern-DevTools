@@ -1,16 +1,41 @@
 import { CaptureController } from './src/capture.js';
 import { t } from './src/i18n.js';
+import {
+    DEFAULT_UI_PREFERENCES,
+    LEGACY_UI_PREFERENCES_KEY,
+    UI_PREFERENCES_KEY,
+    migrateLegacyUiPreferences,
+} from './src/preferences.js';
 import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.8.9';
+const VERSION = '0.8.10';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',
 ];
 
 let initialized = false;
+
+async function preserveLegacyRetentionForExistingData(store) {
+    try {
+        if (
+            localStorage.getItem(UI_PREFERENCES_KEY) != null
+            || localStorage.getItem(LEGACY_UI_PREFERENCES_KEY) != null
+        ) {
+            return;
+        }
+        const summary = await store.getStorageSummary();
+        if ((Number(summary?.chatCount) || 0) === 0) return;
+        localStorage.setItem(
+            UI_PREFERENCES_KEY,
+            JSON.stringify(migrateLegacyUiPreferences(DEFAULT_UI_PREFERENCES)),
+        );
+    } catch {
+        // Restricted local storage falls back to the in-memory defaults.
+    }
+}
 
 function validateContext(context) {
     const events = context?.eventTypes ?? context?.event_types ?? {};
@@ -74,6 +99,7 @@ async function initialize() {
         maxSnapshotsPerChat: 100,
     });
     await store.initialize();
+    await preserveLegacyRetentionForExistingData(store);
 
     const capture = new CaptureController({
         getContext: () => globalThis.SillyTavern.getContext(),

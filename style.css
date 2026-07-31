@@ -177,6 +177,11 @@
     gap: 0.45rem;
 }
 
+.st-devtools-settings-field + .st-devtools-settings-field {
+    padding-top: 1rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
 .st-devtools-settings-description,
 .st-devtools-settings-field small {
     opacity: 0.82;

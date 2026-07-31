@@ -130,11 +130,29 @@ function normalizeReadLimit(value, maximum) {
     return Math.min(maximum, Math.max(1, Math.trunc(number)));
 }
 
+function normalizeRetentionLimit(value, fallback = 100) {
+    const number = Number(value);
+    return Number.isFinite(number)
+        ? Math.max(1, Math.trunc(number))
+        : fallback;
+}
+
 function sumEntryBytes(entries) {
     return entries.reduce(
         (total, entry) => total + (Number(entry.approximateBytes) || 0),
         0,
     );
+}
+
+function normalizeLegacySnapshots(value) {
+    const { snapshots } = migrateTimeline(value);
+    const snapshotsById = new Map();
+    for (const snapshot of snapshots) {
+        const normalized = migrateSnapshot(snapshot);
+        if (normalized?.id) snapshotsById.set(normalized.id, normalized);
+    }
+    return [...snapshotsById.values()]
+        .sort((left, right) => left.timestamp - right.timestamp);
 }
 
 export class SnapshotStore {
@@ -146,7 +164,7 @@ export class SnapshotStore {
         summaryYieldBudgetMs = SUMMARY_YIELD_BUDGET_MS,
     }) {
         this.namespace = namespace;
-        this.maxSnapshotsPerChat = maxSnapshotsPerChat;
+        this.maxSnapshotsPerChat = normalizeRetentionLimit(maxSnapshotsPerChat);
         this.summaryYield = summaryYield;
         this.migrationYield = migrationYield;
         this.summaryYieldBudgetMs = Math.max(0, Number(summaryYieldBudgetMs) || 0);
@@ -200,6 +218,14 @@ export class SnapshotStore {
 
     getStatus() {
         return { ...this.backendStatus };
+    }
+
+    setMaxSnapshotsPerChat(value) {
+        this.maxSnapshotsPerChat = normalizeRetentionLimit(
+            value,
+            this.maxSnapshotsPerChat,
+        );
+        return this.maxSnapshotsPerChat;
     }
 
     timelineKey(chatId) {
@@ -293,14 +319,7 @@ export class SnapshotStore {
         }
 
         this.mutationRevision += 1;
-        const { snapshots } = migrateTimeline(legacyStored);
-        const snapshotsById = new Map();
-        for (const snapshot of snapshots) {
-            const normalized = migrateSnapshot(snapshot);
-            if (normalized?.id) snapshotsById.set(normalized.id, normalized);
-        }
-        const retained = [...snapshotsById.values()]
-            .sort((left, right) => left.timestamp - right.timestamp)
+        const retained = normalizeLegacySnapshots(legacyStored)
             .slice(-this.maxSnapshotsPerChat);
         const entries = [];
         let lastYieldAt = Date.now();
@@ -555,6 +574,123 @@ export class SnapshotStore {
             }
         }
         return [...containers.values()];
+    }
+
+    async retentionEntriesForContainer(container) {
+        if (container.indexKey) {
+            return normalizeTimelineIndex(
+                await this.read(container.indexKey, null),
+                container.chatId,
+            )?.entries ?? [];
+        }
+        if (container.legacyKey) {
+            const stored = await this.read(container.legacyKey, []);
+            return normalizeLegacySnapshots(stored).map((snapshot) => (
+                timelineEntry(snapshot)
+            ));
+        }
+        return [];
+    }
+
+    async getRetentionPrunePreview(value) {
+        const limit = normalizeRetentionLimit(value, this.maxSnapshotsPerChat);
+        return this.withLock(MUTATION_LOCK_KEY, async () => {
+            const containers = this.timelineContainers(await this.storageKeys());
+            let affectedChatCount = 0;
+            let snapshotCount = 0;
+            let approximateBytes = 0;
+
+            for (const container of containers) {
+                const entries = await this.retentionEntriesForContainer(container);
+                const removedEntries = entries.slice(
+                    0,
+                    Math.max(0, entries.length - limit),
+                );
+                if (removedEntries.length === 0) continue;
+                affectedChatCount += 1;
+                snapshotCount += removedEntries.length;
+                approximateBytes += sumEntryBytes(removedEntries);
+            }
+
+            return {
+                limit,
+                affectedChatCount,
+                snapshotCount,
+                approximateBytes,
+                revision: this.mutationRevision,
+            };
+        });
+    }
+
+    async applyRetentionLimit(value, { expectedRevision = null } = {}) {
+        const limit = normalizeRetentionLimit(value, this.maxSnapshotsPerChat);
+        if (limit >= this.maxSnapshotsPerChat) {
+            this.maxSnapshotsPerChat = limit;
+            return {
+                limit,
+                affectedChatCount: 0,
+                snapshotCount: 0,
+                approximateBytes: 0,
+            };
+        }
+
+        return this.withLock(MUTATION_LOCK_KEY, async () => {
+            if (
+                Number.isFinite(expectedRevision)
+                && expectedRevision !== this.mutationRevision
+            ) {
+                const error = new Error('Snapshot retention preview is stale.');
+                error.code = 'retention-preview-stale';
+                throw error;
+            }
+            this.mutationRevision += 1;
+            const containers = this.timelineContainers(await this.storageKeys());
+            let affectedChatCount = 0;
+            let snapshotCount = 0;
+            let approximateBytes = 0;
+
+            try {
+                for (const { chatId } of containers) {
+                    const indexKey = this.timelineIndexKey(chatId);
+                    await this.withLock(indexKey, async () => {
+                        const index = await this.readTimelineIndexUnlocked(chatId);
+                        const removedEntries = index.entries.slice(
+                            0,
+                            Math.max(0, index.entries.length - limit),
+                        );
+                        if (removedEntries.length === 0) return;
+                        const retainedEntries = index.entries.slice(-limit);
+
+                        await this.writeTimelineIndex(chatId, retainedEntries);
+                        for (const entry of removedEntries) {
+                            await this.remove(this.snapshotKey(chatId, entry.id));
+                        }
+                        affectedChatCount += 1;
+                        snapshotCount += removedEntries.length;
+                        approximateBytes += sumEntryBytes(removedEntries);
+                    });
+                }
+
+                await this.updateCompleteSummary({
+                    snapshotDelta: -snapshotCount,
+                    byteDelta: -approximateBytes,
+                });
+                this.maxSnapshotsPerChat = limit;
+                return {
+                    limit,
+                    affectedChatCount,
+                    snapshotCount,
+                    approximateBytes,
+                };
+            } catch (error) {
+                try {
+                    await this.remove(SUMMARY_KEY);
+                } catch {
+                    // A later summary rebuild will retry if metadata cleanup also fails.
+                }
+                throw error;
+            }
+        });
     }
 
     async clearAll() {

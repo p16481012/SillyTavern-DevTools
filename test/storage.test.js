@@ -116,6 +116,113 @@ test('adding a snapshot updates its record and lightweight index without reading
     assert.equal(store.memory.get(store.timelineIndexKey('chat')).entries.length, 3);
 });
 
+test('retention preview and pruning use lightweight indexes across every chat', async () => {
+    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
+    for (let index = 1; index <= 5; index += 1) {
+        await store.addSnapshot(snapshot(`a-${index}`, 'chat-a', index));
+    }
+    for (let index = 1; index <= 3; index += 1) {
+        await store.addSnapshot(snapshot(`b-${index}`, 'chat-b', index));
+    }
+    const before = await store.rebuildStorageSummary();
+    const read = store.read.bind(store);
+    let snapshotReads = 0;
+    store.read = async (key, ...args) => {
+        if (String(key).startsWith('snapshot:v2:')) snapshotReads += 1;
+        return read(key, ...args);
+    };
+
+    const preview = await store.getRetentionPrunePreview(2);
+    assert.equal(preview.limit, 2);
+    assert.equal(preview.affectedChatCount, 2);
+    assert.equal(preview.snapshotCount, 4);
+    assert.equal(preview.approximateBytes > 0, true);
+    assert.equal(Number.isInteger(preview.revision), true);
+    assert.equal(snapshotReads, 0);
+
+    const result = await store.applyRetentionLimit(2, {
+        expectedRevision: preview.revision,
+    });
+    assert.deepEqual(result, {
+        limit: preview.limit,
+        affectedChatCount: preview.affectedChatCount,
+        snapshotCount: preview.snapshotCount,
+        approximateBytes: preview.approximateBytes,
+    });
+    assert.equal(store.maxSnapshotsPerChat, 2);
+    assert.equal(snapshotReads, 0);
+    assert.deepEqual(
+        store.memory.get(store.timelineIndexKey('chat-a')).entries.map(({ id }) => id),
+        ['a-4', 'a-5'],
+    );
+    assert.deepEqual(
+        store.memory.get(store.timelineIndexKey('chat-b')).entries.map(({ id }) => id),
+        ['b-2', 'b-3'],
+    );
+    assert.equal(store.memory.has(store.snapshotKey('chat-a', 'a-1')), false);
+    assert.equal(store.memory.has(store.snapshotKey('chat-b', 'b-1')), false);
+
+    const after = await store.getStorageSummary();
+    assert.equal(after.snapshotCount, 4);
+    assert.equal(after.approximateBytes < before.approximateBytes, true);
+});
+
+test('retention pruning rejects a stale preview before deleting newer data', async () => {
+    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
+    for (let index = 1; index <= 3; index += 1) {
+        await store.addSnapshot(snapshot(`snapshot-${index}`, 'chat', index));
+    }
+    const preview = await store.getRetentionPrunePreview(2);
+    await store.addSnapshot(snapshot('snapshot-4', 'chat', 4));
+
+    await assert.rejects(
+        store.applyRetentionLimit(2, { expectedRevision: preview.revision }),
+        (error) => error?.code === 'retention-preview-stale',
+    );
+    assert.equal(store.maxSnapshotsPerChat, 100);
+    assert.equal((await store.getTimeline('chat')).length, 4);
+});
+
+test('retention pruning migrates legacy arrays and keeps only their newest records', async () => {
+    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
+    store.memory.set('timeline:legacy-chat', [
+        snapshot('old-1', 'legacy-chat', 1),
+        snapshot('old-2', 'legacy-chat', 2),
+        snapshot('new-1', 'legacy-chat', 3),
+        snapshot('new-2', 'legacy-chat', 4),
+    ]);
+
+    const preview = await store.getRetentionPrunePreview(2);
+    assert.equal(preview.affectedChatCount, 1);
+    assert.equal(preview.snapshotCount, 2);
+
+    await store.applyRetentionLimit(2);
+    assert.equal(store.memory.has('timeline:legacy-chat'), false);
+    assert.deepEqual(
+        (await store.getTimeline('legacy-chat')).map(({ id }) => id),
+        ['new-1', 'new-2'],
+    );
+});
+
+test('a capture concurrent with retention pruning still obeys the new limit', async () => {
+    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
+    yieldStorageOperations(store);
+    for (let index = 1; index <= 5; index += 1) {
+        await store.addSnapshot(snapshot(`snapshot-${index}`, 'chat', index));
+    }
+
+    await Promise.all([
+        store.applyRetentionLimit(2),
+        store.addSnapshot(snapshot('snapshot-6', 'chat', 6)),
+    ]);
+
+    assert.equal(store.maxSnapshotsPerChat, 2);
+    assert.deepEqual(
+        (await store.getTimeline('chat')).map(({ id }) => id),
+        ['snapshot-5', 'snapshot-6'],
+    );
+});
+
 test('bulk deletion removes selected snapshots in one locked batch and keeps the rest ordered', async () => {
     const store = new SnapshotStore({ namespace: 'test' });
     await Promise.all([

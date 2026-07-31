@@ -27,7 +27,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 5,
-        extensionVersion: '0.8.9',
+        extensionVersion: '0.8.10',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -430,6 +430,30 @@ capture.retrySnapshot = async (snapshot) => {
 };
 const store = {
     maxSnapshotsPerChat: 100,
+    setMaxSnapshotsPerChat(limit) {
+        this.maxSnapshotsPerChat = Math.max(1, Math.trunc(Number(limit) || 100));
+        return this.maxSnapshotsPerChat;
+    },
+    async getRetentionPrunePreview(limit) {
+        const normalizedLimit = Math.max(1, Math.trunc(Number(limit) || 100));
+        const removed = [timeline, otherTimeline].flatMap((items) => (
+            items.slice(0, Math.max(0, items.length - normalizedLimit))
+        ));
+        return {
+            limit: normalizedLimit,
+            affectedChatCount: [timeline, otherTimeline]
+                .filter((items) => items.length > normalizedLimit).length,
+            snapshotCount: removed.length,
+            approximateBytes: new TextEncoder().encode(JSON.stringify(removed)).length,
+        };
+    },
+    async applyRetentionLimit(limit) {
+        const preview = await this.getRetentionPrunePreview(limit);
+        timeline = timeline.slice(-preview.limit);
+        otherTimeline = otherTimeline.slice(-preview.limit);
+        this.maxSnapshotsPerChat = preview.limit;
+        return preview;
+    },
     getStatus() {
         return temporaryStorage
             ? {
@@ -495,7 +519,7 @@ const store = {
                 chatCount: timelines.length,
                 snapshotCount: null,
                 approximateBytes: null,
-                maxSnapshotsPerChat: 100,
+                maxSnapshotsPerChat: this.maxSnapshotsPerChat,
             };
         }
         return {
@@ -505,7 +529,7 @@ const store = {
             chatCount: timelines.length,
             snapshotCount: timelines.reduce((count, item) => count + item.timeline.length, 0),
             approximateBytes: new TextEncoder().encode(JSON.stringify(timelines)).length,
-            maxSnapshotsPerChat: 100,
+            maxSnapshotsPerChat: this.maxSnapshotsPerChat,
         };
     },
     async rebuildStorageSummary() {
@@ -522,7 +546,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.9',
+    version: '0.8.10',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());

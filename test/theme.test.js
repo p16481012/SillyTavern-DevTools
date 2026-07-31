@@ -164,7 +164,7 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });
 
-test('v0.8.9 safety controls remain visible, responsive, and confirm destructive output actions', async () => {
+test('v0.8.10 safety controls remain visible, responsive, and confirm destructive actions', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
@@ -195,5 +195,9 @@ test('v0.8.9 safety controls remain visible, responsive, and confirm destructive
     assert.match(ui, /function attachLazyDetailsContent\(details, createContent\)/);
     assert.match(cssBlock(css, '.st-devtools-settings-overlay'), /position:\s*absolute/);
     assert.match(cssBlock(css, '.st-devtools-settings-panel'), /width:\s*min\(480px, 100%\)/);
+    assert.match(i18n, /'settings\.timelineRetentionLimitHint':/);
+    assert.match(i18n, /'settings\.timelineRetentionDecreaseConfirm':/);
     assert.match(i18n, /'settings\.timelineReadLimitHint':/);
+    assert.match(ui, /this\.store\.getRetentionPrunePreview/);
+    assert.match(ui, /this\.store\.applyRetentionLimit/);
 });
