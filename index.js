@@ -1,16 +1,18 @@
 import { CaptureController } from './src/capture.js';
 import { t } from './src/i18n.js';
 import {
-    DEFAULT_UI_PREFERENCES,
-    LEGACY_UI_PREFERENCES_KEY,
     UI_PREFERENCES_KEY,
-    migrateLegacyUiPreferences,
+    V1_UI_PREFERENCES_KEY,
+    V2_UI_PREFERENCES_KEY,
+    legacyUiPreferencesForExistingData,
+    readUiPreferencesFromStorage,
 } from './src/preferences.js';
+import { applyAutomaticRetentionMaintenance } from './src/retention-maintenance.js';
 import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.9.2';
+const VERSION = '0.10.0';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',
@@ -18,23 +20,44 @@ const REQUIRED_EVENTS = [
 
 let initialized = false;
 
+function readStoredUiPreferences() {
+    return readUiPreferencesFromStorage(localStorage);
+}
+
+async function applyConfiguredRetention(store, {
+    preferences = readStoredUiPreferences(),
+} = {}) {
+    return applyAutomaticRetentionMaintenance(store, preferences);
+}
+
 async function preserveLegacyRetentionForExistingData(store) {
+    let preferencesReadable = true;
     try {
         if (
             localStorage.getItem(UI_PREFERENCES_KEY) != null
-            || localStorage.getItem(LEGACY_UI_PREFERENCES_KEY) != null
+            || localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
+            || localStorage.getItem(V1_UI_PREFERENCES_KEY) != null
         ) {
-            return;
+            return null;
         }
-        const summary = await store.getStorageSummary();
-        if ((Number(summary?.chatCount) || 0) === 0) return;
-        localStorage.setItem(
-            UI_PREFERENCES_KEY,
-            JSON.stringify(migrateLegacyUiPreferences(DEFAULT_UI_PREFERENCES)),
-        );
     } catch {
-        // Restricted local storage falls back to the in-memory defaults.
+        preferencesReadable = false;
     }
+    const summary = await store.getStorageSummary();
+    if ((Number(summary?.chatCount) || 0) === 0) return null;
+    const legacyPreferences = legacyUiPreferencesForExistingData();
+    if (preferencesReadable) {
+        try {
+            localStorage.setItem(
+                UI_PREFERENCES_KEY,
+                JSON.stringify(legacyPreferences),
+            );
+            return null;
+        } catch {
+            // Keep the conservative legacy limit in memory when writes are blocked.
+        }
+    }
+    return legacyPreferences;
 }
 
 function validateContext(context) {
@@ -99,13 +122,51 @@ async function initialize() {
         maxSnapshotsPerChat: 100,
     });
     await store.initialize();
-    await preserveLegacyRetentionForExistingData(store);
+    const storagePreferenceFallback = await preserveLegacyRetentionForExistingData(store);
+    const currentPreferences = () => {
+        if (!storagePreferenceFallback) return readStoredUiPreferences();
+        try {
+            if (localStorage.getItem(UI_PREFERENCES_KEY) != null) {
+                return readStoredUiPreferences();
+            }
+        } catch {
+            // Continue using the conservative in-memory migration.
+        }
+        return storagePreferenceFallback;
+    };
+    await applyConfiguredRetention(store, {
+        preferences: currentPreferences(),
+    });
 
     const capture = new CaptureController({
         getContext: () => globalThis.SillyTavern.getContext(),
         store,
         version: VERSION,
+        getCaptureMode: () => currentPreferences().captureMode,
     });
+    let retentionMaintenancePending = false;
+    let retentionMaintenanceDirty = false;
+    const scheduleRetentionMaintenance = () => {
+        retentionMaintenanceDirty = true;
+        if (retentionMaintenancePending) return;
+        retentionMaintenancePending = true;
+        setTimeout(async () => {
+            try {
+                while (retentionMaintenanceDirty) {
+                    retentionMaintenanceDirty = false;
+                    await applyConfiguredRetention(store, {
+                        preferences: currentPreferences(),
+                    });
+                }
+            } catch (error) {
+                console.error('[ST DevTools] Retention maintenance failed.', error);
+            } finally {
+                retentionMaintenancePending = false;
+                if (retentionMaintenanceDirty) scheduleRetentionMaintenance();
+            }
+        }, 0);
+    };
+    capture.addEventListener('snapshot', scheduleRetentionMaintenance);
     const devToolsWindow = new DevToolsWindow({
         getContext: () => globalThis.SillyTavern.getContext(),
         store,

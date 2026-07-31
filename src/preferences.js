@@ -1,14 +1,28 @@
-export const UI_PREFERENCES_KEY = 'st-devtools:preferences:v2';
-export const LEGACY_UI_PREFERENCES_KEY = 'st-devtools:preferences:v1';
+export const UI_PREFERENCES_KEY = 'st-devtools:preferences:v3';
+export const V2_UI_PREFERENCES_KEY = 'st-devtools:preferences:v2';
+export const V1_UI_PREFERENCES_KEY = 'st-devtools:preferences:v1';
+// Kept for callers that only know about one previous preference version.
+export const LEGACY_UI_PREFERENCES_KEY = V2_UI_PREFERENCES_KEY;
 export const MIN_TIMELINE_READ_LIMIT = 1;
-export const MAX_TIMELINE_READ_LIMIT = 100;
+export const MAX_TIMELINE_READ_LIMIT = 5_000;
 export const MIN_TIMELINE_RETENTION_LIMIT = 1;
-export const MAX_TIMELINE_RETENTION_LIMIT = 100;
+export const MAX_TIMELINE_RETENTION_LIMIT = 5_000;
 export const LEGACY_TIMELINE_RETENTION_LIMIT = 100;
+export const MIN_RETENTION_MAX_AGE_DAYS = 1;
+export const MAX_RETENTION_MAX_AGE_DAYS = 3_650;
+export const MAX_RETENTION_MAX_BYTES = 2_147_483_648;
 export const PANEL_THEME_MODES = Object.freeze(['auto', 'light', 'dark']);
+export const SNAPSHOT_CAPTURE_MODES = Object.freeze([
+    'full',
+    'redacted',
+    'metadata',
+]);
 export const DEFAULT_UI_PREFERENCES = Object.freeze({
     timelineRetentionLimit: 30,
     timelineReadLimit: 20,
+    retentionMaxAgeDays: 0,
+    retentionMaxBytes: 0,
+    captureMode: 'full',
     themeMode: 'auto',
 });
 
@@ -17,6 +31,14 @@ function clampInteger(value, fallback, minimum, maximum) {
     return Number.isFinite(requested)
         ? Math.min(maximum, Math.max(minimum, Math.trunc(requested)))
         : fallback;
+}
+
+function clampDisabledInteger(value, fallback, maximum, minimumWhenEnabled = 1) {
+    const requested = Number(value);
+    if (!Number.isFinite(requested)) return fallback;
+    const integer = Math.trunc(requested);
+    if (integer <= 0) return 0;
+    return Math.min(maximum, Math.max(minimumWhenEnabled, integer));
 }
 
 export function normalizeUiPreferences(value = {}) {
@@ -39,12 +61,68 @@ export function normalizeUiPreferences(value = {}) {
     const themeMode = PANEL_THEME_MODES.includes(requestedThemeMode)
         ? requestedThemeMode
         : DEFAULT_UI_PREFERENCES.themeMode;
-    return { timelineRetentionLimit, timelineReadLimit, themeMode };
+    const retentionMaxAgeDays = clampDisabledInteger(
+        value?.retentionMaxAgeDays,
+        DEFAULT_UI_PREFERENCES.retentionMaxAgeDays,
+        MAX_RETENTION_MAX_AGE_DAYS,
+        MIN_RETENTION_MAX_AGE_DAYS,
+    );
+    const retentionMaxBytes = clampDisabledInteger(
+        value?.retentionMaxBytes,
+        DEFAULT_UI_PREFERENCES.retentionMaxBytes,
+        MAX_RETENTION_MAX_BYTES,
+    );
+    const requestedCaptureMode = String(value?.captureMode ?? '');
+    const captureMode = SNAPSHOT_CAPTURE_MODES.includes(requestedCaptureMode)
+        ? requestedCaptureMode
+        : DEFAULT_UI_PREFERENCES.captureMode;
+    return {
+        timelineRetentionLimit,
+        timelineReadLimit,
+        retentionMaxAgeDays,
+        retentionMaxBytes,
+        captureMode,
+        themeMode,
+    };
 }
 
-export function migrateLegacyUiPreferences(value = {}) {
+export function migrateV2UiPreferences(value = {}) {
+    return normalizeUiPreferences(value);
+}
+
+export function migrateV1UiPreferences(value = {}) {
     return normalizeUiPreferences({
         ...value,
         timelineRetentionLimit: LEGACY_TIMELINE_RETENTION_LIMIT,
+    });
+}
+
+export function migrateLegacyUiPreferences(value = {}) {
+    return Object.prototype.hasOwnProperty.call(value ?? {}, 'timelineRetentionLimit')
+        ? migrateV2UiPreferences(value)
+        : migrateV1UiPreferences(value);
+}
+
+export function readUiPreferencesFromStorage(storage = globalThis.localStorage) {
+    const read = (key) => {
+        try {
+            return JSON.parse(storage?.getItem?.(key) ?? 'null');
+        } catch {
+            return null;
+        }
+    };
+    const current = read(UI_PREFERENCES_KEY);
+    if (current) return normalizeUiPreferences(current);
+    const v2 = read(V2_UI_PREFERENCES_KEY);
+    if (v2) return migrateV2UiPreferences(v2);
+    const v1 = read(V1_UI_PREFERENCES_KEY);
+    if (v1) return migrateV1UiPreferences(v1);
+    return normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+}
+
+export function legacyUiPreferencesForExistingData() {
+    return migrateV1UiPreferences({
+        timelineReadLimit: DEFAULT_UI_PREFERENCES.timelineReadLimit,
+        themeMode: DEFAULT_UI_PREFERENCES.themeMode,
     });
 }

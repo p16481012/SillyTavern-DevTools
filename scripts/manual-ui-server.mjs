@@ -14,7 +14,7 @@ const mimeTypes = {
 
 createServer(async (request, response) => {
     const requestPath = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
-    const relativePath = requestPath === '/' ? 'sandbox/ui-harness.html' : requestPath.slice(1);
+    const relativePath = requestPath === '/' ? 'sandbox/index.html' : requestPath.slice(1);
     const filePath = path.resolve(root, relativePath);
     if (!filePath.startsWith(`${root}${path.sep}`)) {
         response.writeHead(403).end('Forbidden');
@@ -31,5 +31,5 @@ createServer(async (request, response) => {
         response.writeHead(404).end('Not found');
     }
 }).listen(8766, '127.0.0.1', () => {
-    console.log('ST DevTools UI sandbox: http://127.0.0.1:8766/sandbox/ui-harness.html');
+    console.log('ST DevTools UI sandbox: http://127.0.0.1:8766/sandbox/index.html');
 });

@@ -18,7 +18,7 @@ function memoryLocalStorage() {
     };
 }
 
-test('v0.9.2 UI exposes provenance, provider, prefill, and structured diff views', async () => {
+test('v0.10.0 UI exposes provenance, provider, prefill, and structured diff views', async () => {
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');

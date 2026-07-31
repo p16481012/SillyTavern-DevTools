@@ -1,6 +1,28 @@
 import { DevToolsWindow } from '../src/ui.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 import { createProfileContext } from '../src/profile-context.js';
+import { transformSnapshotPrivacy } from '../src/snapshot-privacy.js';
+import {
+    createSnapshotArchive,
+    executeSnapshotArchiveImport,
+    prepareSnapshotArchiveImport,
+} from '../src/snapshot-archive.js';
+import {
+    DEFAULT_UI_PREFERENCES,
+    UI_PREFERENCES_KEY,
+} from '../src/preferences.js';
+
+const fixtureParameters = new URLSearchParams(globalThis.location?.search ?? '');
+
+function fixtureCount(name, minimum, maximum) {
+    if (!fixtureParameters.has(name)) return null;
+    const value = Number(fixtureParameters.get(name));
+    if (!Number.isFinite(value)) return minimum;
+    return Math.min(maximum, Math.max(minimum, Math.trunc(value)));
+}
+
+const requestedFixtureSize = fixtureCount('fixtureSize', 3, 5_000);
+const requestedSourceCount = fixtureCount('sourceCount', 2, 5_000);
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     const provider = additions.provider ?? additions.chatCompletionSource ?? 'openai';
@@ -32,7 +54,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 6,
-        extensionVersion: '0.9.2',
+        extensionVersion: '0.10.0',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -506,6 +528,164 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     };
 }
 
+function createCompactStressSnapshot(index, total) {
+    const timestamp = Date.UTC(2026, 6, 31, 0, 0, 0) + (index * 1_000);
+    const provider = ['openai', 'claude', 'makersuite'][index % 3];
+    const content = `성능 fixture ${index + 1}/${total}. 한국어로 간결하게 답변하세요.`;
+    return {
+        schemaVersion: 6,
+        extensionVersion: '0.10.0',
+        id: `stress-snapshot-${String(index + 1).padStart(4, '0')}`,
+        timestamp,
+        chatId: 'sandbox',
+        api: provider,
+        provider,
+        model: `stress-model-${(index % 7) + 1}`,
+        preset: 'sandbox-stress',
+        promptType: 'chat-completion',
+        generationType: 'normal',
+        finalText: content,
+        payload: [{ role: 'system', content }],
+        request: {
+            body: { model: `stress-model-${(index % 7) + 1}` },
+            settings: {},
+            bodyKeys: ['model'],
+            redactedPaths: [],
+            omittedMediaPaths: [],
+        },
+        sources: [
+            {
+                id: `stress-source-${index}`,
+                type: 'utility',
+                label: `성능 규칙 ${index + 1}`,
+                content,
+                attribution: 'exact',
+                included: true,
+                configuredEnabled: true,
+                tokenCount: 12,
+                metadata: {
+                    sourceKind: 'configuredPrompt',
+                    identifier: `stress-${index}`,
+                    name: `성능 규칙 ${index + 1}`,
+                    enabled: true,
+                    configuredEnabled: true,
+                    promptOrder: 0,
+                    promptOrderSource: 'fixture',
+                    role: 'system',
+                },
+                ranges: [{ start: 0, end: content.length }],
+                provenance: {
+                    method: 'configured-payload-exact',
+                    confidence: 1,
+                },
+            },
+            {
+                id: `stress-final-${index}`,
+                type: 'final',
+                label: 'Final Prompt',
+                labelKey: 'source.finalPrompt',
+                content,
+                attribution: 'exact',
+                included: true,
+                tokenCount: 12,
+                metadata: {},
+                ranges: [{ start: 0, end: content.length }],
+                provenance: { method: 'exact', confidence: 1 },
+            },
+        ],
+        lorebookEntries: index % 17 === 0
+            ? [{
+                uid: index,
+                world: 'Stress',
+                comment: `성능 로어 ${index + 1}`,
+                key: [`stress-${index}`],
+                position: 'before',
+                content: `결정적 로어 fixture ${index + 1}.`,
+            }]
+            : [],
+        stats: {
+            totalTokens: 80 + (index % 600),
+            maxContext: 8_192,
+            maxOutput: 512,
+            usableContext: 7_680,
+            contextUsage: (80 + (index % 600)) / 7_680,
+            remainingContext: 7_600 - (index % 600),
+            structured: {},
+        },
+    };
+}
+
+function applyStressSources(snapshot, count) {
+    const sourceCount = Math.max(2, count);
+    const promptSources = [];
+    const finalParts = [];
+    let offset = 0;
+    for (let index = 0; index < sourceCount - 1; index += 1) {
+        const content = `성능 그룹 | 옵션 ${String(index + 1).padStart(4, '0')}. 결정적 검색어 fixture-${index}.`;
+        const start = offset;
+        const end = start + content.length;
+        finalParts.push(content);
+        promptSources.push({
+            id: `stress:source:${index}`,
+            type: 'utility',
+            label: `성능 그룹 | 옵션 ${index + 1}`,
+            content,
+            attribution: 'exact',
+            included: true,
+            configuredEnabled: true,
+            tokenCount: 10 + (index % 5),
+            metadata: {
+                sourceKind: 'configuredPrompt',
+                identifier: `stress-option-${index}`,
+                name: `성능 그룹 | 옵션 ${index + 1}`,
+                enabled: true,
+                configuredEnabled: true,
+                promptOrder: index,
+                promptOrderSource: 'fixture',
+                role: 'system',
+            },
+            ranges: [{ start, end }],
+            provenance: {
+                method: 'configured-payload-exact',
+                confidence: 1,
+            },
+        });
+        offset = end + 1;
+    }
+    const finalText = finalParts.join('\n');
+    snapshot.finalText = finalText;
+    snapshot.payload = [{ role: 'system', content: finalText }];
+    snapshot.sources = [
+        ...promptSources,
+        {
+            id: 'stress:final',
+            type: 'final',
+            label: 'Final Prompt',
+            labelKey: 'source.finalPrompt',
+            content: finalText,
+            attribution: 'exact',
+            included: true,
+            tokenCount: promptSources.reduce(
+                (total, source) => total + source.tokenCount,
+                0,
+            ),
+            metadata: {},
+            ranges: [{ start: 0, end: finalText.length }],
+            provenance: { method: 'exact', confidence: 1 },
+        },
+    ];
+    snapshot.stats.totalTokens = snapshot.sources.at(-1).tokenCount;
+    snapshot.stats.contextUsage = Math.min(
+        1,
+        snapshot.stats.totalTokens / snapshot.stats.usableContext,
+    );
+    snapshot.stats.remainingContext = Math.max(
+        0,
+        snapshot.stats.usableContext - snapshot.stats.totalTokens,
+    );
+    return snapshot;
+}
+
 const sandboxNow = Date.UTC(2026, 6, 31, 12, 0, 0);
 const historicalProviders = [
     ['openai', 'gpt-4o'],
@@ -591,6 +771,41 @@ timeline.push(
         ],
     }),
 );
+const redactedFixture = await transformSnapshotPrivacy(
+    createSnapshot('privacy-redacted-source', sandboxNow + 1000, 144, {
+        chatId: 'sandbox',
+        model: 'sandbox-redacted',
+    }),
+    { mode: 'redacted' },
+);
+const metadataFixture = await transformSnapshotPrivacy(
+    createSnapshot('privacy-metadata-source', sandboxNow + 2000, 88, {
+        chatId: 'sandbox',
+        model: 'sandbox-metadata',
+    }),
+    { mode: 'metadata' },
+);
+for (const fixture of [redactedFixture, metadataFixture]) {
+    Object.defineProperty(fixture, 'storageChatId', {
+        value: 'sandbox',
+        enumerable: false,
+    });
+}
+if (requestedFixtureSize != null) {
+    timeline = Array.from(
+        { length: requestedFixtureSize },
+        (_, index) => createCompactStressSnapshot(index, requestedFixtureSize),
+    );
+    timeline.splice(-2, 2, redactedFixture, metadataFixture);
+} else {
+    timeline.push(redactedFixture, metadataFixture);
+}
+if (requestedSourceCount != null) {
+    const fullFixture = timeline.find(
+        (snapshot) => (snapshot.privacy?.mode ?? 'full') === 'full',
+    );
+    if (fullFixture) applyStressSources(fullFixture, requestedSourceCount);
+}
 let otherTimeline = [
     createSnapshot('other-1', sandboxNow - 30000, 96, { chatId: 'other-private-chat' }),
 ];
@@ -599,6 +814,104 @@ let summaryNeedsRebuild = false;
 let darkTheme = false;
 let timelinePageReadCount = 0;
 let corruptRecordCount = 2;
+let storageRevision = 0;
+let integrityFixture = {
+    missingRecords: 1,
+    corruptRecords: 1,
+    validOrphans: 1,
+    invalidIndexes: 1,
+    duplicateLegacyContainers: 1,
+    conflictingLegacyContainers: 1,
+};
+let exclusiveImportTail = Promise.resolve();
+
+function cloneSandboxSnapshot(snapshot, partitionChatId) {
+    const clone = structuredClone(snapshot);
+    const storageChatId = snapshot?.storageChatId ?? partitionChatId;
+    if (typeof storageChatId === 'string' && storageChatId) {
+        Object.defineProperty(clone, 'storageChatId', {
+            value: storageChatId,
+            enumerable: false,
+        });
+    }
+    return clone;
+}
+
+function cloneSandboxTimeline(items, partitionChatId) {
+    return items.map((snapshot) => cloneSandboxSnapshot(snapshot, partitionChatId));
+}
+
+function sandboxStoredTimelines() {
+    return [
+        { chatId: 'sandbox', timeline: cloneSandboxTimeline(timeline, 'sandbox') },
+        {
+            chatId: 'other-private-chat',
+            timeline: cloneSandboxTimeline(otherTimeline, 'other-private-chat'),
+        },
+    ].filter(({ timeline: items }) => items.length > 0);
+}
+
+function sandboxAddSnapshot(snapshot, { partitionChatId = null } = {}) {
+    const chatId = partitionChatId
+        ?? snapshot.storageChatId
+        ?? snapshot.chatId
+        ?? 'sandbox';
+    const target = chatId === 'other-private-chat' ? otherTimeline : timeline;
+    const next = [
+        ...target.filter((item) => item.id !== snapshot.id),
+        cloneSandboxSnapshot(snapshot, chatId),
+    ].sort((left, right) => left.timestamp - right.timestamp);
+    if (chatId === 'other-private-chat') otherTimeline = next;
+    else timeline = next;
+    storageRevision += 1;
+    return snapshot;
+}
+
+function sandboxClearAll() {
+    const result = {
+        chatCount: Number(timeline.length > 0) + Number(otherTimeline.length > 0),
+        snapshotCount: timeline.length + otherTimeline.length,
+    };
+    timeline = [];
+    otherTimeline = [];
+    corruptRecordCount = 0;
+    storageRevision += 1;
+    return result;
+}
+
+async function runSandboxExclusiveImport(owner, operation) {
+    const previous = exclusiveImportTail;
+    let release;
+    exclusiveImportTail = new Promise((resolve) => {
+        release = resolve;
+    });
+    await previous;
+    const backup = {
+        timeline: cloneSandboxTimeline(timeline, 'sandbox'),
+        otherTimeline: cloneSandboxTimeline(otherTimeline, 'other-private-chat'),
+        corruptRecordCount,
+        storageRevision,
+        integrityFixture: structuredClone(integrityFixture),
+        maxSnapshotsPerChat: owner.maxSnapshotsPerChat,
+    };
+    try {
+        return await operation({
+            getAllStoredTimelines: async () => sandboxStoredTimelines(),
+            addSnapshot: async (snapshot, options) => sandboxAddSnapshot(snapshot, options),
+            clearAll: async () => sandboxClearAll(),
+        });
+    } catch (error) {
+        timeline = backup.timeline;
+        otherTimeline = backup.otherTimeline;
+        corruptRecordCount = backup.corruptRecordCount;
+        storageRevision = backup.storageRevision;
+        integrityFixture = backup.integrityFixture;
+        owner.maxSnapshotsPerChat = backup.maxSnapshotsPerChat;
+        throw error;
+    } finally {
+        release();
+    }
+}
 
 const capture = new EventTarget();
 capture.retrySnapshot = async (snapshot) => {
@@ -622,14 +935,81 @@ const store = {
                 .filter((items) => items.length > normalizedLimit).length,
             snapshotCount: removed.length,
             approximateBytes: new TextEncoder().encode(JSON.stringify(removed)).length,
+            revision: storageRevision,
         };
     },
-    async applyRetentionLimit(limit) {
+    async applyRetentionLimit(limit, { expectedRevision = null } = {}) {
+        if (
+            Number.isFinite(expectedRevision)
+            && expectedRevision !== storageRevision
+        ) {
+            throw Object.assign(new Error('retention-preview-stale'), {
+                code: 'retention-preview-stale',
+            });
+        }
         const preview = await this.getRetentionPrunePreview(limit);
         timeline = timeline.slice(-preview.limit);
         otherTimeline = otherTimeline.slice(-preview.limit);
         this.maxSnapshotsPerChat = preview.limit;
+        storageRevision += 1;
         return preview;
+    },
+    async getRetentionPolicyPreview(policy) {
+        const count = Math.max(
+            1,
+            Math.trunc(Number(policy?.maxSnapshotsPerChat) || 30),
+        );
+        const selected = [];
+        for (const items of [timeline, otherTimeline]) {
+            selected.push(...items.slice(0, Math.max(0, items.length - count)));
+        }
+        const unique = [...new Map(selected.map((snapshot) => [
+            `${snapshot.storageChatId ?? snapshot.chatId}:${snapshot.id}`,
+            snapshot,
+        ])).values()];
+        const bytes = new TextEncoder().encode(JSON.stringify(unique)).length;
+        return {
+            revision: storageRevision,
+            policy: {
+                maxSnapshotsPerChat: count,
+                maxAgeDays: Math.max(0, Math.trunc(Number(policy?.maxAgeDays) || 0)),
+                maxTotalBytes: Math.max(0, Math.trunc(Number(policy?.maxTotalBytes) || 0)),
+            },
+            affectedChats: unique.length > 0 ? 1 : 0,
+            affectedChatCount: unique.length > 0 ? 1 : 0,
+            deleteCount: unique.length,
+            snapshotCount: unique.length,
+            deleteBytes: bytes,
+            approximateBytes: bytes,
+            overBudget: false,
+            targets: unique.slice(0, 25).map((snapshot) => ({
+                id: snapshot.id,
+                chatId: snapshot.storageChatId ?? snapshot.chatId,
+            })),
+            targetsTruncated: unique.length > 25,
+            integrity: {
+                healthy: Object.values(integrityFixture).every((value) => value === 0),
+                counts: { ...integrityFixture },
+            },
+        };
+    },
+    async applyRetentionPolicy(policy, { expectedRevision = null } = {}) {
+        if (expectedRevision !== storageRevision) {
+            throw Object.assign(new Error('retention-preview-stale'), {
+                code: 'retention-preview-stale',
+            });
+        }
+        const preview = await this.getRetentionPolicyPreview(policy);
+        const ids = new Set(preview.targets.map(({ id }) => id));
+        timeline = timeline.filter((snapshot) => !ids.has(snapshot.id));
+        otherTimeline = otherTimeline.filter((snapshot) => !ids.has(snapshot.id));
+        this.maxSnapshotsPerChat = preview.policy.maxSnapshotsPerChat;
+        storageRevision += 1;
+        return {
+            ...preview,
+            deletedCount: preview.deleteCount,
+            deletedBytes: preview.deleteBytes,
+        };
     },
     getStatus() {
         return temporaryStorage
@@ -669,33 +1049,100 @@ const store = {
     async deleteSnapshot(_chatId, snapshotId) {
         const previousLength = timeline.length;
         timeline = timeline.filter((snapshot) => snapshot.id !== snapshotId);
+        if (timeline.length !== previousLength) storageRevision += 1;
         return timeline.length !== previousLength;
     },
     async deleteSnapshots(_chatId, snapshotIds) {
         const ids = new Set(snapshotIds);
         const previousLength = timeline.length;
         timeline = timeline.filter((snapshot) => !ids.has(snapshot.id));
+        if (timeline.length !== previousLength) storageRevision += 1;
         return previousLength - timeline.length;
     },
     async clearTimeline() {
         timeline = [];
         corruptRecordCount = 0;
+        storageRevision += 1;
     },
     async clearAll() {
-        const result = {
-            chatCount: Number(timeline.length > 0) + Number(otherTimeline.length > 0),
-            snapshotCount: timeline.length + otherTimeline.length,
-        };
-        timeline = [];
-        otherTimeline = [];
-        corruptRecordCount = 0;
-        return result;
+        await exclusiveImportTail;
+        return sandboxClearAll();
+    },
+    async addSnapshot(snapshot, options = {}) {
+        await exclusiveImportTail;
+        return sandboxAddSnapshot(snapshot, options);
     },
     async getAllTimelines() {
-        return [
-            { chatId: 'sandbox', timeline },
-            { chatId: 'other-private-chat', timeline: otherTimeline },
-        ].filter(({ timeline: items }) => items.length > 0);
+        await exclusiveImportTail;
+        return sandboxStoredTimelines();
+    },
+    async getAllStoredTimelines() {
+        await exclusiveImportTail;
+        return sandboxStoredTimelines();
+    },
+    async runExclusiveImport(operation) {
+        return runSandboxExclusiveImport(this, operation);
+    },
+    async getStorageQuotaStatus() {
+        return {
+            available: true,
+            scope: 'browser-origin',
+            scopeLabel: '브라우저 오리진 전체',
+            usage: 24 * 1024 * 1024,
+            quota: 512 * 1024 * 1024,
+            reason: null,
+        };
+    },
+    async inspectStorageIntegrity() {
+        const indexRepairNeeded = integrityFixture.invalidIndexes > 0;
+        const summaryRepairNeeded = (
+            integrityFixture.missingRecords > 0
+            || integrityFixture.validOrphans > 0
+            || integrityFixture.duplicateLegacyContainers > 0
+        );
+        return {
+            revision: storageRevision,
+            healthy: Object.values(integrityFixture).every((value) => value === 0),
+            repairNeeded: Object.values(integrityFixture).some((value) => value !== 0),
+            indexRepairNeeded,
+            summaryRepairNeeded,
+            counts: {
+                ...integrityFixture,
+                total: Object.values(integrityFixture).reduce(
+                    (total, value) => total + value,
+                    0,
+                ),
+            },
+            issues: [],
+            issuesTruncated: false,
+            targets: [],
+            targetsTruncated: false,
+            plannedSummary: {
+                chatCount: 2,
+                snapshotCount: timeline.length + otherTimeline.length,
+                approximateBytes: 0,
+            },
+        };
+    },
+    async repairStorageIntegrity({ expectedRevision } = {}) {
+        if (expectedRevision !== storageRevision) {
+            throw Object.assign(new Error('integrity-preview-stale'), {
+                code: 'integrity-preview-stale',
+            });
+        }
+        integrityFixture = {
+            missingRecords: 0,
+            corruptRecords: integrityFixture.corruptRecords,
+            validOrphans: 0,
+            invalidIndexes: 0,
+            duplicateLegacyContainers: 0,
+            conflictingLegacyContainers: integrityFixture.conflictingLegacyContainers,
+        };
+        storageRevision += 1;
+        return {
+            ...(await this.inspectStorageIntegrity()),
+            repaired: true,
+        };
     },
     async getStorageSummary() {
         const timelines = await this.getAllTimelines();
@@ -730,13 +1177,28 @@ const context = {
     getCurrentChatId: () => 'sandbox',
     chatId: 'sandbox',
 };
+if (requestedFixtureSize != null) {
+    localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
+        ...DEFAULT_UI_PREFERENCES,
+        timelineRetentionLimit: requestedFixtureSize,
+        timelineReadLimit: requestedFixtureSize,
+    }));
+}
 const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.9.2',
+    version: '0.10.0',
 });
 document.body.dataset.fixtureSchema = '6';
+document.body.dataset.fixtureSize = String(timeline.length);
+document.body.dataset.sourceCount = String(
+    timeline.find((snapshot) => (snapshot.privacy?.mode ?? 'full') === 'full')
+        ?.sources?.length ?? 0,
+);
+document.body.dataset.stressFixture = String(
+    requestedFixtureSize != null || requestedSourceCount != null,
+);
 document.body.dataset.fixtureFeatures = [
     'provider-trace',
     'provenance-available',
@@ -747,6 +1209,14 @@ document.body.dataset.fixtureFeatures = [
     'metadata-diff',
     'lore-changed',
     'corrupt-warning',
+    'privacy-redacted',
+    'privacy-metadata',
+    'retention-policy',
+    'storage-integrity',
+    'storage-quota',
+    'archive-transfer',
+    'diagnostic-compare',
+    'performance-stress',
 ].join(',');
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
@@ -795,4 +1265,99 @@ document.getElementById('sandbox-import-invalid').addEventListener('click', asyn
     );
     await devTools.importDiagnosticFile(file);
 });
+
+async function runArchiveImportSmokeTest() {
+    const incoming = createSnapshot(
+        'sandbox-archive-import',
+        sandboxNow + 3000,
+        132,
+        {
+            chatId: 'sandbox',
+            provider: 'openrouter',
+            model: 'sandbox-archive-model',
+        },
+    );
+    const archive = await createSnapshotArchive({
+        timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
+        mode: 'full',
+        exportedAt: sandboxNow + 4000,
+        extensionVersion: '0.10.0',
+    });
+    const plan = await prepareSnapshotArchiveImport(
+        archive,
+        await store.getAllStoredTimelines(),
+        { strategy: 'merge', conflictPolicy: 'skip' },
+    );
+    const result = await executeSnapshotArchiveImport(store, plan);
+    document.body.dataset.archiveImportResult = result.code;
+    document.body.dataset.archiveImportVerified = String(result.verified);
+    return result;
+}
+
+async function runArchiveRollbackSmokeTest() {
+    const before = JSON.stringify(await store.getAllStoredTimelines());
+    try {
+        await store.runExclusiveImport(async (facade) => {
+            await facade.clearAll();
+            await facade.addSnapshot(createSnapshot(
+                'sandbox-rollback-probe',
+                sandboxNow + 5000,
+                32,
+                { chatId: 'sandbox' },
+            ), { partitionChatId: 'sandbox' });
+            throw Object.assign(new Error('sandbox-rollback-probe'), {
+                code: 'sandbox-rollback-probe',
+            });
+        });
+    } catch (error) {
+        if (error?.code !== 'sandbox-rollback-probe') throw error;
+    }
+    const restored = JSON.stringify(await store.getAllStoredTimelines()) === before;
+    document.body.dataset.archiveRollbackRestored = String(restored);
+    return restored;
+}
+
+document.getElementById('sandbox-archive-import-valid')?.addEventListener('click', async () => {
+    await runArchiveImportSmokeTest();
+});
+
+function selectPrivacyFixture(mode) {
+    const fixture = mode === 'full'
+        ? timeline.find((snapshot) => (snapshot.privacy?.mode ?? 'full') === 'full')
+        : timeline.find((snapshot) => snapshot.privacy?.mode === mode);
+    if (!fixture) return false;
+    devTools.selectedId = fixture.id;
+    devTools.render();
+    return true;
+}
+document.getElementById('sandbox-select-full')?.addEventListener('click', () => {
+    selectPrivacyFixture('full');
+});
+document.getElementById('sandbox-select-redacted')?.addEventListener('click', () => {
+    selectPrivacyFixture('redacted');
+});
+document.getElementById('sandbox-select-metadata')?.addEventListener('click', () => {
+    selectPrivacyFixture('metadata');
+});
+globalThis.devToolsSandboxFixtures = {
+    selectPrivacyFixture,
+    runArchiveImportSmokeTest,
+    runArchiveRollbackSmokeTest,
+    performance: {
+        fixtureSize: timeline.length,
+        sourceCount: Number(document.body.dataset.sourceCount),
+    },
+    renderPrivacyTabs(mode) {
+        if (!selectPrivacyFixture(mode)) return [];
+        const results = [];
+        for (const tab of ['explorer', 'timeline', 'diff', 'context', 'rules', 'search']) {
+            devTools.selectTab(tab);
+            results.push({
+                tab,
+                text: devTools.content?.textContent ?? '',
+            });
+        }
+        return results;
+    },
+};
 globalThis.devToolsSandbox = devTools;

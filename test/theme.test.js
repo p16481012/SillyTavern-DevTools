@@ -184,8 +184,9 @@ test('v0.9.1 safety and theme controls remain responsive', async () => {
     assert.match(ui, /this\.store\.clearAll\(\)/);
     assert.match(ui, /className:\s*'st-devtools-storage-warning'/);
     assert.match(ui, /warning\.setAttribute\('role', 'alert'\)/);
-    assert.match(ui, /searchSnapshotSafely\(snapshot, query/);
+    assert.match(ui, /this\.runUiAnalysis\('search'/);
     assert.match(ui, /activeSearch\?\.abort\(\)/);
+    assert.match(ui, /sequence !== searchSequence \|\| !page\.isConnected/);
     assert.match(ui, /renderExportPrivacyPreview\(snapshot\)/);
     assert.match(ui, /confirm\(t\('export\.copyConfirm'\)\)/);
     assert.match(ui, /confirm\(t\('export\.confirm'/);

@@ -606,3 +606,47 @@ test('capture sanitizes secrets from context, lore, payload, and request structu
         true,
     );
 });
+
+test('capture applies the selected privacy mode before persistent storage', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            addSnapshot: async (snapshot, options) => saved.push({
+                snapshot: structuredClone(snapshot),
+                options: structuredClone(options),
+            }),
+        },
+        version: 'test',
+        settingsWaitMs: 50,
+        getCaptureMode: () => 'metadata',
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'system', content: 'Never persist this original prompt' }],
+        dryRun: false,
+        requestId: 'private-request-id',
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'system', content: 'Never persist this original prompt' }],
+        requestId: 'private-request-id',
+    });
+    await waitFor(() => saved.length === 1);
+
+    const { snapshot, options } = saved[0];
+    const serialized = JSON.stringify(snapshot);
+    assert.equal(snapshot.privacy.mode, 'metadata');
+    assert.equal(snapshot.privacy.rawPromptContentIncluded, false);
+    assert.equal(snapshot.privacy.rawChatIdIncluded, false);
+    assert.match(snapshot.id, /^snapshot-[0-9a-f]{24}$/u);
+    assert.match(snapshot.chatId, /^chat-[0-9a-f]{24}$/u);
+    assert.equal(options.partitionChatId, 'chat');
+    assert.equal(Object.hasOwn(snapshot, 'payload'), false);
+    assert.equal(Object.hasOwn(snapshot, 'sources'), false);
+    assert.equal(serialized.includes('Never persist this original prompt'), false);
+    assert.equal(serialized.includes('private-request-id'), false);
+});

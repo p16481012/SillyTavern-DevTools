@@ -753,3 +753,541 @@ test('retrying an interrupted idless legacy migration reuses its synthetic recor
     assert.strictEqual(store.memory.get(firstRecordKeys[0]), idless);
     assert.equal(store.memory.has(legacyKey), false);
 });
+
+test('policy preview diagnoses integrity first, then applies age, count and byte GC', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const now = 10 * day;
+    const store = new SnapshotStore({
+        namespace: 'test',
+        maxSnapshotsPerChat: 100,
+    });
+    for (const [id, timestamp] of [
+        ['age', 0],
+        ['count', 6 * day],
+        ['bytes', 7 * day],
+        ['latest', 10 * day],
+    ]) {
+        await store.addSnapshot({
+            ...snapshot(id, 'chat', timestamp),
+            finalText: `${id}-${'x'.repeat(20)}`,
+        });
+    }
+
+    const preview = await store.getRetentionPolicyPreview({
+        maxSnapshotsPerChat: 2,
+        maxAgeDays: 5,
+        maxTotalBytes: 1,
+    }, { now });
+
+    assert.equal(preview.revision, store.mutationRevision);
+    assert.equal(preview.integrity.counts.total, 0);
+    assert.equal(preview.reasons.age.count, 1);
+    assert.equal(preview.reasons.count.count, 1);
+    assert.equal(preview.reasons.bytes.count, 1);
+    assert.equal(preview.deleteCount, 3);
+    assert.equal(preview.affectedChatCount, 1);
+    assert.equal(preview.overBudget, true);
+    assert.equal(JSON.stringify(preview).includes('finalText'), false);
+
+    const applied = await store.applyRetentionPolicy(preview.policy, {
+        expectedRevision: preview.revision,
+        now,
+    });
+    assert.equal(applied.deletedCount, 3);
+    assert.deepEqual(
+        (await store.getTimeline('chat')).map(({ id }) => id),
+        ['latest'],
+    );
+});
+
+test('object retention apply rejects a capture made after its preview', async () => {
+    const store = new SnapshotStore({
+        namespace: 'test',
+        maxSnapshotsPerChat: 100,
+    });
+    await store.addSnapshot(snapshot('one', 'chat', 1));
+    await store.addSnapshot(snapshot('two', 'chat', 2));
+    const policy = {
+        maxSnapshotsPerChat: 1,
+        maxAgeDays: 0,
+        maxTotalBytes: 0,
+    };
+    const preview = await store.getRetentionPrunePreview(policy);
+    await store.addSnapshot(snapshot('new-capture', 'chat', 3));
+
+    await assert.rejects(
+        store.applyRetentionLimit(policy, {
+            expectedRevision: preview.revision,
+        }),
+        (error) => error?.code === 'retention-preview-stale',
+    );
+    assert.equal(
+        store.memory.get(store.timelineIndexKey('chat')).entries.length,
+        3,
+    );
+});
+
+test('changing the configured count alone never deletes stored snapshots', async () => {
+    const store = new SnapshotStore({
+        namespace: 'test',
+        maxSnapshotsPerChat: 100,
+    });
+    await store.addSnapshot(snapshot('one', 'chat', 1));
+    await store.addSnapshot(snapshot('two', 'chat', 2));
+    await store.addSnapshot(snapshot('three', 'chat', 3));
+    const storedKeys = [...store.memory.keys()].filter((key) => (
+        String(key).startsWith('snapshot:v2:')
+    ));
+
+    store.setMaxSnapshotsPerChat(1);
+
+    assert.equal(
+        store.memory.get(store.timelineIndexKey('chat')).entries.length,
+        3,
+    );
+    assert.equal(
+        [...store.memory.keys()].filter((key) => (
+            String(key).startsWith('snapshot:v2:')
+        )).length,
+        storedKeys.length,
+    );
+});
+
+test('integrity repair removes missing refs, reindexes valid orphans and preserves corrupt raw', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const healthy = snapshot('healthy', 'chat-a', 1);
+    const orphan = snapshot('orphan', 'chat-a', 4);
+    const recovered = snapshot('recovered', 'chat-b', 5);
+    const corrupt = {
+        schemaVersion: 6,
+        id: 'corrupt',
+        chatId: 'chat-a',
+        timestamp: 3,
+        sources: { invalid: true },
+        privateSentinel: 'preserve-raw-corrupt',
+    };
+    for (const value of [healthy, orphan, corrupt, recovered]) {
+        store.memory.set(store.snapshotKey(value.chatId, value.id), value);
+    }
+    store.memory.set(store.timelineIndexKey('chat-a'), {
+        version: 2,
+        chatId: 'chat-a',
+        entries: [
+            { id: 'healthy', timestamp: 1, approximateBytes: jsonBytes(healthy) },
+            { id: 'missing', timestamp: 2, approximateBytes: 10 },
+            { id: 'corrupt', timestamp: 3, approximateBytes: jsonBytes(corrupt) },
+        ],
+        updatedAt: 3,
+    });
+    store.memory.set(store.timelineIndexKey('chat-b'), {
+        version: 999,
+        entries: [],
+        privateSentinel: 'invalid-index-metadata',
+    });
+    const preservedCorrupt = store.memory.get(
+        store.snapshotKey('chat-a', 'corrupt'),
+    );
+
+    const preview = await store.inspectStorageIntegrity({ metadataLimit: 20 });
+    assert.deepEqual(preview.counts, {
+        missingRecords: 1,
+        corruptRecords: 1,
+        validOrphans: 2,
+        invalidIndexes: 1,
+        duplicateLegacyContainers: 0,
+        conflictingLegacyContainers: 0,
+        total: 5,
+    });
+    assert.equal(
+        JSON.stringify(preview).includes('preserve-raw-corrupt'),
+        false,
+    );
+    assert.equal(
+        JSON.stringify(preview).includes('invalid-index-metadata'),
+        false,
+    );
+
+    const repaired = await store.repairStorageIntegrity({
+        expectedRevision: preview.revision,
+    });
+    assert.equal(repaired.repaired, true);
+    assert.equal(repaired.counts.missingRecords, 0);
+    assert.equal(repaired.counts.validOrphans, 0);
+    assert.equal(repaired.counts.invalidIndexes, 0);
+    assert.equal(repaired.counts.corruptRecords, 1);
+    assert.strictEqual(
+        store.memory.get(store.snapshotKey('chat-a', 'corrupt')),
+        preservedCorrupt,
+    );
+    assert.deepEqual(
+        store.memory.get(store.timelineIndexKey('chat-a')).entries
+            .map(({ id }) => id),
+        ['healthy', 'corrupt', 'orphan'],
+    );
+    assert.deepEqual(
+        store.memory.get(store.timelineIndexKey('chat-b')).entries
+            .map(({ id }) => id),
+        ['recovered'],
+    );
+    const summary = await store.getStorageSummary();
+    assert.equal(summary.complete, true);
+    assert.equal(summary.chatCount, 2);
+    assert.equal(summary.snapshotCount, 4);
+});
+
+test('integrity repair rejects a stale preview after a concurrent capture', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const orphan = snapshot('orphan', 'chat', 1);
+    store.memory.set(store.snapshotKey('chat', 'orphan'), orphan);
+    const preview = await store.inspectStorageIntegrity();
+    await store.addSnapshot(snapshot('captured', 'chat', 2));
+
+    await assert.rejects(
+        store.repairStorageIntegrity({ expectedRevision: preview.revision }),
+        (error) => error?.code === 'integrity-preview-stale',
+    );
+    assert.strictEqual(
+        store.memory.get(store.snapshotKey('chat', 'orphan')),
+        orphan,
+    );
+});
+
+test('integrity repair requires an explicit revisioned preview', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await assert.rejects(
+        store.repairStorageIntegrity(),
+        (error) => error?.code === 'integrity-preview-required',
+    );
+});
+
+test('integrity inspection handles 1000+ lightweight indexes with bounded metadata', async () => {
+    const store = new SnapshotStore({
+        namespace: 'test',
+        summaryYieldBudgetMs: Number.MAX_SAFE_INTEGER,
+    });
+    for (let index = 0; index < 1_050; index += 1) {
+        const chatId = `chat-${index}`;
+        const value = snapshot(`snapshot-${index}`, chatId, index + 1);
+        store.memory.set(store.snapshotKey(chatId, value.id), value);
+        store.memory.set(store.timelineIndexKey(chatId), {
+            version: 2,
+            chatId,
+            entries: [{
+                id: value.id,
+                timestamp: value.timestamp,
+                approximateBytes: jsonBytes(value),
+            }],
+            updatedAt: value.timestamp,
+        });
+    }
+
+    const preview = await store.inspectStorageIntegrity({ metadataLimit: 15 });
+
+    assert.equal(preview.counts.total, 0);
+    assert.equal(preview.issues.length, 0);
+    assert.equal(preview.targets.length <= 100, true);
+    assert.equal(preview.plannedSummary.chatCount, 1_050);
+    assert.equal(preview.plannedSummary.snapshotCount, 1_050);
+});
+
+test('quota status separates extension estimates from browser-origin totals', async () => {
+    const store = new SnapshotStore({
+        namespace: 'test',
+        storageEstimate: async () => ({
+            usage: 1_234,
+            quota: 9_999,
+        }),
+    });
+    await store.addSnapshot(snapshot('one', 'chat', 1));
+    await store.rebuildStorageSummary();
+
+    const status = await store.getStorageStatus();
+
+    assert.equal(status.extensionStorage.scope, 'st-devtools-estimate');
+    assert.equal(status.extensionStorage.approximateBytes > 0, true);
+    assert.equal(status.originStorage.scope, 'browser-origin');
+    assert.equal(status.originStorage.scopeLabel, '브라우저 오리진 전체');
+    assert.equal(status.originStorage.usage, 1_234);
+    assert.equal(status.originStorage.quota, 9_999);
+});
+
+test('quota API absence and failure are explicit and non-fatal', async () => {
+    const unavailable = new SnapshotStore({
+        namespace: 'test',
+        storageEstimate: null,
+    });
+    const failed = new SnapshotStore({
+        namespace: 'test',
+        storageEstimate: async () => {
+            throw new Error('not available');
+        },
+    });
+
+    assert.deepEqual(await unavailable.getStorageQuotaStatus(), {
+        available: false,
+        scope: 'browser-origin',
+        scopeLabel: '브라우저 오리진 전체',
+        usage: null,
+        quota: null,
+        reason: 'api-unavailable',
+    });
+    assert.equal(
+        (await failed.getStorageQuotaStatus()).reason,
+        'estimate-failed',
+    );
+});
+
+test('private snapshots use an opaque body id while remaining in the raw local chat partition', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const privateSnapshot = {
+        ...snapshot(
+            'snapshot-0123456789abcdef01234567',
+            'chat-0123456789abcdef01234567',
+            1,
+        ),
+        privacy: {
+            mode: 'metadata',
+            rawChatIdIncluded: false,
+        },
+    };
+
+    await store.addSnapshot(privateSnapshot, { partitionChatId: 'raw-local-chat' });
+
+    assert.deepEqual(await store.getChatIds(), ['raw-local-chat']);
+    const page = await store.getTimelinePage('raw-local-chat');
+    assert.equal(page.snapshots.length, 1);
+    assert.equal(page.snapshots[0].chatId, 'chat-0123456789abcdef01234567');
+    assert.equal(page.snapshots[0].storageChatId, 'raw-local-chat');
+    assert.equal(JSON.stringify(page.snapshots[0]).includes('raw-local-chat'), false);
+    assert.equal(
+        (await store.getTimelinePage('chat-0123456789abcdef01234567')).totalCount,
+        0,
+    );
+});
+
+test('count retention keeps corrupt raw records when a new healthy capture arrives', async () => {
+    const store = new SnapshotStore({
+        namespace: 'test',
+        maxSnapshotsPerChat: 1,
+    });
+    await store.addSnapshot(snapshot('old', 'chat', 1));
+    const rawKey = store.snapshotKey('chat', 'old');
+    store.memory.set(rawKey, {
+        ...store.memory.get(rawKey),
+        chatId: 'identity-mismatch',
+        privateSentinel: 'preserve-corrupt-raw',
+    });
+
+    await store.addSnapshot(snapshot('new', 'chat', 2));
+
+    assert.equal(store.memory.has(rawKey), true);
+    assert.equal(store.memory.get(rawKey).privateSentinel, 'preserve-corrupt-raw');
+    const index = store.memory.get(store.timelineIndexKey('chat'));
+    assert.deepEqual(index.entries.map(({ id }) => id), ['old', 'new']);
+    const page = await store.getTimelinePage('chat');
+    assert.deepEqual(page.snapshots.map(({ id }) => id), ['new']);
+    const integrity = await store.inspectStorageIntegrity();
+    assert.equal(integrity.counts.corruptRecords, 1);
+});
+
+test('exclusive import bypasses interim count pruning and rolls back every raw key', async () => {
+    const store = new SnapshotStore({
+        namespace: 'test',
+        maxSnapshotsPerChat: 1,
+    });
+    await store.addSnapshot(snapshot('base', 'chat', 1));
+    const orphanKey = store.snapshotKey('orphan-chat', 'corrupt-orphan');
+    const corruptOrphan = {
+        privateSentinel: 'preserve-orphan-raw',
+        sources: { invalid: true },
+    };
+    store.memory.set(orphanKey, corruptOrphan);
+    let announceImport;
+    let releaseImport;
+    const importStarted = new Promise((resolve) => {
+        announceImport = resolve;
+    });
+    const importRelease = new Promise((resolve) => {
+        releaseImport = resolve;
+    });
+
+    const importing = store.runExclusiveImport(async (facade) => {
+        await facade.clearAll();
+        await facade.addSnapshot(snapshot('import-a', 'chat', 2));
+        await facade.addSnapshot(snapshot('import-b', 'chat', 3));
+        assert.equal(
+            (await facade.getAllStoredTimelines())[0].timeline.length,
+            2,
+        );
+        announceImport();
+        await importRelease;
+        throw new Error('read-back-mismatch');
+    });
+    await importStarted;
+    const concurrentCapture = store.addSnapshot(snapshot('concurrent', 'chat', 4));
+    releaseImport();
+
+    await assert.rejects(importing, /read-back-mismatch/);
+    await concurrentCapture;
+    assert.strictEqual(store.memory.get(orphanKey), corruptOrphan);
+    assert.equal(store.memory.get(orphanKey).privateSentinel, 'preserve-orphan-raw');
+    assert.deepEqual(
+        (await store.getAllStoredTimelines())[0].timeline.map(({ id }) => id),
+        ['concurrent'],
+    );
+});
+
+test('integrity repair removes only verified duplicate legacy containers', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const current = snapshot('current', 'chat', 1);
+    await store.addSnapshot(current);
+    store.memory.set(store.timelineKey('chat'), [structuredClone(current)]);
+
+    const preview = await store.inspectStorageIntegrity();
+    assert.equal(preview.counts.duplicateLegacyContainers, 1);
+    assert.equal(preview.counts.conflictingLegacyContainers, 0);
+    assert.equal(store.memory.has(store.timelineKey('chat')), true);
+
+    await store.repairStorageIntegrity({ expectedRevision: preview.revision });
+    assert.equal(store.memory.has(store.timelineKey('chat')), false);
+    assert.deepEqual(
+        (await store.getTimeline('chat')).map(({ id }) => id),
+        ['current'],
+    );
+});
+
+test('integrity repair preserves a stale legacy container with unique raw data', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('current', 'chat', 1));
+    const conflicting = {
+        ...snapshot('legacy-only', 'chat', 2),
+        finalText: 'unique legacy prompt evidence',
+    };
+    store.memory.set(store.timelineKey('chat'), [conflicting]);
+
+    const preview = await store.inspectStorageIntegrity();
+    assert.equal(preview.counts.duplicateLegacyContainers, 0);
+    assert.equal(preview.counts.conflictingLegacyContainers, 1);
+    await store.repairStorageIntegrity({ expectedRevision: preview.revision });
+
+    assert.strictEqual(
+        store.memory.get(store.timelineKey('chat'))[0],
+        conflicting,
+    );
+    const after = await store.inspectStorageIntegrity();
+    assert.equal(after.counts.conflictingLegacyContainers, 1);
+});
+
+test('one repair replaces an invalid index with its valid legacy timeline summary', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const legacy = snapshot('legacy', 'chat', 1);
+    store.memory.set(store.timelineIndexKey('chat'), {
+        version: 999,
+        privateSentinel: 'invalid-index',
+    });
+    store.memory.set(store.timelineKey('chat'), [legacy]);
+
+    const preview = await store.inspectStorageIntegrity();
+    assert.equal(preview.counts.invalidIndexes, 1);
+    assert.equal(preview.counts.conflictingLegacyContainers, 0);
+    assert.deepEqual(preview.plannedSummary, {
+        chatCount: 1,
+        timelineRecordCount: 1,
+        snapshotCount: 1,
+        approximateBytes: jsonBytes(legacy),
+    });
+
+    const repaired = await store.repairStorageIntegrity({
+        expectedRevision: preview.revision,
+    });
+    assert.equal(repaired.repaired, true);
+    assert.equal(repaired.repairNeeded, false);
+    assert.equal(repaired.counts.total, 0);
+    assert.deepEqual(await store.getChatIds(), ['chat']);
+    assert.equal(store.memory.has(store.timelineIndexKey('chat')), false);
+    assert.strictEqual(store.memory.get(store.timelineKey('chat'))[0], legacy);
+    const summary = await store.getStorageSummary();
+    assert.deepEqual(
+        {
+            chatCount: summary.chatCount,
+            timelineRecordCount: summary.timelineRecordCount,
+            snapshotCount: summary.snapshotCount,
+            approximateBytes: summary.approximateBytes,
+        },
+        preview.plannedSummary,
+    );
+
+    const retry = await store.repairStorageIntegrity({
+        expectedRevision: repaired.revision,
+    });
+    assert.equal(retry.repaired, false);
+    assert.equal(retry.repairNeeded, false);
+});
+
+test('one repair reindexes raw records and removes matching legacy data behind an invalid index', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    const value = snapshot('recoverable', 'chat', 1);
+    store.memory.set(store.snapshotKey('chat', value.id), value);
+    store.memory.set(store.timelineIndexKey('chat'), { version: 999 });
+    store.memory.set(store.timelineKey('chat'), [structuredClone(value)]);
+
+    const preview = await store.inspectStorageIntegrity();
+    assert.equal(preview.counts.invalidIndexes, 1);
+    assert.equal(preview.counts.validOrphans, 1);
+    assert.equal(preview.counts.duplicateLegacyContainers, 1);
+
+    const repaired = await store.repairStorageIntegrity({
+        expectedRevision: preview.revision,
+    });
+    assert.equal(repaired.repairNeeded, false);
+    assert.equal(store.memory.has(store.timelineKey('chat')), false);
+    const retry = await store.repairStorageIntegrity({
+        expectedRevision: repaired.revision,
+    });
+    assert.equal(retry.repaired, false);
+    assert.deepEqual(
+        (await store.getTimeline('chat')).map(({ id }) => id),
+        ['recoverable'],
+    );
+});
+
+test('conflicting legacy evidence counts as protected storage bytes and summary data', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot(snapshot('current', 'chat', 1));
+    const currentIndex = store.memory.get(store.timelineIndexKey('chat'));
+    const currentBytes = currentIndex.entries[0].approximateBytes;
+    const conflicting = {
+        ...snapshot('legacy-only', 'chat', 2),
+        finalText: 'x'.repeat(10_000),
+    };
+    const legacyBytes = jsonBytes(conflicting);
+    store.memory.set(store.timelineKey('chat'), [conflicting]);
+
+    const summary = await store.rebuildStorageSummary();
+    assert.deepEqual(
+        {
+            chatCount: summary.chatCount,
+            timelineRecordCount: summary.timelineRecordCount,
+            snapshotCount: summary.snapshotCount,
+            approximateBytes: summary.approximateBytes,
+        },
+        {
+            chatCount: 1,
+            timelineRecordCount: 2,
+            snapshotCount: 2,
+            approximateBytes: currentBytes + legacyBytes,
+        },
+    );
+
+    const preview = await store.getRetentionPolicyPreview({
+        maxSnapshotsPerChat: 30,
+        maxAgeDays: 0,
+        maxTotalBytes: currentBytes + 1,
+    });
+    assert.equal(preview.integrity.counts.conflictingLegacyContainers, 1);
+    assert.equal(preview.retainedBytes, currentBytes + legacyBytes);
+    assert.equal(preview.protectedBytes, currentBytes + legacyBytes);
+    assert.equal(preview.overBudget, true);
+    assert.equal(preview.unmet.bytes, legacyBytes - 1);
+    assert.strictEqual(store.memory.get(store.timelineKey('chat'))[0], conflicting);
+});

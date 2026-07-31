@@ -2,19 +2,19 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('v0.9.2 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.10.0 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
     );
-    const html = await readFile(
-        new URL('../sandbox/ui-harness.html', import.meta.url),
-        'utf8',
-    );
+    const [html, server] = await Promise.all([
+        readFile(new URL('../sandbox/index.html', import.meta.url), 'utf8'),
+        readFile(new URL('../scripts/manual-ui-server.mjs', import.meta.url), 'utf8'),
+    ]);
 
     assert.match(harness, /schemaVersion:\s*6/);
-    assert.match(harness, /extensionVersion:\s*'0\.9\.2'/);
-    assert.match(harness, /version:\s*'0\.9\.2'/);
+    assert.match(harness, /extensionVersion:\s*'0\.10\.0'/);
+    assert.match(harness, /version:\s*'0\.10\.0'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -36,7 +36,13 @@ test('v0.9.2 sandbox exposes every browser review fixture deterministically', as
     assert.match(harness, /content:\s*'배경은 눈 내리는 한겨울입니다\.'/);
     assert.match(harness, /corruptCount:\s*corruptRecordCount/);
     assert.match(harness, /corrupt-warning/);
+    assert.match(harness, /runExclusiveImport\(operation\)/);
+    assert.match(harness, /runArchiveImportSmokeTest/);
+    assert.match(harness, /runArchiveRollbackSmokeTest/);
 
-    assert.match(html, /ST DevTools v0\.9\.2 UI Sandbox/);
-    assert.match(html, /구조 위치·생성 경로·프리필 상태/);
+    assert.match(html, /ST DevTools v0\.10\.0 UI Sandbox/);
+    assert.match(html, /보관 정책·용량 범위·캡처 모드/);
+    assert.match(html, /sandbox-archive-import-valid/);
+    assert.match(server, /requestPath === '\/' \? 'sandbox\/index\.html'/);
+    assert.match(server, /127\.0\.0\.1:8766\/sandbox\/index\.html/);
 });

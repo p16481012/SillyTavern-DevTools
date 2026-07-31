@@ -50,6 +50,7 @@ import {
 import {
     DEFAULT_AUDIT_LOG,
     appendAuditEntry,
+    configurationDigest,
     normalizeAuditLog,
 } from './audit-log.js';
 import { buildPolicyChangePreview } from './policy-preview.js';
@@ -66,20 +67,43 @@ import {
 } from './regex-safety.js';
 import {
     SEARCH_DEBOUNCE_MS,
-    searchSnapshotSafely,
 } from './search-runtime.js';
+import {
+    AnalysisRuntime,
+    DEFAULT_ANALYSIS_TIMEOUT_MS,
+} from './analysis-runtime.js';
+import {
+    AnalysisCache,
+    createAnalysisCacheKey,
+} from './analysis-cache.js';
+import { VirtualListMetrics } from './virtual-list.js';
 import { snapshotExportPreview } from './export-preview.js';
 import {
+    executeSnapshotArchiveImport,
+    prepareSnapshotArchiveImport,
+    serializeSnapshotArchive,
+    snapshotArchiveReplaceConfirmationToken,
+} from './snapshot-archive.js';
+import {
+    createSnapshotShareDocument,
+    snapshotSharePreview,
+} from './share-export.js';
+import { compareDiagnosticReports } from './diagnostic-compare.js';
+import {
     DEFAULT_UI_PREFERENCES,
-    LEGACY_UI_PREFERENCES_KEY,
+    MAX_RETENTION_MAX_AGE_DAYS,
+    MAX_RETENTION_MAX_BYTES,
     MAX_TIMELINE_RETENTION_LIMIT,
     MAX_TIMELINE_READ_LIMIT,
     MIN_TIMELINE_RETENTION_LIMIT,
     MIN_TIMELINE_READ_LIMIT,
     PANEL_THEME_MODES,
+    SNAPSHOT_CAPTURE_MODES,
     UI_PREFERENCES_KEY,
-    migrateLegacyUiPreferences,
+    V1_UI_PREFERENCES_KEY,
+    V2_UI_PREFERENCES_KEY,
     normalizeUiPreferences,
+    readUiPreferencesFromStorage,
 } from './preferences.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
@@ -99,13 +123,20 @@ const KNOWN_LOCAL_DATA_KEYS = [
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
-    LEGACY_UI_PREFERENCES_KEY,
+    V2_UI_PREFERENCES_KEY,
+    V1_UI_PREFERENCES_KEY,
 ];
 const COMPARISON_MODES = ['alternative', 'ignore', 'normal'];
 const COMPARISON_TARGETS = ['configured', 'all'];
 const COMPARISON_RULE_KINDS = ['template', 'regex'];
 const GROWTH_CHART_POINT_LIMIT = 10;
 const POLICY_PREVIEW_SOURCE_LIMIT = 100;
+const MEBIBYTE = 1024 * 1024;
+const MAX_RETENTION_MIB = Math.floor(MAX_RETENTION_MAX_BYTES / MEBIBYTE);
+const STORAGE_TOOL_METADATA_LIMIT = 25;
+const VIRTUAL_LIST_THRESHOLD = 100;
+const VIRTUAL_LIST_OVERSCAN = 6;
+const VIRTUAL_LIST_FALLBACK_VIEWPORT = 640;
 const TABS = [
     ['explorer', 'tab.explorer'],
     ['timeline', 'tab.timeline'],
@@ -582,7 +613,16 @@ async function copyText(text) {
 }
 
 export class DevToolsWindow {
-    constructor({ getContext, store, capture, version }) {
+    constructor({
+        getContext,
+        store,
+        capture,
+        version,
+        analysisWorkerClass = globalThis.Worker,
+        analysisTimeoutMs = DEFAULT_ANALYSIS_TIMEOUT_MS,
+        analysisCache = null,
+        analysisRuntime = null,
+    }) {
         this.getContext = getContext;
         this.store = store;
         this.capture = capture;
@@ -596,6 +636,25 @@ export class DevToolsWindow {
         this.selectedId = null;
         this.selectedTimelineIds = new Set();
         this.timelineSelectionChatId = null;
+        this.analysisRevision = 0;
+        this.analysisControllers = new Set();
+        this.analysisSnapshotDigestCache = new WeakMap();
+        this.virtualListCleanups = new Set();
+        this.virtualSourceLists = new Map();
+        this.openSourceIds = new Set();
+        this.analysisCache = analysisCache ?? new AnalysisCache();
+        this.analysisRuntime = analysisRuntime ?? new AnalysisRuntime({
+            WorkerClass: analysisWorkerClass,
+            timeoutMs: analysisTimeoutMs,
+            cache: this.analysisCache,
+            revisionProvider: () => this.analysisRevision,
+        });
+        this.localAnalysisRuntime = new AnalysisRuntime({
+            WorkerClass: null,
+            timeoutMs: analysisTimeoutMs,
+            cache: this.analysisCache,
+            revisionProvider: () => this.analysisRevision,
+        });
         this.refreshRequestId = 0;
         this.storageSummaryRefreshPromise = null;
         this.storageSummaryRebuildPromise = null;
@@ -658,6 +717,11 @@ export class DevToolsWindow {
         this.themeModeInput = null;
         this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
+        this.retentionMaxAgeDaysInput = null;
+        this.retentionMaxBytesMiBInput = null;
+        this.captureModeInput = null;
+        this.storageToolsStatus = null;
+        this.diagnosticCompareFiles = [];
         this.primaryRegions = [];
         this.storageErrors = [];
         this.importedDiagnostics = null;
@@ -671,10 +735,481 @@ export class DevToolsWindow {
         return context.getCurrentChatId?.() ?? context.chatId ?? '__global__';
     }
 
+    snapshotStorageChatId(snapshot) {
+        return snapshot?.storageChatId
+            ?? snapshot?.chatId
+            ?? this.currentChatId();
+    }
+
     selectedSnapshot() {
         return this.timeline.find((snapshot) => snapshot.id === this.selectedId)
             ?? this.timeline.at(-1)
             ?? null;
+    }
+
+    invalidateAnalysisState() {
+        if (this.analysisRevision >= Number.MAX_SAFE_INTEGER) {
+            this.analysisRevision = 0;
+            this.analysisCache.clear();
+        } else {
+            this.analysisRevision += 1;
+        }
+        for (const controller of this.analysisControllers) {
+            controller.abort();
+        }
+        this.analysisControllers.clear();
+    }
+
+    disposeVirtualLists() {
+        for (const cleanup of this.virtualListCleanups) {
+            try {
+                cleanup();
+            } catch {
+                // Detached observers and listeners are best-effort cleanup.
+            }
+        }
+        this.virtualListCleanups.clear();
+        this.virtualSourceLists.clear();
+    }
+
+    analysisTextDigest(value) {
+        const text = String(value ?? '');
+        const chunks = [];
+        for (let index = 0; index < text.length; index += 32_768) {
+            chunks.push(text.slice(index, index + 32_768));
+        }
+        return configurationDigest(chunks);
+    }
+
+    analysisSnapshotReference(snapshot) {
+        if (snapshot && this.analysisSnapshotDigestCache.has(snapshot)) {
+            return this.analysisSnapshotDigestCache.get(snapshot);
+        }
+        const sources = Array.isArray(snapshot?.sources) ? snapshot.sources : [];
+        const sourceBatches = [];
+        for (let index = 0; index < sources.length; index += 1_000) {
+            sourceBatches.push(configurationDigest(
+                sources.slice(index, index + 1_000).map((source) => ({
+                    id: configurationDigest(String(source?.id ?? '')),
+                    type: source?.type ?? null,
+                    content: this.analysisTextDigest(source?.content),
+                    tokenCount: Number(source?.tokenCount) || 0,
+                    included: source?.included !== false,
+                })),
+            ));
+        }
+        const loreEntries = Array.isArray(snapshot?.lorebookEntries)
+            ? snapshot.lorebookEntries
+            : [];
+        const loreBatches = [];
+        for (let index = 0; index < loreEntries.length; index += 1_000) {
+            loreBatches.push(configurationDigest(
+                loreEntries.slice(index, index + 1_000).map((entry) => ({
+                    uid: configurationDigest(String(entry?.uid ?? '')),
+                    world: configurationDigest(String(entry?.world ?? '')),
+                    key: configurationDigest(entry?.key ?? null),
+                    content: this.analysisTextDigest(entry?.content),
+                    position: entry?.position ?? null,
+                })),
+            ));
+        }
+        const reference = {
+            id: configurationDigest(String(snapshot?.id ?? '')),
+            timestamp: Number(snapshot?.timestamp) || 0,
+            schemaVersion: Number(snapshot?.schemaVersion) || 0,
+            sourceCount: sources.length,
+            sourceDigest: configurationDigest(sourceBatches),
+            loreCount: loreEntries.length,
+            loreDigest: configurationDigest(loreBatches),
+            finalTextDigest: this.analysisTextDigest(snapshot?.finalText),
+        };
+        const digest = configurationDigest(reference);
+        if (snapshot && typeof snapshot === 'object') {
+            this.analysisSnapshotDigestCache.set(snapshot, digest);
+        }
+        return digest;
+    }
+
+    analysisCacheKey(kind, snapshots, configuration) {
+        return createAnalysisCacheKey({
+            kind,
+            snapshotDigest: configurationDigest(
+                snapshots.map((snapshot) => (
+                    this.analysisSnapshotReference(snapshot)
+                )),
+            ),
+            configurationDigest: configurationDigest(configuration),
+            revision: this.analysisRevision,
+        });
+    }
+
+    analysisRuleSnapshot(snapshot) {
+        return {
+            sources: Array.isArray(snapshot?.sources) ? snapshot.sources : [],
+            finalText: String(snapshot?.finalText ?? ''),
+            stats: {
+                totalTokens: Number(snapshot?.stats?.totalTokens) || 0,
+                contextUsage: Number(snapshot?.stats?.contextUsage) || 0,
+            },
+            profileContext: snapshot?.profileContext ?? null,
+            preset: snapshot?.preset ?? null,
+            characterKey: snapshot?.characterKey ?? null,
+            characterId: snapshot?.characterId ?? null,
+            chatId: snapshot?.chatId ?? null,
+        };
+    }
+
+    async runUiAnalysis(kind, input, {
+        snapshots,
+        configuration = {},
+        controller = new AbortController(),
+        timeoutMs = undefined,
+    }) {
+        const revision = this.analysisRevision;
+        const cacheKey = this.analysisCacheKey(
+            kind,
+            snapshots,
+            configuration,
+        );
+        this.analysisControllers.add(controller);
+        const options = {
+            signal: controller.signal,
+            cacheKey,
+            revision,
+            ...(timeoutMs == null ? {} : { timeoutMs }),
+        };
+        try {
+            try {
+                return await this.analysisRuntime.run(kind, input, options);
+            } catch (error) {
+                if (
+                    error?.code !== 'analysis-worker-unavailable'
+                    || controller.signal.aborted
+                    || revision !== this.analysisRevision
+                    || this.analysisRuntime === this.localAnalysisRuntime
+                    || (
+                        kind === 'search'
+                        && input.options?.regex
+                        && typeof document !== 'undefined'
+                    )
+                ) {
+                    throw error;
+                }
+                return await this.localAnalysisRuntime.run(kind, input, options);
+            }
+        } finally {
+            this.analysisControllers.delete(controller);
+        }
+    }
+
+    shouldUseAsyncAnalysis(kind, snapshots) {
+        if (kind === 'search') return true;
+        let sourceCount = 0;
+        let loreCount = 0;
+        let textLength = 0;
+        for (const snapshot of snapshots) {
+            const sources = Array.isArray(snapshot?.sources)
+                ? snapshot.sources
+                : [];
+            sourceCount += sources.length;
+            loreCount += snapshot?.lorebookEntries?.length ?? 0;
+            textLength += String(snapshot?.finalText ?? '').length;
+            for (const source of sources) {
+                textLength += String(source?.content ?? '').length;
+                if (textLength >= 200_000) return true;
+            }
+        }
+        return (
+            sourceCount >= VIRTUAL_LIST_THRESHOLD
+            || loreCount >= VIRTUAL_LIST_THRESHOLD
+            || textLength >= 200_000
+        );
+    }
+
+    analysisErrorText(error) {
+        const code = error?.code ?? error?.message;
+        const keyByCode = {
+            'analysis-timeout': 'analysis.error.timeout',
+            'analysis-worker-unavailable': 'analysis.error.workerUnavailable',
+            'analysis-worker-failed': 'analysis.error.workerFailed',
+            'analysis-input-too-large': 'analysis.error.tooLarge',
+            'analysis-failed': 'analysis.error.failed',
+        };
+        return t(keyByCode[code] ?? 'analysis.error.unknown');
+    }
+
+    mountVirtualList(container, items, {
+        estimatedRowHeight,
+        renderItem,
+        focusSelector = 'button, summary, input, [tabindex]',
+        ariaLabel = null,
+    }) {
+        const normalizedItems = Array.isArray(items) ? items : [];
+        container.setAttribute('role', 'list');
+        if (ariaLabel) container.setAttribute('aria-label', ariaLabel);
+        const applyItemAccessibility = (node, index) => {
+            node.dataset.virtualIndex = String(index);
+            node.setAttribute('role', 'listitem');
+            node.setAttribute('aria-setsize', String(normalizedItems.length));
+            node.setAttribute('aria-posinset', String(index + 1));
+            return node;
+        };
+
+        if (normalizedItems.length < VIRTUAL_LIST_THRESHOLD) {
+            normalizedItems.forEach((item, index) => {
+                container.appendChild(applyItemAccessibility(
+                    renderItem(item, index),
+                    index,
+                ));
+            });
+            return {
+                virtualized: false,
+                refresh: () => {},
+                scrollToIndex: (index, { focus = false } = {}) => {
+                    const node = [...container.children].find(
+                        (child) => Number(child.dataset.virtualIndex) === index,
+                    );
+                    node?.scrollIntoView?.({ block: 'center', behavior: 'auto' });
+                    if (focus) node?.querySelector(focusSelector)?.focus?.({
+                        preventScroll: true,
+                    });
+                    return node ?? null;
+                },
+            };
+        }
+
+        const metrics = new VirtualListMetrics({
+            itemCount: normalizedItems.length,
+            estimatedRowHeight,
+            overscan: VIRTUAL_LIST_OVERSCAN,
+        });
+        container.classList.add('st-devtools-virtual-list');
+        container.dataset.virtualized = 'true';
+        container.dataset.virtualCount = String(normalizedItems.length);
+        container.tabIndex = 0;
+        let disposed = false;
+        let scheduled = false;
+        let scheduledHandle = null;
+        let scheduledWithAnimationFrame = false;
+        let currentStart = -1;
+        let currentEnd = -1;
+        let topSpacer = null;
+        let bottomSpacer = null;
+        const observedRows = new Set();
+        let resizeObserver = null;
+
+        const viewportHeight = () => (
+            container.clientHeight || VIRTUAL_LIST_FALLBACK_VIEWPORT
+        );
+        const unobserveRows = () => {
+            for (const row of observedRows) {
+                resizeObserver?.unobserve?.(row);
+            }
+            observedRows.clear();
+        };
+        const restoreFocusedRow = (index) => {
+            if (index == null) return;
+            this.scheduleExplorerFocus(() => {
+                if (disposed || !container.isConnected) return;
+                const row = [...container.querySelectorAll(
+                    '[data-virtual-index]',
+                )].find((node) => Number(node.dataset.virtualIndex) === index);
+                row?.querySelector(focusSelector)?.focus?.({
+                    preventScroll: true,
+                });
+            });
+        };
+        const renderWindow = (force = false) => {
+            if (disposed) return;
+            const windowState = metrics.getWindow({
+                scrollTop: container.scrollTop,
+                viewportHeight: viewportHeight(),
+            });
+            if (
+                !force
+                && currentStart === windowState.start
+                && currentEnd === windowState.end
+            ) {
+                if (topSpacer) {
+                    topSpacer.style.height = `${windowState.topSpacer}px`;
+                }
+                if (bottomSpacer) {
+                    bottomSpacer.style.height = `${windowState.bottomSpacer}px`;
+                }
+                return;
+            }
+
+            const activeRow = container.contains(document.activeElement)
+                ? document.activeElement?.closest?.('[data-virtual-index]')
+                : null;
+            const focusedIndex = activeRow
+                ? Number(activeRow.dataset.virtualIndex)
+                : null;
+            unobserveRows();
+            const fragment = document.createDocumentFragment();
+            topSpacer = element('div', {
+                className: 'st-devtools-virtual-spacer is-top',
+            });
+            topSpacer.setAttribute('aria-hidden', 'true');
+            topSpacer.style.height = `${windowState.topSpacer}px`;
+            fragment.appendChild(topSpacer);
+            for (
+                let index = windowState.start;
+                index < windowState.end;
+                index += 1
+            ) {
+                const row = applyItemAccessibility(element('div', {
+                    className: 'st-devtools-virtual-row',
+                }), index);
+                row.appendChild(
+                    renderItem(normalizedItems[index], index),
+                );
+                fragment.appendChild(
+                    row,
+                );
+                observedRows.add(row);
+            }
+            bottomSpacer = element('div', {
+                className: 'st-devtools-virtual-spacer is-bottom',
+            });
+            bottomSpacer.setAttribute('aria-hidden', 'true');
+            bottomSpacer.style.height = `${windowState.bottomSpacer}px`;
+            fragment.appendChild(bottomSpacer);
+            currentStart = windowState.start;
+            currentEnd = windowState.end;
+            container.replaceChildren(fragment);
+            for (const row of observedRows) resizeObserver?.observe?.(row);
+            if (
+                Number.isInteger(focusedIndex)
+                && focusedIndex >= currentStart
+                && focusedIndex < currentEnd
+            ) {
+                restoreFocusedRow(focusedIndex);
+            }
+        };
+        const schedule = () => {
+            if (scheduled || disposed) return;
+            scheduled = true;
+            const callback = () => {
+                scheduled = false;
+                scheduledHandle = null;
+                renderWindow();
+            };
+            if (typeof requestAnimationFrame === 'function') {
+                scheduledWithAnimationFrame = true;
+                scheduledHandle = requestAnimationFrame(callback);
+            } else {
+                scheduledWithAnimationFrame = false;
+                scheduledHandle = setTimeout(callback, 0);
+            }
+        };
+        const scrollToIndex = (value, {
+            align = 'center',
+            focus = false,
+        } = {}) => {
+            const index = Math.min(
+                normalizedItems.length - 1,
+                Math.max(0, Math.trunc(Number(value) || 0)),
+            );
+            const top = metrics.offsetForIndex(index);
+            const bottom = metrics.offsetForIndex(index + 1);
+            const viewport = viewportHeight();
+            if (align === 'start') {
+                container.scrollTop = top;
+            } else if (align === 'end') {
+                container.scrollTop = Math.max(0, bottom - viewport);
+            } else {
+                container.scrollTop = Math.max(
+                    0,
+                    top - ((viewport - (bottom - top)) / 2),
+                );
+            }
+            renderWindow(true);
+            const row = [...container.querySelectorAll(
+                '[data-virtual-index]',
+            )].find((node) => Number(node.dataset.virtualIndex) === index);
+            if (focus) restoreFocusedRow(index);
+            return row ?? null;
+        };
+        const handleKeydown = (event) => {
+            if (
+                event.altKey
+                || event.ctrlKey
+                || event.metaKey
+                || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+            ) {
+                return;
+            }
+            const row = event.target.closest?.('[data-virtual-index]');
+            if (!row) return;
+            const current = Number(row.dataset.virtualIndex);
+            const next = event.key === 'Home'
+                ? 0
+                : event.key === 'End'
+                    ? normalizedItems.length - 1
+                    : current + (event.key === 'ArrowDown' ? 1 : -1);
+            if (next < 0 || next >= normalizedItems.length) return;
+            event.preventDefault();
+            scrollToIndex(next, { focus: true });
+        };
+        const handleResize = (entries) => {
+            let changed = false;
+            for (const entry of entries) {
+                if (entry.target === container) {
+                    changed = true;
+                    continue;
+                }
+                const index = Number(entry.target.dataset.virtualIndex);
+                const height = entry.borderBoxSize?.[0]?.blockSize
+                    ?? entry.contentRect?.height;
+                if (!Number.isInteger(index) || !Number.isFinite(height)) {
+                    continue;
+                }
+                const previous = metrics.measuredHeights.get(index)
+                    ?? metrics.estimatedRowHeight;
+                if (Math.abs(previous - height) < 0.5) continue;
+                if (metrics.updateMeasuredHeight(index, height)) changed = true;
+            }
+            if (changed) schedule();
+        };
+
+        container.addEventListener('scroll', schedule, { passive: true });
+        container.addEventListener('keydown', handleKeydown);
+        if (typeof ResizeObserver === 'function') {
+            resizeObserver = new ResizeObserver(handleResize);
+            resizeObserver.observe(container);
+        } else {
+            globalThis.addEventListener?.('resize', schedule);
+        }
+        const cleanup = () => {
+            if (disposed) return;
+            disposed = true;
+            unobserveRows();
+            resizeObserver?.disconnect?.();
+            container.removeEventListener('scroll', schedule);
+            container.removeEventListener('keydown', handleKeydown);
+            globalThis.removeEventListener?.('resize', schedule);
+            if (scheduledHandle != null) {
+                if (
+                    scheduledWithAnimationFrame
+                    && typeof cancelAnimationFrame === 'function'
+                ) {
+                    cancelAnimationFrame(scheduledHandle);
+                } else {
+                    clearTimeout(scheduledHandle);
+                }
+            }
+            this.virtualListCleanups.delete(cleanup);
+        };
+        this.virtualListCleanups.add(cleanup);
+        renderWindow(true);
+        return {
+            virtualized: true,
+            metrics,
+            refresh: () => renderWindow(true),
+            scrollToIndex,
+            cleanup,
+        };
     }
 
     async readTimelinePage(chatId) {
@@ -713,30 +1248,40 @@ export class DevToolsWindow {
     }
 
     loadUiPreferences() {
+        const preferences = readUiPreferencesFromStorage(localStorage);
         try {
-            const stored = JSON.parse(localStorage.getItem(UI_PREFERENCES_KEY) ?? 'null');
-            if (stored) return normalizeUiPreferences(stored);
-
-            const legacy = JSON.parse(
-                localStorage.getItem(LEGACY_UI_PREFERENCES_KEY) ?? 'null',
-            );
-            if (legacy) {
-                const migrated = migrateLegacyUiPreferences(legacy);
-                localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify(migrated));
-                localStorage.removeItem(LEGACY_UI_PREFERENCES_KEY);
-                return migrated;
+            let current = null;
+            try {
+                current = JSON.parse(
+                    localStorage.getItem(UI_PREFERENCES_KEY) ?? 'null',
+                );
+            } catch {
+                current = null;
             }
-            return normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+            const hasLegacy = (
+                localStorage.getItem(V2_UI_PREFERENCES_KEY) != null
+                || localStorage.getItem(V1_UI_PREFERENCES_KEY) != null
+            );
+            if (!current && hasLegacy) {
+                localStorage.setItem(
+                    UI_PREFERENCES_KEY,
+                    JSON.stringify(preferences),
+                );
+                localStorage.removeItem(V2_UI_PREFERENCES_KEY);
+                localStorage.removeItem(V1_UI_PREFERENCES_KEY);
+            }
         } catch {
-            return normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+            // The helper already returned the best independently parsed value.
         }
+        return preferences;
     }
 
     saveUiPreferences(value) {
         this.preferences = normalizeUiPreferences(value);
         try {
             localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify(this.preferences));
-            localStorage.removeItem(LEGACY_UI_PREFERENCES_KEY);
+            localStorage.removeItem(V2_UI_PREFERENCES_KEY);
+            localStorage.removeItem(V1_UI_PREFERENCES_KEY);
         } catch {
             // The current browser may not allow persistent local storage.
         }
@@ -841,6 +1386,78 @@ export class DevToolsWindow {
             retentionHint,
         );
 
+        const ageField = element('div', { className: 'st-devtools-settings-field' });
+        const ageInput = element('input');
+        ageInput.id = 'st-devtools-settings-retention-age';
+        ageInput.type = 'number';
+        ageInput.min = '0';
+        ageInput.max = String(MAX_RETENTION_MAX_AGE_DAYS);
+        ageInput.step = '1';
+        ageInput.inputMode = 'numeric';
+        ageInput.required = true;
+        ageInput.value = String(this.preferences.retentionMaxAgeDays);
+        const ageLabel = element('label');
+        ageLabel.htmlFor = ageInput.id;
+        ageLabel.append(explainedTitle(
+            t('settings.retentionMaxAgeDays'),
+            t('settings.retentionMaxAgeDaysDescription'),
+        ));
+        ageField.append(
+            ageLabel,
+            ageInput,
+            element('small', { text: t('settings.zeroDisablesPolicy') }),
+        );
+
+        const byteField = element('div', { className: 'st-devtools-settings-field' });
+        const byteInput = element('input');
+        byteInput.id = 'st-devtools-settings-retention-bytes';
+        byteInput.type = 'number';
+        byteInput.min = '0';
+        byteInput.max = String(MAX_RETENTION_MIB);
+        byteInput.step = '1';
+        byteInput.inputMode = 'numeric';
+        byteInput.required = true;
+        byteInput.value = String(Math.floor(
+            this.preferences.retentionMaxBytes / MEBIBYTE,
+        ));
+        const byteLabel = element('label');
+        byteLabel.htmlFor = byteInput.id;
+        byteLabel.append(explainedTitle(
+            t('settings.retentionMaxBytes'),
+            t('settings.retentionMaxBytesDescription'),
+        ));
+        byteField.append(
+            byteLabel,
+            byteInput,
+            element('small', { text: t('settings.zeroDisablesPolicy') }),
+        );
+
+        const captureField = element('div', { className: 'st-devtools-settings-field' });
+        const captureSelect = element('select');
+        captureSelect.id = 'st-devtools-settings-capture-mode';
+        for (const mode of SNAPSHOT_CAPTURE_MODES) {
+            const option = element('option', {
+                text: t(`settings.captureMode.${mode}`),
+            });
+            option.value = mode;
+            captureSelect.appendChild(option);
+        }
+        captureSelect.value = this.preferences.captureMode;
+        const captureLabel = element('label');
+        captureLabel.htmlFor = captureSelect.id;
+        captureLabel.append(explainedTitle(
+            t('settings.captureMode'),
+            t('settings.captureModeDescription'),
+        ));
+        captureField.append(
+            captureLabel,
+            captureSelect,
+            element('small', {
+                className: 'st-devtools-settings-privacy-note',
+                text: t('settings.captureModeRedactedWarning'),
+            }),
+        );
+
         const readField = element('div', { className: 'st-devtools-settings-field' });
         const readLabel = element('label');
         readLabel.htmlFor = 'st-devtools-settings-timeline-limit';
@@ -897,6 +1514,11 @@ export class DevToolsWindow {
             themeSelect.value = DEFAULT_UI_PREFERENCES.themeMode;
             retentionInput.value = String(DEFAULT_UI_PREFERENCES.timelineRetentionLimit);
             readInput.value = String(DEFAULT_UI_PREFERENCES.timelineReadLimit);
+            ageInput.value = String(DEFAULT_UI_PREFERENCES.retentionMaxAgeDays);
+            byteInput.value = String(
+                DEFAULT_UI_PREFERENCES.retentionMaxBytes / MEBIBYTE,
+            );
+            captureSelect.value = DEFAULT_UI_PREFERENCES.captureMode;
             syncReadLimit();
             retentionInput.focus();
         });
@@ -912,7 +1534,15 @@ export class DevToolsWindow {
             type: 'submit',
         });
         actions.append(reset, cancel, apply);
-        form.append(themeField, retentionField, readField, actions);
+        form.append(
+            themeField,
+            retentionField,
+            ageField,
+            byteField,
+            readField,
+            captureField,
+            actions,
+        );
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             if (apply.disabled) return;
@@ -925,70 +1555,116 @@ export class DevToolsWindow {
                 themeMode: themeSelect.value,
                 timelineRetentionLimit: retentionInput.value,
                 timelineReadLimit: readInput.value,
+                retentionMaxAgeDays: ageInput.value,
+                retentionMaxBytes: Number(byteInput.value) * MEBIBYTE,
+                captureMode: captureSelect.value,
             });
-            const timelineSettingsChanged = (
+            const retentionPolicy = {
+                maxSnapshotsPerChat: requested.timelineRetentionLimit,
+                maxAgeDays: requested.retentionMaxAgeDays,
+                maxTotalBytes: requested.retentionMaxBytes,
+            };
+            const retentionPolicyChanged = (
                 requested.timelineRetentionLimit
                     !== previousPreferences.timelineRetentionLimit
+                || requested.retentionMaxAgeDays
+                    !== previousPreferences.retentionMaxAgeDays
+                || requested.retentionMaxBytes
+                    !== previousPreferences.retentionMaxBytes
+            );
+            const timelineSettingsChanged = (
+                retentionPolicyChanged
                 || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
             );
             try {
-                const previousRetention = Number(this.store.maxSnapshotsPerChat)
-                    || this.preferences.timelineRetentionLimit;
                 let pruneResult = {
                     snapshotCount: 0,
                     affectedChatCount: 0,
                     approximateBytes: 0,
                 };
-                const isLoweringRetention = (
-                    requested.timelineRetentionLimit < previousRetention
-                );
-                const retentionChanged = (
-                    requested.timelineRetentionLimit !== previousRetention
-                );
                 if (
-                    isLoweringRetention
-                    && typeof this.store.getRetentionPrunePreview === 'function'
-                    && typeof this.store.applyRetentionLimit === 'function'
+                    retentionPolicyChanged
+                    && typeof this.store.getRetentionPolicyPreview === 'function'
+                    && typeof this.store.applyRetentionPolicy === 'function'
                 ) {
-                    while (true) {
-                        const preview = await this.store.getRetentionPrunePreview(
-                            requested.timelineRetentionLimit,
+                    let applied = false;
+                    for (let attempt = 0; attempt < 3; attempt += 1) {
+                        const preview = await this.store.getRetentionPolicyPreview(
+                            retentionPolicy,
+                            { metadataLimit: STORAGE_TOOL_METADATA_LIMIT },
                         );
+                        const deleteCount = normalizedCount(
+                            preview.deleteCount ?? preview.snapshotCount,
+                        );
+                        const overBudget = Boolean(preview.overBudget);
                         if (
-                            preview.snapshotCount > 0
-                            && !confirm(t('settings.timelineRetentionDecreaseConfirm', {
-                                limit: requested.timelineRetentionLimit,
-                                chats: preview.affectedChatCount,
-                                count: preview.snapshotCount,
-                                size: formatBytes(preview.approximateBytes),
+                            (deleteCount > 0 || overBudget)
+                            && !confirm(t('settings.retentionPolicyConfirm', {
+                                chats: normalizedCount(
+                                    preview.affectedChats
+                                    ?? preview.affectedChatCount,
+                                ),
+                                count: deleteCount,
+                                size: formatBytes(
+                                    preview.deleteBytes
+                                    ?? preview.approximateBytes,
+                                ),
+                                overBudget: this.retentionOverBudgetText(preview),
                             }))
                         ) {
                             return;
                         }
                         try {
-                            pruneResult = await this.store.applyRetentionLimit(
-                                requested.timelineRetentionLimit,
+                            pruneResult = await this.store.applyRetentionPolicy(
+                                retentionPolicy,
                                 { expectedRevision: preview.revision },
                             );
+                            applied = true;
                             break;
                         } catch (error) {
                             if (error?.code === 'retention-preview-stale') continue;
                             throw error;
                         }
                     }
+                    if (!applied) {
+                        const error = new Error('retention-preview-unstable');
+                        error.code = 'retention-preview-unstable';
+                        throw error;
+                    }
                 } else if (
-                    retentionChanged
+                    retentionPolicyChanged
                     && typeof this.store.applyRetentionLimit === 'function'
                 ) {
-                    pruneResult = await this.store.applyRetentionLimit(
-                        requested.timelineRetentionLimit,
-                    );
-                } else if (retentionChanged) {
+                    if (typeof this.store.getRetentionPrunePreview === 'function') {
+                        const preview = await this.store.getRetentionPrunePreview(
+                            requested.timelineRetentionLimit,
+                        );
+                        if (
+                            normalizedCount(preview.snapshotCount) > 0
+                            && !confirm(t('settings.timelineRetentionDecreaseConfirm', {
+                                limit: requested.timelineRetentionLimit,
+                                chats: normalizedCount(preview.affectedChatCount),
+                                count: normalizedCount(preview.snapshotCount),
+                                size: formatBytes(preview.approximateBytes),
+                            }))
+                        ) {
+                            return;
+                        }
+                        pruneResult = await this.store.applyRetentionLimit(
+                            requested.timelineRetentionLimit,
+                            { expectedRevision: preview.revision },
+                        );
+                    } else {
+                        pruneResult = await this.store.applyRetentionLimit(
+                            requested.timelineRetentionLimit,
+                        );
+                    }
+                } else if (retentionPolicyChanged) {
                     this.store.setMaxSnapshotsPerChat?.(
                         requested.timelineRetentionLimit,
                     );
                 }
-                if (retentionChanged) {
+                if (retentionPolicyChanged) {
                     this.storageSummaryGeneration += 1;
                     this.storageSummaryRebuildScheduled = false;
                     this.storageSummaryRefreshPromise = null;
@@ -997,15 +1673,32 @@ export class DevToolsWindow {
                 themeSelect.value = preferences.themeMode;
                 retentionInput.value = String(preferences.timelineRetentionLimit);
                 readInput.value = String(preferences.timelineReadLimit);
+                ageInput.value = String(preferences.retentionMaxAgeDays);
+                byteInput.value = String(Math.floor(
+                    preferences.retentionMaxBytes / MEBIBYTE,
+                ));
+                captureSelect.value = preferences.captureMode;
                 syncReadLimit();
                 this.syncOpaqueTheme();
                 this.closeSettings();
-                globalThis.toastr?.success?.(
-                    pruneResult.snapshotCount > 0
-                        ? t('settings.savedWithPrune', {
-                            count: pruneResult.snapshotCount,
-                        })
-                        : t('settings.saved'),
+                const deletedCount = normalizedCount(
+                    pruneResult.deleteCount ?? pruneResult.snapshotCount,
+                );
+                const overBudget = Boolean(pruneResult.overBudget);
+                const savedMessage = overBudget
+                    ? t('settings.savedOverBudget', {
+                        count: deletedCount,
+                        size: formatBytes(pruneResult.overBudgetBytes),
+                    })
+                    : deletedCount > 0
+                        ? t('settings.savedWithPrune', { count: deletedCount })
+                        : t('settings.saved');
+                const toastKind = overBudget
+                    && typeof globalThis.toastr?.warning === 'function'
+                    ? 'warning'
+                    : 'success';
+                globalThis.toastr?.[toastKind]?.(
+                    savedMessage,
                     'ST DevTools',
                 );
                 if (timelineSettingsChanged) this.scheduleSettingsRefresh();
@@ -1022,14 +1715,495 @@ export class DevToolsWindow {
             }
         });
 
-        panel.append(heading, form);
+        panel.append(heading, form, this.buildStorageToolsPanel());
         overlay.appendChild(panel);
         this.settingsOverlay = overlay;
         this.settingsPanel = panel;
         this.themeModeInput = themeSelect;
         this.timelineRetentionLimitInput = retentionInput;
         this.timelineReadLimitInput = readInput;
+        this.retentionMaxAgeDaysInput = ageInput;
+        this.retentionMaxBytesMiBInput = byteInput;
+        this.captureModeInput = captureSelect;
         return overlay;
+    }
+
+    setStorageToolsStatus(message, { error = false } = {}) {
+        if (!this.storageToolsStatus) return;
+        this.storageToolsStatus.textContent = String(message ?? '');
+        this.storageToolsStatus.classList.toggle('error', error);
+        this.storageToolsStatus.setAttribute('role', error ? 'alert' : 'status');
+    }
+
+    safeToolError(error) {
+        const code = String(error?.code ?? '');
+        return /^[a-z0-9-]{1,64}$/u.test(code)
+            ? code
+            : t('common.unknown');
+    }
+
+    retentionOverBudgetText(report) {
+        if (!report?.overBudget) return '';
+        return t('settings.retentionOverBudget', {
+            size: formatBytes(report.overBudgetBytes),
+        });
+    }
+
+    storageIntegrityStatusVariables(report) {
+        const counts = report?.counts ?? {};
+        return {
+            missing: normalizedCount(counts.missingRecords),
+            corrupt: normalizedCount(counts.corruptRecords),
+            orphan: normalizedCount(counts.validOrphans),
+            indexes: normalizedCount(counts.invalidIndexes),
+            duplicateLegacy: normalizedCount(counts.duplicateLegacyContainers),
+            conflictingLegacy: normalizedCount(counts.conflictingLegacyContainers),
+            indexRepair: t(report?.indexRepairNeeded
+                ? 'storage.integrityNeeded'
+                : 'storage.integrityNotNeeded'),
+            summaryRepair: t(report?.summaryRepairNeeded
+                ? 'storage.integrityNeeded'
+                : 'storage.integrityNotNeeded'),
+        };
+    }
+
+    async withBusyButton(button, task) {
+        if (button.disabled) return null;
+        const label = button.textContent;
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        try {
+            return await task();
+        } finally {
+            button.disabled = false;
+            button.textContent = label;
+            button.removeAttribute('aria-busy');
+        }
+    }
+
+    async storedTimelinesForTransfer() {
+        const reader = this.store.getAllStoredTimelines
+            ?? this.store.getAllTimelines;
+        if (typeof reader !== 'function') {
+            const error = new Error('unsupported-store');
+            error.code = 'unsupported-store';
+            throw error;
+        }
+        const timelines = await reader.call(this.store);
+        return Array.isArray(timelines) ? timelines : [];
+    }
+
+    async reviewStorageIntegrity() {
+        if (
+            typeof this.store.inspectStorageIntegrity !== 'function'
+            || typeof this.store.repairStorageIntegrity !== 'function'
+        ) {
+            throw Object.assign(new Error('unsupported-store'), {
+                code: 'unsupported-store',
+            });
+        }
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const preview = await this.store.inspectStorageIntegrity({
+                metadataLimit: STORAGE_TOOL_METADATA_LIMIT,
+            });
+            const status = this.storageIntegrityStatusVariables(preview);
+            this.setStorageToolsStatus(t('storage.integrityPreview', status));
+            if (!preview.repairNeeded) {
+                this.setStorageToolsStatus(t('storage.integrityHealthy', status));
+                return preview;
+            }
+            if (!confirm(t('storage.integrityRepairConfirm', status))) {
+                return null;
+            }
+            try {
+                const result = await this.store.repairStorageIntegrity({
+                    expectedRevision: preview.revision,
+                    metadataLimit: STORAGE_TOOL_METADATA_LIMIT,
+                });
+                this.setStorageToolsStatus(t(
+                    'storage.integrityRepaired',
+                    this.storageIntegrityStatusVariables(result),
+                ));
+                void this.refreshStorageSummary();
+                return result;
+            } catch (error) {
+                if (error?.code === 'integrity-preview-stale') continue;
+                throw error;
+            }
+        }
+        throw Object.assign(new Error('integrity-preview-unstable'), {
+            code: 'integrity-preview-unstable',
+        });
+    }
+
+    async exportFullSnapshotArchive() {
+        if (!confirm(t('storage.archiveFullConfirm'))) return null;
+        const timelines = await this.storedTimelinesForTransfer();
+        const serialized = await serializeSnapshotArchive({
+            timelines,
+            mode: 'full',
+            extensionVersion: this.version,
+        });
+        downloadText(
+            'st-devtools-full-backup.json',
+            serialized,
+            'application/json;charset=utf-8',
+        );
+        this.setStorageToolsStatus(t('storage.archiveExported', {
+            count: timelines.reduce(
+                (total, item) => total + (item.timeline?.length ?? 0),
+                0,
+            ),
+        }));
+        return serialized;
+    }
+
+    async exportSafeSnapshotShare(mode) {
+        const timelines = await this.storedTimelinesForTransfer();
+        const snapshots = timelines.flatMap(({ timeline }) => timeline ?? []);
+        if (
+            mode === 'redacted'
+            && snapshots.some((snapshot) => snapshot?.privacy?.mode === 'metadata')
+        ) {
+            throw Object.assign(new Error('share-requires-metadata'), {
+                code: 'share-requires-metadata',
+            });
+        }
+        const documentValue = await createSnapshotShareDocument({
+            snapshots,
+            mode,
+            extensionVersion: this.version,
+        });
+        const preview = snapshotSharePreview(documentValue);
+        if (!confirm(t('storage.sharePreviewConfirm', {
+            mode: t(`settings.captureMode.${preview.mode}`),
+            snapshots: normalizedCount(preview.snapshotCount),
+            sources: normalizedCount(preview.sourceCount),
+        }))) {
+            return null;
+        }
+        downloadText(
+            `st-devtools-safe-share-${mode}.json`,
+            JSON.stringify(documentValue, null, 2),
+            'application/json;charset=utf-8',
+        );
+        this.setStorageToolsStatus(t('storage.shareExported', {
+            count: normalizedCount(preview.snapshotCount),
+        }));
+        return preview;
+    }
+
+    async reportArchiveImportRetention(result) {
+        let preview = null;
+        if (typeof this.store.getRetentionPolicyPreview === 'function') {
+            try {
+                preview = await this.store.getRetentionPolicyPreview({
+                    maxSnapshotsPerChat: this.preferences.timelineRetentionLimit,
+                    maxAgeDays: this.preferences.retentionMaxAgeDays,
+                    maxTotalBytes: this.preferences.retentionMaxBytes,
+                }, { metadataLimit: STORAGE_TOOL_METADATA_LIMIT });
+            } catch {
+                // Import already succeeded. A best-effort policy warning must not
+                // turn a verified archive import into a reported failure.
+                preview = null;
+            }
+        }
+        const deleteCount = normalizedCount(
+            preview?.deleteCount ?? preview?.snapshotCount,
+        );
+        if (deleteCount > 0 || preview?.overBudget) {
+            this.setStorageToolsStatus(t('storage.archiveImportedRetentionWarning', {
+                count: normalizedCount(result?.appliedCount),
+                deleteCount,
+                deleteSize: formatBytes(
+                    preview?.deleteBytes ?? preview?.approximateBytes,
+                ),
+                overBudget: preview?.overBudget
+                    ? t('storage.archiveRetentionOverBudget', {
+                        size: formatBytes(preview.overBudgetBytes),
+                    })
+                    : '',
+            }));
+        } else {
+            this.setStorageToolsStatus(t('storage.archiveImported', {
+                count: normalizedCount(result?.appliedCount),
+            }));
+        }
+        return preview;
+    }
+
+    async importSnapshotArchive(file, {
+        strategy = 'merge',
+        conflictPolicy = 'keep-both',
+    } = {}) {
+        const input = await file.text();
+        const current = await this.storedTimelinesForTransfer();
+        let confirmationToken = null;
+        if (strategy === 'replace') {
+            const expected = await snapshotArchiveReplaceConfirmationToken(input);
+            const entered = globalThis.prompt?.(
+                t('storage.archiveReplaceTokenPrompt', { token: expected }),
+                '',
+            );
+            if (entered !== expected) {
+                this.setStorageToolsStatus(t('storage.archiveReplaceCancelled'));
+                return null;
+            }
+            confirmationToken = entered;
+        }
+        const plan = await prepareSnapshotArchiveImport(input, current, {
+            strategy,
+            conflictPolicy,
+            confirmationToken,
+        });
+        if (!confirm(t('storage.archiveImportConfirm', {
+            add: normalizedCount(plan.summary?.addCount),
+            skip: normalizedCount(plan.summary?.skipCount),
+            conflicts: normalizedCount(plan.summary?.conflictCount),
+            projected: normalizedCount(plan.summary?.projectedSnapshotCount),
+        }))) {
+            return null;
+        }
+        const result = await executeSnapshotArchiveImport(this.store, plan);
+        if (!result.ok) {
+            throw Object.assign(new Error(result.code), { code: result.code });
+        }
+        await this.refresh();
+        void this.refreshStorageSummary();
+        await this.reportArchiveImportRetention(result);
+        return result;
+    }
+
+    async compareDiagnosticFiles(files) {
+        if (files.length !== 2) {
+            throw Object.assign(new Error('two-files-required'), {
+                code: 'two-files-required',
+            });
+        }
+        const [before, after] = await Promise.all(files.map(async (file) => (
+            JSON.parse(await file.text())
+        )));
+        const comparison = compareDiagnosticReports(before, after);
+        const countMapChanges = Object.values(
+            comparison.summary?.countMaps ?? {},
+        ).reduce((total, items) => total + items.length, 0);
+        const summaryChangeCount = (
+            (comparison.summary?.scalars?.length ?? 0)
+            + (comparison.summary?.tokens?.length ?? 0)
+            + countMapChanges
+        );
+        this.setStorageToolsStatus(t('diagnostic.compareSummary', {
+            compatibility: comparison.compatible
+                ? t('diagnostic.compatible')
+                : t('diagnostic.incompatible'),
+            summary: summaryChangeCount,
+            added: normalizedCount(comparison.snapshots?.addedCount),
+            removed: normalizedCount(comparison.snapshots?.removedCount),
+            changed: normalizedCount(comparison.snapshots?.changedCount),
+        }));
+        return comparison;
+    }
+
+    buildStorageToolsPanel() {
+        const tools = element('section', {
+            className: 'st-devtools-settings-tools',
+        });
+        const heading = element('h3');
+        heading.append(explainedTitle(
+            t('storage.toolsTitle'),
+            t('storage.toolsDescription'),
+        ));
+        const status = element('p', {
+            className: 'st-devtools-settings-tool-status',
+        });
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        this.storageToolsStatus = status;
+        const tool = (titleKey, descriptionKey, controls) => {
+            const details = element('details', {
+                className: 'st-devtools-settings-tool',
+            });
+            const summary = element('summary');
+            summary.append(explainedTitle(t(titleKey), t(descriptionKey)));
+            const body = element('div', {
+                className: 'st-devtools-settings-tool-controls',
+            });
+            body.append(...controls);
+            details.append(summary, body);
+            return details;
+        };
+
+        const integrity = element('button', {
+            className: 'menu_button',
+            text: t('storage.integrityAction'),
+            type: 'button',
+        });
+        integrity.addEventListener('click', () => {
+            void this.withBusyButton(integrity, async () => {
+                try {
+                    await this.reviewStorageIntegrity();
+                } catch (error) {
+                    this.setStorageToolsStatus(t('storage.toolFailed', {
+                        code: this.safeToolError(error),
+                    }), { error: true });
+                }
+            });
+        });
+
+        const backup = element('button', {
+            className: 'menu_button',
+            text: t('storage.archiveFullAction'),
+            type: 'button',
+        });
+        backup.addEventListener('click', () => {
+            void this.withBusyButton(backup, async () => {
+                try {
+                    await this.exportFullSnapshotArchive();
+                } catch (error) {
+                    this.setStorageToolsStatus(t('storage.toolFailed', {
+                        code: this.safeToolError(error),
+                    }), { error: true });
+                }
+            });
+        });
+
+        const shareMode = element('select');
+        shareMode.setAttribute('aria-label', t('storage.shareMode'));
+        for (const mode of ['redacted', 'metadata']) {
+            const option = element('option', {
+                text: t(`settings.captureMode.${mode}`),
+            });
+            option.value = mode;
+            shareMode.appendChild(option);
+        }
+        shareMode.value = 'metadata';
+        const share = element('button', {
+            className: 'menu_button',
+            text: t('storage.shareAction'),
+            type: 'button',
+        });
+        share.addEventListener('click', () => {
+            void this.withBusyButton(share, async () => {
+                try {
+                    await this.exportSafeSnapshotShare(shareMode.value);
+                } catch (error) {
+                    this.setStorageToolsStatus(t('storage.toolFailed', {
+                        code: this.safeToolError(error),
+                    }), { error: true });
+                }
+            });
+        });
+
+        const strategy = element('select');
+        strategy.setAttribute('aria-label', t('storage.archiveStrategy'));
+        for (const value of ['merge', 'replace']) {
+            const option = element('option', {
+                text: t(`storage.archiveStrategy.${value}`),
+            });
+            option.value = value;
+            strategy.appendChild(option);
+        }
+        const conflicts = element('select');
+        conflicts.setAttribute('aria-label', t('storage.archiveConflictPolicy'));
+        for (const value of ['keep-both', 'skip']) {
+            const option = element('option', {
+                text: t(`storage.archiveConflictPolicy.${value}`),
+            });
+            option.value = value;
+            conflicts.appendChild(option);
+        }
+        const importInput = element('input', {
+            className: 'st-devtools-file-input',
+        });
+        importInput.type = 'file';
+        importInput.accept = '.json,application/json';
+        importInput.hidden = true;
+        const importButton = element('button', {
+            className: 'menu_button',
+            text: t('storage.archiveImportAction'),
+            type: 'button',
+        });
+        importButton.addEventListener('click', () => importInput.click());
+        importInput.addEventListener('change', () => {
+            const file = importInput.files?.[0];
+            importInput.value = '';
+            if (!file) return;
+            void this.withBusyButton(importButton, async () => {
+                try {
+                    await this.importSnapshotArchive(file, {
+                        strategy: strategy.value,
+                        conflictPolicy: conflicts.value,
+                    });
+                } catch (error) {
+                    this.setStorageToolsStatus(t('storage.toolFailed', {
+                        code: this.safeToolError(error),
+                    }), { error: true });
+                }
+            });
+        });
+
+        const compareInput = element('input', {
+            className: 'st-devtools-file-input',
+        });
+        compareInput.type = 'file';
+        compareInput.accept = '.json,application/json';
+        compareInput.multiple = true;
+        compareInput.hidden = true;
+        const compareButton = element('button', {
+            className: 'menu_button',
+            text: t('diagnostic.compareAction'),
+            type: 'button',
+        });
+        compareButton.addEventListener('click', () => compareInput.click());
+        compareInput.addEventListener('change', () => {
+            const files = [...(compareInput.files ?? [])];
+            compareInput.value = '';
+            void this.withBusyButton(compareButton, async () => {
+                try {
+                    await this.compareDiagnosticFiles(files);
+                } catch (error) {
+                    this.setStorageToolsStatus(t('storage.toolFailed', {
+                        code: this.safeToolError(error),
+                    }), { error: true });
+                }
+            });
+        });
+
+        tools.append(
+            heading,
+            tool(
+                'storage.integrityTitle',
+                'storage.integrityDescription',
+                [integrity],
+            ),
+            tool(
+                'storage.archiveTitle',
+                'storage.archiveDescription',
+                [backup],
+            ),
+            tool(
+                'storage.shareTitle',
+                'storage.shareDescription',
+                [shareMode, share],
+            ),
+            tool(
+                'storage.archiveImportTitle',
+                'storage.archiveImportDescription',
+                [
+                    strategy,
+                    conflicts,
+                    importButton,
+                    importInput,
+                ],
+            ),
+            tool(
+                'diagnostic.compareTitle',
+                'diagnostic.compareDescription',
+                [compareButton, compareInput],
+            ),
+            status,
+        );
+        return tools;
     }
 
     scheduleSettingsRefresh() {
@@ -1051,6 +2225,13 @@ export class DevToolsWindow {
         );
         this.timelineReadLimitInput.value = String(this.preferences.timelineReadLimit);
         this.timelineReadLimitInput.max = String(this.preferences.timelineRetentionLimit);
+        this.retentionMaxAgeDaysInput.value = String(
+            this.preferences.retentionMaxAgeDays,
+        );
+        this.retentionMaxBytesMiBInput.value = String(Math.floor(
+            this.preferences.retentionMaxBytes / MEBIBYTE,
+        ));
+        this.captureModeInput.value = this.preferences.captureMode;
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
             region.inert = true;
@@ -1091,6 +2272,7 @@ export class DevToolsWindow {
     }
 
     saveRuleSettings(settings) {
+        this.invalidateAnalysisState();
         const previous = this.ruleSettings;
         this.ruleSettings = normalizeRuleSettings(settings);
         this.invalidatePolicyPreview();
@@ -1121,6 +2303,8 @@ export class DevToolsWindow {
     }
 
     close() {
+        this.invalidateAnalysisState();
+        this.disposeVirtualLists();
         this.closeSettings({ restoreFocus: false });
         if (this.root) {
             this.root.hidden = true;
@@ -1302,9 +2486,10 @@ export class DevToolsWindow {
     }
 
     async onSnapshot(snapshot) {
+        this.invalidateAnalysisState();
         this.storageErrors = this.storageErrors.filter((item) => item.snapshotId !== snapshot.id);
         const panelVisible = Boolean(this.root && !this.root.hidden);
-        if (snapshot.chatId === this.currentChatId()) {
+        if (this.snapshotStorageChatId(snapshot) === this.currentChatId()) {
             const alreadyPresent = this.timeline.some((item) => item.id === snapshot.id);
             this.timeline = [...this.timeline.filter((item) => item.id !== snapshot.id), snapshot]
                 .sort((left, right) => left.timestamp - right.timestamp)
@@ -1409,15 +2594,17 @@ export class DevToolsWindow {
     async readStorageSummary() {
         const localData = this.readLocalDataSummary();
         try {
-            let summary;
-            if (typeof this.store.getStorageSummary === 'function') {
-                summary = await this.store.getStorageSummary();
-            } else {
-                summary = {
+            const [summary, originStorage] = await Promise.all([
+                typeof this.store.getStorageSummary === 'function'
+                    ? this.store.getStorageSummary()
+                    : Promise.resolve({
                     ...this.storageSummary,
                     ...(this.store.getStatus?.() ?? {}),
-                };
-            }
+                    }),
+                typeof this.store.getStorageQuotaStatus === 'function'
+                    ? this.store.getStorageQuotaStatus()
+                    : Promise.resolve(null),
+            ]);
             const snapshotApproximateBytes = Number.isFinite(summary.snapshotApproximateBytes)
                 ? summary.snapshotApproximateBytes
                 : Number.isFinite(summary.approximateBytes)
@@ -1426,6 +2613,7 @@ export class DevToolsWindow {
             return {
                 ...summary,
                 localSettingCount: localData.count,
+                originStorage,
                 snapshotApproximateBytes,
                 approximateBytes: snapshotApproximateBytes == null
                     ? null
@@ -1503,6 +2691,7 @@ export class DevToolsWindow {
                         this.storageSummary = {
                             ...summary,
                             localSettingCount: this.storageSummary.localSettingCount,
+                            originStorage: this.storageSummary.originStorage,
                             snapshotApproximateBytes: summary.approximateBytes,
                             approximateBytes: summary.approximateBytes == null
                                 ? null
@@ -1578,6 +2767,8 @@ export class DevToolsWindow {
     }
 
     clearLocalData() {
+        this.invalidateAnalysisState();
+        this.analysisCache.clear();
         let deletedCount = 0;
         for (const key of this.localDataKeys()) {
             const exists = localStorage.getItem(key) != null;
@@ -1715,6 +2906,7 @@ export class DevToolsWindow {
     }
 
     setComparisonPolicySettings(settings) {
+        this.invalidateAnalysisState();
         this.comparisonPolicySettings = normalizeComparisonPolicySettings(settings);
         this.comparisonPolicyDirty = JSON.stringify(this.comparisonPolicySettings)
             !== JSON.stringify(this.savedComparisonPolicySettings)
@@ -1914,6 +3106,8 @@ export class DevToolsWindow {
 
     render() {
         if (!this.content) return;
+        this.invalidateAnalysisState();
+        this.disposeVirtualLists();
         this.syncOpaqueTheme();
         for (const button of this.window.querySelectorAll('.st-devtools-tab')) {
             const active = button.dataset.tab === this.activeTab;
@@ -1933,6 +3127,21 @@ export class DevToolsWindow {
             this.content.appendChild(this.renderEmpty());
             return;
         }
+        const privacyMode = snapshot?.privacy?.mode ?? 'full';
+        if (snapshot && privacyMode !== 'full') {
+            this.content.appendChild(this.renderSnapshotPrivacyNotice(snapshot));
+            if (privacyMode === 'metadata' && this.activeTab !== 'timeline') {
+                this.content.appendChild(this.renderMetadataOnlySnapshot(snapshot));
+                return;
+            }
+            if (
+                privacyMode === 'redacted'
+                && ['rules', 'search'].includes(this.activeTab)
+            ) {
+                this.content.appendChild(this.renderRedactedLimitedFeature(snapshot));
+                return;
+            }
+        }
 
         const renderers = {
             explorer: () => this.renderExplorer(snapshot),
@@ -1943,6 +3152,65 @@ export class DevToolsWindow {
             search: () => this.renderSearch(snapshot),
         };
         this.content.appendChild(renderers[this.activeTab]());
+    }
+
+    renderSnapshotPrivacyNotice(snapshot) {
+        const mode = snapshot?.privacy?.mode === 'metadata'
+            ? 'metadata'
+            : 'redacted';
+        const notice = element('section', {
+            className: `st-devtools-privacy-notice is-${mode}`,
+        });
+        notice.setAttribute('role', 'status');
+        notice.append(
+            element('strong', {
+                text: t(`privacy.noticeTitle.${mode}`),
+            }),
+            proseElement('p', t(`privacy.noticeDescription.${mode}`)),
+        );
+        return notice;
+    }
+
+    renderMetadataOnlySnapshot(snapshot) {
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-metadata-only',
+        });
+        page.appendChild(this.renderSnapshotPicker());
+        const metrics = element('dl', {
+            className: 'st-devtools-metadata-only-metrics',
+        });
+        const addMetric = (label, value) => {
+            metrics.append(
+                element('dt', { text: label }),
+                element('dd', { text: value }),
+            );
+        };
+        addMetric(t('privacy.provider'), snapshotProviderDisplay(snapshot));
+        addMetric(t('privacy.model'), snapshot.model ?? t('common.unknown'));
+        addMetric(
+            t('stat.promptTokens'),
+            String(snapshot.stats?.totalTokens ?? 0),
+        );
+        addMetric(
+            t('privacy.sourceCount'),
+            String(snapshot.privacySummary?.sourceCount ?? 0),
+        );
+        page.append(
+            proseElement('p', t('privacy.metadataUnavailable')),
+            metrics,
+        );
+        return page;
+    }
+
+    renderRedactedLimitedFeature(snapshot) {
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-redacted-limited',
+        });
+        page.append(
+            this.renderSnapshotPicker(),
+            proseElement('p', t('privacy.redactedAnalysisUnavailable')),
+        );
+        return page;
     }
 
     renderStorageErrors() {
@@ -2002,7 +3270,7 @@ export class DevToolsWindow {
         select.setAttribute('aria-label', labelText);
         for (const snapshot of [...this.timeline].reverse()) {
             const option = element('option', {
-                text: `${formatTimestamp(snapshot.timestamp)} · ${snapshotProviderDisplay(snapshot)} · ${t('snapshot.tokens', { count: snapshot.stats.totalTokens })}`,
+                text: `${formatTimestamp(snapshot.timestamp)} · ${snapshotProviderDisplay(snapshot)} · ${t('snapshot.tokens', { count: snapshot.stats?.totalTokens ?? 0 })}`,
             });
             option.value = snapshot.id;
             option.selected = snapshot.id === this.selectedId;
@@ -2198,11 +3466,16 @@ export class DevToolsWindow {
                 }),
             );
             const sourceList = element('div', { className: 'st-devtools-source-list' });
-            for (const source of groupData.sources) {
+            const renderSourceCard = (source, sourceIndex) => {
                 const details = element('details', { className: 'st-devtools-source' });
                 details.dataset.sourceId = source.id;
                 details.dataset.sourceType = source.type;
                 details.style.setProperty('--source-color', source.color);
+                details.open = this.openSourceIds.has(source.id);
+                details.addEventListener('toggle', () => {
+                    if (details.open) this.openSourceIds.add(source.id);
+                    else this.openSourceIds.delete(source.id);
+                });
                 const summary = element('summary');
                 const heading = element('span', { className: 'st-devtools-source-heading' });
                 if (isConfiguredPromptSource(source)) {
@@ -2212,7 +3485,7 @@ export class DevToolsWindow {
                         text: t('explorer.promptOrder', {
                             count: Number.isFinite(promptOrder)
                                 ? promptOrder + 1
-                                : groupData.sources.indexOf(source) + 1,
+                                : sourceIndex + 1,
                         }),
                     }));
                 }
@@ -2326,9 +3599,37 @@ export class DevToolsWindow {
                         if (!details.contains(event.relatedTarget)) this.clearSourceMapping();
                     });
                 }
-                sourceList.appendChild(details);
-            }
-            group.append(groupSummary, sourceList);
+                return details;
+            };
+            let sourceListController = null;
+            const mountSourceList = () => {
+                if (!sourceListController) {
+                    sourceListController = this.mountVirtualList(
+                        sourceList,
+                        groupData.sources,
+                        {
+                            estimatedRowHeight: 92,
+                            renderItem: renderSourceCard,
+                            focusSelector: 'summary',
+                            ariaLabel: groupTitle,
+                        },
+                    );
+                }
+                return sourceList;
+            };
+            group.appendChild(groupSummary);
+            attachLazyDetailsContent(group, mountSourceList);
+            groupData.sources.forEach((source, sourceIndex) => {
+                this.virtualSourceLists.set(source.id, {
+                    group,
+                    index: sourceIndex,
+                    ensureMounted: () => {
+                        group.open = true;
+                        mountDetailsContent(group);
+                        return sourceListController;
+                    },
+                });
+            });
             groups.appendChild(group);
         }
         page.appendChild(groups);
@@ -2425,8 +3726,15 @@ export class DevToolsWindow {
     }
 
     jumpToSourceCard(sourceId) {
-        const card = [...this.window.querySelectorAll('.st-devtools-source')]
+        let card = [...this.window.querySelectorAll('.st-devtools-source')]
             .find((node) => node.dataset.sourceId === sourceId);
+        if (!card) {
+            const virtualTarget = this.virtualSourceLists.get(sourceId);
+            const controller = virtualTarget?.ensureMounted?.();
+            controller?.scrollToIndex?.(virtualTarget.index);
+            card = [...this.window.querySelectorAll('.st-devtools-source')]
+                .find((node) => node.dataset.sourceId === sourceId);
+        }
         if (!card) return;
         card.closest('.st-devtools-source-group')?.setAttribute('open', '');
         card.open = true;
@@ -2472,8 +3780,15 @@ export class DevToolsWindow {
     focusRuleSources(sourceIds, finalRanges = []) {
         this.clearRuleFocus();
         const selected = new Set(sourceIds);
-        const cards = [...this.window.querySelectorAll('.st-devtools-source')]
+        let cards = [...this.window.querySelectorAll('.st-devtools-source')]
             .filter((node) => selected.has(node.dataset.sourceId));
+        if (cards.length === 0 && sourceIds?.[0]) {
+            const virtualTarget = this.virtualSourceLists.get(sourceIds[0]);
+            const controller = virtualTarget?.ensureMounted?.();
+            controller?.scrollToIndex?.(virtualTarget.index);
+            cards = [...this.window.querySelectorAll('.st-devtools-source')]
+                .filter((node) => selected.has(node.dataset.sourceId));
+        }
         for (const card of cards) {
             card.closest('.st-devtools-source-group')?.setAttribute('open', '');
             card.open = true;
@@ -2700,8 +4015,8 @@ export class DevToolsWindow {
         }
 
         page.appendChild(this.renderGrowthChart(analyses, this.timelineTotalCount));
-        const list = element('div', { className: 'st-devtools-timeline' });
-        for (const analysis of [...analyses].reverse()) {
+        const timelineItems = [...analyses].reverse();
+        const renderTimelineEntry = (analysis) => {
             const { snapshot, previous, tokenDelta, lore } = analysis;
             const entry = element('article', { className: 'st-devtools-timeline-entry' });
             entry.classList.toggle('active', snapshot.id === this.selectedId);
@@ -2729,7 +4044,7 @@ export class DevToolsWindow {
             const button = element('button', { className: 'st-devtools-timeline-item', type: 'button' });
             const heading = element('strong', { text: formatTimestamp(snapshot.timestamp) });
             const metadata = element('span', {
-                text: `${snapshotProviderDisplay(snapshot)} · ${snapshot.model ?? t('timeline.unknownModel')} · ${t('snapshot.tokens', { count: snapshot.stats.totalTokens })}`,
+                text: `${snapshotProviderDisplay(snapshot)} · ${snapshot.model ?? t('timeline.unknownModel')} · ${t('snapshot.tokens', { count: snapshot.stats?.totalTokens ?? 0 })}`,
             });
             const loreMetadata = element('small', {
                 text: `${promptTypeDisplayLabel(snapshot.promptType)} · ${t('timeline.loreCount', { count: snapshot.lorebookEntries?.length ?? 0 })} · ${generationTypeDisplayLabel(snapshot.generationType)}`,
@@ -2802,8 +4117,8 @@ export class DevToolsWindow {
             ) {
                 entry.appendChild(this.renderLoreChangeList(lore));
             }
-            list.appendChild(entry);
-        }
+            return entry;
+        };
         const snapshots = element('details', {
             className: 'st-devtools-disclosure st-devtools-timeline-snapshots',
         });
@@ -2824,8 +4139,24 @@ export class DevToolsWindow {
                     : t('timeline.snapshotCount', { count: analyses.length }),
             }),
         );
-        const selectionToolbar = this.renderTimelineSelectionToolbar();
-        snapshots.append(snapshotsSummary, selectionToolbar, list);
+        snapshots.appendChild(snapshotsSummary);
+        attachLazyDetailsContent(snapshots, () => {
+            const content = element('div', {
+                className: 'st-devtools-timeline-snapshot-content',
+            });
+            const selectionToolbar = this.renderTimelineSelectionToolbar();
+            const list = element('div', {
+                className: 'st-devtools-timeline',
+            });
+            this.mountVirtualList(list, timelineItems, {
+                estimatedRowHeight: 138,
+                renderItem: renderTimelineEntry,
+                focusSelector: '.st-devtools-timeline-item',
+                ariaLabel: t('timeline.snapshotsTitle'),
+            });
+            content.append(selectionToolbar, list);
+            return content;
+        });
         page.appendChild(snapshots);
         return page;
     }
@@ -2882,7 +4213,7 @@ export class DevToolsWindow {
                     summary.approximateBytes == null
                         ? null
                         : formatBytes(summary.approximateBytes),
-                    'storage.approximateSize',
+                    'storage.extensionApproximateSize',
                     'storage.approximateSizePending',
                     'storage.approximateSizeUnknown',
                     'size',
@@ -2890,6 +4221,34 @@ export class DevToolsWindow {
             }),
         );
         status.append(heading, metrics);
+        const origin = summary.originStorage;
+        if (origin) {
+            const originMetrics = element('div', {
+                className: 'st-devtools-storage-origin',
+            });
+            originMetrics.appendChild(element('strong', {
+                text: t('storage.originScopeTitle'),
+            }));
+            if (origin.available) {
+                originMetrics.append(
+                    element('span', {
+                        text: t('storage.originUsage', {
+                            size: formatBytes(origin.usage),
+                        }),
+                    }),
+                    element('span', {
+                        text: t('storage.originQuota', {
+                            size: formatBytes(origin.quota),
+                        }),
+                    }),
+                );
+            } else {
+                originMetrics.appendChild(element('span', {
+                    text: t('storage.originUnavailable'),
+                }));
+            }
+            status.appendChild(originMetrics);
+        }
         if (!summary.persistent) {
             const warning = proseElement('p', t('storage.memoryWarning'), {
                 className: 'st-devtools-storage-warning',
@@ -3223,7 +4582,7 @@ export class DevToolsWindow {
 
     async deleteTimelineSnapshot(snapshot, {
         throwOnError = false,
-        chatId = snapshot.chatId || this.currentChatId(),
+        chatId = this.snapshotStorageChatId(snapshot),
     } = {}) {
         const errorId = `delete:${snapshot.id}`;
         try {
@@ -3646,6 +5005,7 @@ export class DevToolsWindow {
         let renderedFullDiffRevision = -1;
         let selectedBase = null;
         let selectedCompare = null;
+        let activeDiffController = null;
         const renderFullDiff = () => {
             mountDetailsContent(fullDiff);
             if (
@@ -3664,26 +5024,117 @@ export class DevToolsWindow {
         fullDiff.addEventListener('toggle', () => {
             if (fullDiff.open) renderFullDiff();
         });
-        const renderDiff = () => {
+        const renderDiff = async () => {
             selectedBase = this.timeline.find(
                 (snapshot) => snapshot.id === baseSelect.select.value,
             );
             selectedCompare = this.timeline.find(
                 (snapshot) => snapshot.id === compareSelect.select.value,
             );
-            selectionRevision += 1;
+            const currentSelectionRevision = ++selectionRevision;
+            const currentAnalysisRevision = this.analysisRevision;
+            activeDiffController?.abort();
+            activeDiffController = null;
             sourceSection.replaceChildren();
             loreSection.replaceChildren();
             if (!selectedBase || !selectedCompare) return;
 
-            this.renderSourceChanges(sourceSection, selectedBase, selectedCompare);
-            this.renderLoreChanges(loreSection, selectedBase, selectedCompare);
             if (fullDiff.open) renderFullDiff();
+            if (!this.shouldUseAsyncAnalysis(
+                'diff',
+                [selectedBase, selectedCompare],
+            )) {
+                this.renderSourceChanges(
+                    sourceSection,
+                    selectedBase,
+                    selectedCompare,
+                );
+                this.renderLoreChanges(
+                    loreSection,
+                    selectedBase,
+                    selectedCompare,
+                );
+                return;
+            }
+
+            const status = element('p', {
+                className: 'st-devtools-analysis-status',
+                text: t('analysis.loading'),
+            });
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            sourceSection.appendChild(status);
+            const controller = new AbortController();
+            activeDiffController = controller;
+            try {
+                const response = await this.runUiAnalysis('diff', {
+                    baseSnapshot: {
+                        sources: selectedBase.sources ?? [],
+                        lorebookEntries: selectedBase.lorebookEntries ?? [],
+                    },
+                    compareSnapshot: {
+                        sources: selectedCompare.sources ?? [],
+                        lorebookEntries: selectedCompare.lorebookEntries ?? [],
+                    },
+                }, {
+                    snapshots: [selectedBase, selectedCompare],
+                    configuration: { operation: 'source-lore-diff:v1' },
+                    controller,
+                });
+                if (
+                    controller.signal.aborted
+                    || currentSelectionRevision !== selectionRevision
+                    || currentAnalysisRevision !== this.analysisRevision
+                    || !page.isConnected
+                ) {
+                    return;
+                }
+                sourceSection.replaceChildren();
+                loreSection.replaceChildren();
+                this.renderSourceChanges(
+                    sourceSection,
+                    selectedBase,
+                    selectedCompare,
+                    response.result?.sources ?? [],
+                );
+                this.renderLoreChanges(
+                    loreSection,
+                    selectedBase,
+                    selectedCompare,
+                    response.result?.lore ?? {
+                        activated: [],
+                        removed: [],
+                        changed: [],
+                    },
+                );
+            } catch (error) {
+                if (
+                    controller.signal.aborted
+                    || ['analysis-cancelled', 'analysis-stale'].includes(
+                        error?.code,
+                    )
+                    || currentSelectionRevision !== selectionRevision
+                    || currentAnalysisRevision !== this.analysisRevision
+                    || !page.isConnected
+                ) {
+                    return;
+                }
+                status.classList.add('is-error');
+                status.textContent = this.analysisErrorText(error);
+            } finally {
+                if (activeDiffController === controller) {
+                    activeDiffController = null;
+                }
+            }
         };
-        baseSelect.select.addEventListener('change', renderDiff);
-        compareSelect.select.addEventListener('change', renderDiff);
+        baseSelect.select.addEventListener('change', () => {
+            void renderDiff();
+        });
+        compareSelect.select.addEventListener('change', () => {
+            void renderDiff();
+        });
         page.append(selectors, sourceSection, loreSection, fullDiff);
-        renderDiff();
+        void renderDiff();
         return page;
     }
 
@@ -3704,13 +5155,14 @@ export class DevToolsWindow {
         }
     }
 
-    renderSourceChanges(section, base, compare) {
+    renderSourceChanges(section, base, compare, providedChanges = null) {
         section.appendChild(explainedTitle(
             t('diff.sourceChanges'),
             t('diff.description'),
             { tag: 'h3', titleTag: 'span' },
         ));
-        const changes = compareSnapshotSources(base, compare);
+        const changes = providedChanges
+            ?? compareSnapshotSources(base, compare);
         if (!changes.length) {
             section.appendChild(proseElement('p', t('diff.noSourceChanges')));
             return;
@@ -3804,13 +5256,13 @@ export class DevToolsWindow {
         section.appendChild(list);
     }
 
-    renderLoreChanges(section, base, compare) {
+    renderLoreChanges(section, base, compare, providedChanges = null) {
         section.appendChild(explainedTitle(
             t('diff.loreChanges'),
             t('diff.loreDescription'),
             { tag: 'h3', titleTag: 'span' },
         ));
-        const changes = compareLoreEntries(
+        const changes = providedChanges ?? compareLoreEntries(
             base.lorebookEntries ?? [],
             compare.lorebookEntries ?? [],
         );
@@ -3985,7 +5437,7 @@ export class DevToolsWindow {
         const structured = snapshot.stats?.structured ?? {};
         const largestSource = largestIncludedSource(snapshot.sources);
         const coreStatValues = [
-            [t('stat.promptTokens'), snapshot.stats.totalTokens],
+            [t('stat.promptTokens'), snapshot.stats?.totalTokens ?? 0],
             [t('stat.contextUsage'), snapshot.stats.contextUsage == null ? t('common.unknown') : `${(snapshot.stats.contextUsage * 100).toFixed(1)}%`],
             [t('stat.remaining'), snapshot.stats.remainingContext ?? t('common.unknown')],
             [
@@ -6423,16 +7875,80 @@ export class DevToolsWindow {
         return details;
     }
 
-    renderRules(snapshot) {
+    renderRules(snapshot, providedAnalysis = undefined) {
         const page = element('div', { className: 'st-devtools-page' });
         page.append(
             this.renderSnapshotPicker(),
             this.renderRuleSettings(),
             this.renderComparisonPolicySettings(snapshot),
         );
-        const analysis = analyzeSnapshotDetailed(
+        const effectiveRuleSettings = this.pendingImportedRuleSettings
+            ?? this.ruleSettings;
+        if (
+            providedAnalysis === undefined
+            && this.shouldUseAsyncAnalysis('rules', [snapshot])
+        ) {
+            const host = element('div', {
+                className: 'st-devtools-rule-analysis-host',
+            });
+            const status = element('p', {
+                className: 'st-devtools-analysis-status',
+                text: t('analysis.loading'),
+            });
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            host.appendChild(status);
+            page.appendChild(host);
+            const controller = new AbortController();
+            const revision = this.analysisRevision;
+            const snapshotId = snapshot.id;
+            void this.runUiAnalysis('rules', {
+                snapshot: this.analysisRuleSnapshot(snapshot),
+                ruleSettings: effectiveRuleSettings,
+                comparisonSettings: this.comparisonPolicySettings,
+            }, {
+                snapshots: [snapshot],
+                configuration: {
+                    ruleSettings: effectiveRuleSettings,
+                    comparisonSettings: this.comparisonPolicySettings,
+                },
+                controller,
+            }).then((response) => {
+                if (
+                    controller.signal.aborted
+                    || revision !== this.analysisRevision
+                    || this.activeTab !== 'rules'
+                    || this.selectedSnapshot()?.id !== snapshotId
+                    || !page.isConnected
+                ) {
+                    return;
+                }
+                const completed = this.renderRules(
+                    snapshot,
+                    response.result,
+                );
+                host.replaceChildren(
+                    ...[...completed.childNodes].slice(3),
+                );
+            }).catch((error) => {
+                if (
+                    controller.signal.aborted
+                    || ['analysis-cancelled', 'analysis-stale'].includes(
+                        error?.code,
+                    )
+                    || revision !== this.analysisRevision
+                    || !page.isConnected
+                ) {
+                    return;
+                }
+                status.classList.add('is-error');
+                status.textContent = this.analysisErrorText(error);
+            });
+            return page;
+        }
+        const analysis = providedAnalysis ?? analyzeSnapshotDetailed(
             snapshot,
-            this.pendingImportedRuleSettings ?? this.ruleSettings,
+            effectiveRuleSettings,
             this.comparisonPolicySettings,
         );
         const reviewResult = applyFindingReviews(
@@ -6513,8 +8029,6 @@ export class DevToolsWindow {
 
         if (findings.length === 0) {
             const empty = element('div', { className: 'st-devtools-rule-empty' });
-            const effectiveRuleSettings = this.pendingImportedRuleSettings
-                ?? this.ruleSettings;
             const anyEnabled = Object.values(effectiveRuleSettings.enabled).some(Boolean);
             empty.append(
                 element('i', {
@@ -6727,7 +8241,14 @@ export class DevToolsWindow {
                 'regex-timeout',
                 'regex-worker-unavailable',
                 'search-worker-failed',
+                'analysis-timeout',
+                'analysis-worker-unavailable',
+                'analysis-worker-failed',
+                'analysis-input-too-large',
             ]);
+            if (knownCodes.has(code) && code.startsWith('analysis-')) {
+                return this.analysisErrorText(error);
+            }
             return knownCodes.has(code)
                 ? t(`search.error.${code}`, {
                     regexMax: USER_REGEX_MAX_LENGTH,
@@ -6745,12 +8266,34 @@ export class DevToolsWindow {
             if (!query) return;
             status.textContent = t('search.searching');
             try {
-                const matches = await searchSnapshotSafely(snapshot, query, {
+                const searchOptions = {
                     regex: regex.checked,
                     caseSensitive: caseSensitive.checked,
+                };
+                if (searchOptions.regex) {
+                    const validation = validateUserRegex(query);
+                    if (!validation.ok) {
+                        throw Object.assign(new Error(validation.code), {
+                            code: validation.code,
+                        });
+                    }
+                }
+                const response = await this.runUiAnalysis('search', {
+                    snapshot: {
+                        sources: snapshot.sources ?? [],
+                    },
+                    query,
+                    options: searchOptions,
                 }, {
-                    signal: activeSearch.signal,
+                    snapshots: [snapshot],
+                    configuration: {
+                        query,
+                        options: searchOptions,
+                    },
+                    controller: activeSearch,
+                    timeoutMs: searchOptions.regex ? 800 : undefined,
                 });
+                const matches = response.result ?? [];
                 if (sequence !== searchSequence || !page.isConnected) return;
                 status.textContent = matches.length === 200
                     ? t('search.matchesLimited', { count: matches.length })
@@ -6765,20 +8308,26 @@ export class DevToolsWindow {
                         this.activeTab = 'explorer';
                         localStorage.setItem(LAST_TAB_KEY, this.activeTab);
                         this.render();
-                        const source = [...this.window.querySelectorAll('.st-devtools-source')]
-                            .find((entry) => entry.dataset.sourceId === match.sourceId);
-                        if (!source) return;
-                        source.closest('.st-devtools-source-group')?.setAttribute('open', '');
-                        source.open = true;
-                        mountDetailsContent(source);
-                        source.scrollIntoView({ block: 'center' });
-                        source.classList.add('search-focus');
-                        setTimeout(() => source?.classList.remove('search-focus'), 1500);
+                        this.jumpToSourceCard(match.sourceId);
+                        const source = [...this.window.querySelectorAll(
+                            '.st-devtools-source',
+                        )].find(
+                            (entry) => entry.dataset.sourceId === match.sourceId,
+                        );
+                        source?.classList.add('search-focus');
+                        setTimeout(
+                            () => source?.classList.remove('search-focus'),
+                            1500,
+                        );
                     });
                     results.appendChild(item);
                 }
             } catch (error) {
-                if (error?.code === 'search-cancelled' || sequence !== searchSequence) return;
+                if (
+                    ['search-cancelled', 'analysis-cancelled', 'analysis-stale']
+                        .includes(error?.code)
+                    || sequence !== searchSequence
+                ) return;
                 status.textContent = searchErrorText(error);
             }
         };

@@ -7,6 +7,7 @@ import {
     extractRequestCorrelationId,
     sanitizeRequestBody,
 } from './request.js';
+import { transformSnapshotPrivacy } from './snapshot-privacy.js';
 
 const DEFAULT_SETTINGS_WAIT_MS = 1500;
 
@@ -228,18 +229,31 @@ function emptySanitizedLore() {
     };
 }
 
+function attachStorageChatId(snapshot, chatId) {
+    if (!snapshot || typeof snapshot !== 'object') return snapshot;
+    Object.defineProperty(snapshot, 'storageChatId', {
+        configurable: true,
+        enumerable: false,
+        writable: false,
+        value: String(chatId || '__global__'),
+    });
+    return snapshot;
+}
+
 export class CaptureController extends EventTarget {
     constructor({
         getContext,
         store,
         version,
         settingsWaitMs = DEFAULT_SETTINGS_WAIT_MS,
+        getCaptureMode = () => 'full',
     }) {
         super();
         this.getContext = getContext;
         this.store = store;
         this.version = version;
         this.settingsWaitMs = settingsWaitMs;
+        this.getCaptureMode = getCaptureMode;
         this.started = false;
         this.pendingLore = emptySanitizedLore();
         this.generationType = 'unknown';
@@ -545,7 +559,7 @@ export class CaptureController extends EventTarget {
         const tokenCounter = typeof context.getTokenCountAsync === 'function'
             ? (text) => context.getTokenCountAsync(text)
             : async (text) => Math.ceil(new TextEncoder().encode(text).length / 3.35);
-        const snapshot = await finalizeSnapshot({
+        const finalizedSnapshot = await finalizeSnapshot({
             contextState,
             payload,
             promptType,
@@ -556,7 +570,12 @@ export class CaptureController extends EventTarget {
             capture,
             request,
         });
-        await this.storeSnapshot(snapshot);
+        const snapshot = await transformSnapshotPrivacy(finalizedSnapshot, {
+            mode: this.getCaptureMode(),
+        });
+        await this.storeSnapshot(snapshot, {
+            storageChatId: finalizedSnapshot.chatId,
+        });
         return this.registerGenerationSnapshot(generation, snapshot);
     }
 
@@ -579,7 +598,9 @@ export class CaptureController extends EventTarget {
             },
         };
         generation.snapshots.set(updated.id, updated);
-        await this.storeSnapshot(updated);
+        await this.storeSnapshot(updated, {
+            storageChatId: snapshot.storageChatId ?? snapshot.chatId,
+        });
         return updated;
     }
 
@@ -604,12 +625,19 @@ export class CaptureController extends EventTarget {
     }
 
     async retrySnapshot(snapshot) {
-        return this.storeSnapshot(deepClone(snapshot));
+        return this.storeSnapshot(deepClone(snapshot), {
+            storageChatId: snapshot?.storageChatId ?? snapshot?.chatId,
+        });
     }
 
-    async storeSnapshot(snapshot) {
+    async storeSnapshot(snapshot, {
+        storageChatId = snapshot?.storageChatId ?? snapshot?.chatId,
+    } = {}) {
+        attachStorageChatId(snapshot, storageChatId);
         try {
-            await this.store.addSnapshot(snapshot);
+            await this.store.addSnapshot(snapshot, {
+                partitionChatId: snapshot.storageChatId,
+            });
         } catch (error) {
             this.dispatchEvent(new CustomEvent('capture-error', {
                 detail: {
