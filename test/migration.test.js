@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     migrateSnapshot,
+    migrateV5ToV6,
     SnapshotMigrationError,
 } from '../src/migrations.js';
 import { SnapshotStore } from '../src/storage.js';
@@ -24,12 +25,12 @@ function legacySnapshot() {
     };
 }
 
-test('v1 snapshots migrate through schema v5 to v6 without changing captured text', () => {
+test('v1 snapshots migrate through schema v5, v6, and v7 without changing captured text', () => {
     const original = legacySnapshot();
     const migrated = migrateSnapshot(original);
 
     assert.equal(original.schemaVersion, 1);
-    assert.equal(migrated.schemaVersion, 6);
+    assert.equal(migrated.schemaVersion, 7);
     assert.equal(migrated.capture.requestStatus, 'prompt-only-timeout');
     assert.equal(migrated.capture.generationStatus, 'unknown');
     assert.equal(migrated.finalText, original.finalText);
@@ -47,6 +48,7 @@ test('v1 snapshots migrate through schema v5 to v6 without changing captured tex
     });
     assert.equal(migrated.providerTrace.selectedSource.value, 'unknown');
     assert.equal(migrated.providerTrace.upstreamProvider.status, 'unknown');
+    assert.equal(migrated.usage.status, 'unavailable');
     assert.deepEqual(migrated.stats.structured, {
         toolSchemas: 0,
         toolCalls: 0,
@@ -72,7 +74,7 @@ test('legacy storage settings skip oversized template regexes without failing mi
     };
     const migrated = migrateSnapshot(oversized);
 
-    assert.equal(migrated.schemaVersion, 6);
+    assert.equal(migrated.schemaVersion, 7);
     assert.equal(migrated.sources[0].attribution, 'unmatched');
     assert.deepEqual(migrated.sources[0].ranges, []);
     assert.deepEqual(migrated.sources[0].provenance, {
@@ -100,7 +102,7 @@ test('timeline reads persist one-time schema migration', async () => {
     store.memory.set(store.timelineKey('chat'), [legacySnapshot()]);
 
     const timeline = await store.getTimeline('chat');
-    assert.equal(timeline[0].schemaVersion, 6);
+    assert.equal(timeline[0].schemaVersion, 7);
     assert.equal(store.memory.has(store.timelineKey('chat')), false);
     assert.equal(
         store.memory.get(store.timelineIndexKey('chat')).version,
@@ -108,7 +110,7 @@ test('timeline reads persist one-time schema migration', async () => {
     );
     assert.equal(
         store.memory.get(store.snapshotKey('chat', 'legacy')).schemaVersion,
-        6,
+        7,
     );
 });
 
@@ -183,7 +185,7 @@ test('v4 request captures gain lifecycle defaults without losing request data', 
         },
     });
 
-    assert.equal(migrated.schemaVersion, 6);
+    assert.equal(migrated.schemaVersion, 7);
     assert.equal(migrated.request.body.model, 'test-model');
     assert.equal(migrated.capture.requestStatus, 'captured');
     assert.equal(migrated.capture.generationStatus, 'unknown');
@@ -220,7 +222,7 @@ test('v5 migration is non-mutating, records legacy provenance honestly, and is i
 
     assert.deepEqual(original, before);
     assert.notEqual(migrated, original);
-    assert.equal(migrated.schemaVersion, 6);
+    assert.equal(migrated.schemaVersion, 7);
     assert.equal(migrated.capture.migratedFrom, 5);
     assert.equal(migrated.sources[0].metadata.prefillStatus, 'inferred');
     assert.equal(migrated.sources[0].provenance.availability, 'legacy-unavailable');
@@ -232,8 +234,21 @@ test('v5 migration is non-mutating, records legacy provenance honestly, and is i
         status: 'unknown',
         evidencePointer: null,
     });
+    assert.equal(migrated.usage.status, 'unavailable');
     assert.equal(migrateSnapshot(migrated), migrated);
     assert.deepEqual(JSON.parse(JSON.stringify(migrated)), migrated);
+});
+
+test('the v5 to v6 step stays pinned to schema 6 before the v7 migration', () => {
+    const v5 = {
+        ...legacySnapshot(),
+        schemaVersion: 5,
+    };
+    const v6 = migrateV5ToV6(v5);
+
+    assert.equal(v6.schemaVersion, 6);
+    assert.equal(v6.usage, undefined);
+    assert.equal(migrateSnapshot(v6).schemaVersion, 7);
 });
 
 test('corrupt legacy ranges fail at a record boundary without mutating the source', () => {
@@ -328,9 +343,131 @@ function v6SnapshotWithLocation(location = {}, source = {}) {
     };
 }
 
-test('valid v6 provenance resolves its generated payload pointer idempotently', () => {
+test('valid v6 provenance migrates once and its v7 result is idempotent', () => {
     const valid = v6SnapshotWithLocation();
-    assert.strictEqual(migrateSnapshot(valid), valid);
+    const migrated = migrateSnapshot(valid);
+    assert.notStrictEqual(migrated, valid);
+    assert.equal(migrated.schemaVersion, 7);
+    assert.equal(migrated.usage.status, 'unavailable');
+    assert.strictEqual(migrateSnapshot(migrated), migrated);
+});
+
+test('v6 to v7 strips raw correlation ids and replaces legacy usage with a local estimate', () => {
+    const original = {
+        ...v6SnapshotWithLocation(),
+        timestamp: 500,
+        capture: {
+            correlationId: 'raw-capture-id',
+            hadCorrelationId: false,
+        },
+        request: {
+            body: {
+                request_id: 'raw-root-id',
+                responseId: 'raw-root-response-id',
+                id: 'unrelated-root-domain-id',
+                metadata: {
+                    generation_id: 'raw-metadata-id',
+                    id: 'unrelated-metadata-domain-id',
+                },
+                domain: {
+                    request_id: 'unrelated-nested-domain-id',
+                    responseId: 'unrelated-nested-response-id',
+                },
+            },
+            settings: {
+                requestId: 'raw-settings-id',
+                model: 'example-model',
+                domain: { request_id: 'unrelated-settings-domain-id' },
+            },
+            bodyKeys: ['request_id', 'responseId', 'id', 'metadata', 'domain'],
+            correlationId: 'raw-request-record-id',
+            hadCorrelationId: false,
+        },
+        stats: { totalTokens: 42 },
+        usage: {
+            status: 'provider-reported',
+            responseId: 'raw-usage-id',
+            outputTokens: 999,
+            cost: { amount: 123 },
+        },
+    };
+    const before = structuredClone(original);
+    const migrated = migrateSnapshot(original);
+
+    assert.deepEqual(original, before);
+    assert.equal(migrated.schemaVersion, 7);
+    assert.equal(migrated.capture.correlationId, null);
+    assert.equal(migrated.capture.hadCorrelationId, true);
+    assert.equal(migrated.request.correlationId, null);
+    assert.equal(migrated.request.hadCorrelationId, true);
+    assert.equal(Object.hasOwn(migrated.request.body, 'request_id'), false);
+    assert.equal(Object.hasOwn(migrated.request.body, 'responseId'), false);
+    assert.equal(Object.hasOwn(migrated.request.body.metadata, 'generation_id'), false);
+    assert.equal(Object.hasOwn(migrated.request.settings, 'requestId'), false);
+    assert.equal(migrated.request.body.id, 'unrelated-root-domain-id');
+    assert.equal(migrated.request.body.metadata.id, 'unrelated-metadata-domain-id');
+    assert.equal(migrated.request.body.domain.request_id, 'unrelated-nested-domain-id');
+    assert.equal(migrated.request.body.domain.responseId, 'unrelated-nested-response-id');
+    assert.equal(
+        migrated.request.settings.domain.request_id,
+        'unrelated-settings-domain-id',
+    );
+    assert.deepEqual(migrated.request.bodyKeys, ['id', 'metadata', 'domain']);
+    assert.deepEqual(migrated.usage, {
+        status: 'local-estimate',
+        inputTokens: 42,
+        outputTokens: null,
+        cachedInputTokens: null,
+        totalTokens: null,
+        sourceEvent: 'legacy-snapshot-token-count',
+        correlatedAt: 500,
+        cost: {
+            status: 'unavailable',
+            amount: null,
+            currency: null,
+            priceSource: null,
+            priceAsOf: null,
+        },
+    });
+    assert.equal(JSON.stringify(migrated).includes('raw-usage-id'), false);
+    assert.equal(JSON.stringify(migrated).includes('999'), false);
+    assert.equal(JSON.stringify(migrated).includes('123'), false);
+    assert.strictEqual(migrateSnapshot(migrated), migrated);
+});
+
+test('canonical v7 validation rejects malformed usage and raw correlation ids', () => {
+    const valid = migrateSnapshot({
+        ...v6SnapshotWithLocation(),
+        stats: { totalTokens: 4 },
+    });
+    const malformedUsage = {
+        ...valid,
+        usage: {
+            ...valid.usage,
+            outputTokens: 2,
+        },
+    };
+    assert.throws(
+        () => migrateSnapshot(malformedUsage),
+        (error) => (
+            error instanceof SnapshotMigrationError
+            && error.code === 'invalid-usage'
+        ),
+    );
+    assert.throws(
+        () => migrateSnapshot({
+            ...valid,
+            request: {
+                body: { request_id: 'raw-id' },
+                settings: {},
+                correlationId: null,
+            },
+        }),
+        (error) => (
+            error instanceof SnapshotMigrationError
+            && error.code === 'raw-correlation-id'
+        ),
+    );
 });
 
 test('v6 provenance rejects malformed, oversized, missing, and contradictory locations', () => {

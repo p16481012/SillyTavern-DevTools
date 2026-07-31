@@ -1,3 +1,10 @@
+import {
+    createLocalEstimatedUsage,
+    createUnavailableUsage,
+    MAX_USAGE_TOKENS,
+    normalizeUsageRecord,
+} from './provider-usage.js';
+
 export const SNAPSHOT_PRIVACY_SCHEMA_VERSION = 1;
 export const SNAPSHOT_PRIVACY_MODES = Object.freeze([
     'full',
@@ -19,6 +26,7 @@ const MODE_RANK = Object.freeze({ full: 0, redacted: 1, metadata: 2 });
 const REDACTED_VALUE = /^⟦STDT:redacted chars=\d+ bytes=\d+ sha256=[0-9a-f]{64}⟧$/u;
 const PRIVATE_REFERENCE = /^(?:snapshot|chat|source)-[0-9a-f]{24}$/u;
 const SAFE_TOKEN = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const MAX_CORRELATED_AT = 8_640_000_000_000_000;
 const REDACTED_TOP_LEVEL_KEYS = new Set([
     'schemaVersion',
     'id',
@@ -40,6 +48,7 @@ const REDACTED_TOP_LEVEL_KEYS = new Set([
     'request',
     'sources',
     'lorebookEntries',
+    'usage',
     'stats',
     'privacy',
     'privacySummary',
@@ -58,6 +67,7 @@ const METADATA_TOP_LEVEL_KEYS = new Set([
     'promptType',
     'generationType',
     'capture',
+    'usage',
     'stats',
     'privacy',
     'privacySummary',
@@ -395,7 +405,7 @@ function captureLifecycle(capture = {}) {
             ? capture.migratedFrom
             : null,
         correlationId: null,
-        hadCorrelationId: Boolean(capture.correlationId),
+        hadCorrelationId: Boolean(capture.hadCorrelationId ?? capture.correlationId),
         correlationMethod: capture.correlationMethod ?? null,
         requestStatus: capture.requestStatus ?? null,
         generationStatus: capture.generationStatus ?? null,
@@ -598,6 +608,51 @@ function canonicalPrivacySummary(summary) {
         && /^[0-9a-f]{64}$/u.test(String(summary.promptDigest ?? ''));
 }
 
+function canonicalUsage(usage) {
+    try {
+        const normalized = normalizeUsageRecord(usage);
+        return JSON.stringify(normalized) === JSON.stringify(usage);
+    } catch {
+        return false;
+    }
+}
+
+function privacySafeUsage(snapshot) {
+    if (snapshot?.usage != null) {
+        try {
+            return normalizeUsageRecord(snapshot.usage);
+        } catch {
+            reject('invalid-usage', 'Snapshot usage is not a canonical bounded record.');
+        }
+    }
+    if ((Number(snapshot?.schemaVersion) || 1) >= 7) {
+        reject('invalid-usage', 'Schema v7 snapshots require a usage record.');
+    }
+    const inputTokens = snapshot?.stats?.totalTokens;
+    if (
+        Number.isSafeInteger(inputTokens)
+        && inputTokens >= 0
+        && inputTokens <= MAX_USAGE_TOKENS
+    ) {
+        return createLocalEstimatedUsage({
+            inputTokens,
+            outputTokens: null,
+            cachedInputTokens: null,
+            totalTokens: null,
+        }, {
+            sourceEvent: 'legacy-snapshot-token-count',
+            correlatedAt: Number.isSafeInteger(snapshot?.timestamp)
+                && snapshot.timestamp >= 0
+                && snapshot.timestamp <= MAX_CORRELATED_AT
+                ? snapshot.timestamp
+                : null,
+        });
+    }
+    return createUnavailableUsage({
+        sourceEvent: 'legacy-snapshot-unavailable',
+    });
+}
+
 function canonicalRedactedSource(source) {
     return hasOnlyKeys(source, SOURCE_KEYS)
         && /^source-[0-9a-f]{24}$/u.test(String(source.id ?? ''))
@@ -646,6 +701,7 @@ function isCanonicalPrivateSnapshot(snapshot, mode) {
             && canonicalCaptureLifecycle(snapshot.capture)
             && canonicalProviderTrace(snapshot.providerTrace)
             && canonicalPrivacySummary(snapshot.privacySummary)
+            && canonicalUsage(snapshot.usage)
             && hasOnlyKeys(snapshot.request, new Set([
                 'body',
                 'settings',
@@ -679,6 +735,7 @@ function isCanonicalPrivateSnapshot(snapshot, mode) {
             && canonicalCaptureLifecycle(snapshot.capture)
             && canonicalProviderTrace(snapshot.providerTrace)
             && canonicalPrivacySummary(snapshot.privacySummary)
+            && canonicalUsage(snapshot.usage)
             && everyString(snapshot.stats, (value) => REDACTED_VALUE.test(value));
     }
     return false;
@@ -790,6 +847,7 @@ export async function transformSnapshotPrivacy(
             promptType: snapshot.promptType ?? 'unknown',
             generationType: snapshot.generationType ?? 'unknown',
             capture: captureLifecycle(snapshot.capture),
+            usage: cloneJsonValue(privacySafeUsage(snapshot)),
             stats: await redactTree(snapshot.stats ?? {}, options, new Map()),
             privacy: privacyMetadata(mode, snapshot.schemaVersion),
             privacySummary: summary,
@@ -879,7 +937,7 @@ export async function transformSnapshotPrivacy(
                     ? request.omittedMediaPaths.length
                     : 0,
                 correlationId: null,
-                hadCorrelationId: Boolean(request.correlationId),
+                hadCorrelationId: Boolean(request.hadCorrelationId ?? request.correlationId),
             },
             sources: redactedSources,
             lorebookEntries: await redactTree(
@@ -887,6 +945,7 @@ export async function transformSnapshotPrivacy(
                 options,
                 cache,
             ),
+            usage: cloneJsonValue(privacySafeUsage(snapshot)),
             stats: await redactTree(snapshot.stats ?? {}, options, cache),
             privacy: privacyMetadata(mode, snapshot.schemaVersion),
             privacySummary: summary,

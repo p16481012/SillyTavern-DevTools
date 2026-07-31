@@ -13,10 +13,11 @@ import {
     createProviderTrace,
     jsonPointer,
 } from './provenance.js';
+import { createLocalEstimatedUsage } from './provider-usage.js';
 import { createCaptureBoundary, createRequestRecord } from './request.js';
 import { compileUserRegex, UserRegexError } from './regex-safety.js';
 
-export const SNAPSHOT_SCHEMA_VERSION = 6;
+export const SNAPSHOT_SCHEMA_VERSION = 7;
 export const SEARCH_QUERY_MAX_LENGTH = 512;
 const TEMPLATE_REGEX_MAX_LENGTH = 12_000;
 
@@ -1522,6 +1523,15 @@ export async function finalizeSnapshot({
         request: normalizedRequest,
         sources,
         lorebookEntries: activatedLore,
+        usage: createLocalEstimatedUsage({
+            inputTokens: totalTokens,
+            outputTokens: null,
+            cachedInputTokens: null,
+            totalTokens: null,
+        }, {
+            sourceEvent: 'local-prompt-tokenizer',
+            correlatedAt: timestamp,
+        }),
         stats: {
             totalTokens,
             maxContext,

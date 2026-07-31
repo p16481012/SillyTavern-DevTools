@@ -61,6 +61,76 @@ test('per-chat lock preserves simultaneous snapshots instead of losing an update
     );
 });
 
+test('atomic snapshot updates serialize metadata changes and reconcile bytes', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    await store.addSnapshot({
+        ...snapshot('tracked', 'chat', 1),
+        finalText: '',
+    });
+    const before = await store.rebuildStorageSummary();
+
+    await Promise.all([
+        store.updateSnapshot('chat', 'tracked', (current) => ({
+            ...current,
+            finalText: `${current.finalText}A`,
+        })),
+        store.updateSnapshot('chat', 'tracked', (current) => ({
+            ...current,
+            finalText: `${current.finalText}B`,
+        })),
+    ]);
+
+    const stored = await store.getSnapshot('chat', 'tracked');
+    assert.equal(stored.finalText.length, 2);
+    assert.match(stored.finalText, /A/u);
+    assert.match(stored.finalText, /B/u);
+    assert.equal(stored.storageChatId, 'chat');
+    const after = await store.getStorageSummary();
+    assert.equal(after.snapshotCount, 1);
+    assert.equal(after.approximateBytes > before.approximateBytes, true);
+});
+
+test('atomic snapshot updates fail closed for missing, corrupt, and changed identities', async () => {
+    const store = new SnapshotStore({ namespace: 'test' });
+    assert.deepEqual(
+        await store.updateSnapshot('chat', 'missing', (value) => value),
+        {
+            updated: false,
+            reason: 'not-found',
+            snapshot: null,
+        },
+    );
+
+    await store.addSnapshot(snapshot('stable', 'chat', 1));
+    await assert.rejects(
+        store.updateSnapshot('chat', 'stable', (current) => ({
+            ...current,
+            id: 'changed',
+        })),
+        /storage identity/u,
+    );
+    assert.equal((await store.getSnapshot('chat', 'stable')).id, 'stable');
+
+    const corruptStore = new SnapshotStore({ namespace: 'test' });
+    seedIndexedSnapshot(corruptStore, snapshot('corrupt', 'chat', 1));
+    corruptStore.memory.set(
+        corruptStore.snapshotKey('chat', 'corrupt'),
+        { invalid: true },
+    );
+    assert.deepEqual(
+        await corruptStore.updateSnapshot('chat', 'corrupt', (value) => value),
+        {
+            updated: false,
+            reason: 'corrupt',
+            snapshot: null,
+        },
+    );
+    assert.deepEqual(
+        corruptStore.memory.get(corruptStore.snapshotKey('chat', 'corrupt')),
+        { invalid: true },
+    );
+});
+
 test('chat index serializes simultaneous chats and removes empty timelines', async () => {
     const store = new SnapshotStore({ namespace: 'test' });
     yieldStorageOperations(store);

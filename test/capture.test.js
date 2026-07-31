@@ -25,6 +25,7 @@ function createContext(eventSource) {
             GENERATION_STARTED: 'generation_started',
             GENERATION_STOPPED: 'generation_stopped',
             GENERATION_ENDED: 'generation_ended',
+            MESSAGE_RECEIVED: 'message_received',
             WORLD_INFO_ACTIVATED: 'world_info_activated',
             CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready',
             GENERATE_AFTER_COMBINE_PROMPTS: 'generate_after_combine_prompts',
@@ -436,14 +437,132 @@ test('explicit request identifiers pair out-of-order settings with the matching 
     });
     await waitFor(() => saved.length === 2);
 
-    const byId = Object.fromEntries(saved.map((snapshot) => [
-        snapshot.capture.correlationId,
+    const byPayload = Object.fromEntries(saved.map((snapshot) => [
+        snapshot.payload[0].content,
         snapshot,
     ]));
-    assert.equal(byId['request-a'].payload[0].content, 'Request A');
-    assert.equal(byId['request-b'].payload[0].content, 'Request B');
-    assert.equal(byId['request-a'].capture.correlationMethod, 'explicit-id');
-    assert.equal(byId['request-b'].capture.correlationMethod, 'explicit-id');
+    assert.equal(byPayload['Request A'].capture.correlationMethod, 'explicit-id');
+    assert.equal(byPayload['Request B'].capture.correlationMethod, 'explicit-id');
+    assert.equal(byPayload['Request A'].capture.correlationId, null);
+    assert.equal(byPayload['Request B'].capture.correlationId, null);
+    assert.equal(byPayload['Request A'].capture.hadCorrelationId, true);
+    assert.equal(byPayload['Request B'].capture.hadCorrelationId, true);
+    assert.equal(JSON.stringify(saved).includes('request-a'), false);
+    assert.equal(JSON.stringify(saved).includes('request-b'), false);
+});
+
+test('overlapping identified generations keep lifecycle, lore, and type isolated', async () => {
+    const eventSource = new FakeEventSource();
+    const stored = new Map();
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            async addSnapshot(snapshot) {
+                stored.set(snapshot.id, structuredClone(snapshot));
+            },
+        },
+        version: 'test',
+        settingsWaitMs: 100,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', {
+        type: 'normal',
+        request_id: 'generation-a',
+    });
+    eventSource.emitSynchronously('generation_started', {
+        type: 'regenerate',
+        request_id: 'generation-b',
+    });
+    eventSource.emitSynchronously(
+        'world_info_activated',
+        [{ uid: 1, content: 'Lore A' }],
+        { request_id: 'generation-a' },
+    );
+    eventSource.emitSynchronously(
+        'world_info_activated',
+        [{ uid: 2, content: 'Lore B' }],
+        { request_id: 'generation-b' },
+    );
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        request_id: 'generation-b',
+        chat: [{ role: 'user', content: 'Prompt B' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        request_id: 'generation-a',
+        chat: [{ role: 'user', content: 'Prompt A' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        request_id: 'generation-a',
+        messages: [{ role: 'user', content: 'Request A' }],
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        request_id: 'generation-b',
+        messages: [{ role: 'user', content: 'Request B' }],
+    });
+    await waitFor(() => stored.size === 2);
+
+    const byPayload = Object.fromEntries([...stored.values()].map((snapshot) => [
+        snapshot.payload[0].content,
+        snapshot,
+    ]));
+    assert.equal(byPayload['Request A'].generationType, 'normal');
+    assert.equal(byPayload['Request B'].generationType, 'regenerate');
+    assert.equal(byPayload['Request A'].lorebookEntries[0].uid, 1);
+    assert.equal(byPayload['Request B'].lorebookEntries[0].uid, 2);
+
+    eventSource.emitSynchronously('generation_ended', { request_id: 'generation-b' });
+    eventSource.emitSynchronously('generation_stopped', { request_id: 'generation-a' });
+    await waitFor(() => (
+        [...stored.values()].some((snapshot) => (
+            snapshot.payload[0].content === 'Request A'
+            && snapshot.capture.generationStatus === 'stopped'
+        ))
+        && [...stored.values()].some((snapshot) => (
+            snapshot.payload[0].content === 'Request B'
+            && snapshot.capture.generationStatus === 'ended'
+        ))
+    ));
+
+    assert.equal(JSON.stringify([...stored.values()]).includes('generation-a'), false);
+    assert.equal(JSON.stringify([...stored.values()]).includes('generation-b'), false);
+});
+
+test('colliding explicit ids never attach a request body to either prompt', async () => {
+    const eventSource = new FakeEventSource();
+    const saved = [];
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
+        version: 'test',
+        settingsWaitMs: 5,
+    });
+    controller.start();
+
+    for (const content of ['Prompt one', 'Prompt two']) {
+        eventSource.emitSynchronously('chat_completion_prompt_ready', {
+            request_id: 'duplicate-id',
+            chat: [{ role: 'user', content }],
+            dryRun: false,
+        });
+    }
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        request_id: 'duplicate-id',
+        messages: [{ role: 'user', content: 'Must not attach' }],
+    });
+    await waitFor(() => saved.length === 2);
+
+    assert.deepEqual(
+        saved.map((snapshot) => snapshot.payload[0].content).sort(),
+        ['Prompt one', 'Prompt two'],
+    );
+    assert.equal(saved.every((snapshot) => snapshot.capture.fallback), true);
+    assert.equal(JSON.stringify(saved).includes('duplicate-id'), false);
+    assert.equal(JSON.stringify(saved).includes('Must not attach'), false);
 });
 
 test('storage failures expose the same snapshot for an idempotent retry', async () => {
@@ -521,6 +640,262 @@ test('generation stop updates an already stored snapshot without changing its id
 
     assert.equal(stored.size, 1);
     assert.equal(stored.get(snapshotId).capture.statusEvent, 'GENERATION_STOPPED');
+});
+
+test('generation lifecycle prefers the atomic store updater when available', async () => {
+    const eventSource = new FakeEventSource();
+    const stored = new Map();
+    let addCalls = 0;
+    let updateCalls = 0;
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            async addSnapshot(snapshot) {
+                addCalls += 1;
+                stored.set(snapshot.id, structuredClone(snapshot));
+            },
+            async updateSnapshot(_chatId, snapshotId, updater) {
+                updateCalls += 1;
+                const current = stored.get(snapshotId);
+                if (!current) {
+                    return { updated: false, reason: 'not-found', snapshot: null };
+                }
+                const snapshot = await updater(structuredClone(current));
+                stored.set(snapshotId, structuredClone(snapshot));
+                return { updated: true, reason: null, snapshot };
+            },
+        },
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Atomic lifecycle' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Atomic lifecycle' }],
+    });
+    await waitFor(() => stored.size === 1);
+    eventSource.emitSynchronously('generation_ended');
+    await waitFor(() => [...stored.values()][0]?.capture?.generationStatus === 'ended');
+
+    assert.equal(addCalls, 1);
+    assert.equal(updateCalls, 1);
+    assert.equal(stored.size, 1);
+});
+
+test('MESSAGE_RECEIVED merges a single active local output estimate atomically', async () => {
+    const eventSource = new FakeEventSource();
+    const stored = new Map();
+    const context = createContext(eventSource);
+    context.chat = [{ extra: { token_count: 7 } }];
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            async addSnapshot(snapshot) {
+                stored.set(snapshot.id, structuredClone(snapshot));
+            },
+            async updateSnapshot(_chatId, snapshotId, updater) {
+                const current = stored.get(snapshotId);
+                if (!current) return { updated: false, reason: 'not-found', snapshot: null };
+                const next = await updater(structuredClone(current));
+                if (next == null) {
+                    return { updated: false, reason: 'unchanged', snapshot: current };
+                }
+                stored.set(snapshotId, structuredClone(next));
+                return { updated: true, reason: null, snapshot: next };
+            },
+        },
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'Count local output' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'Count local output' }],
+    });
+    await waitFor(() => stored.size === 1);
+    eventSource.emitSynchronously('message_received', 0, 'normal');
+    await waitFor(() => [...stored.values()][0]?.usage?.outputTokens === 7);
+
+    const snapshot = [...stored.values()][0];
+    assert.equal(snapshot.usage.status, 'local-estimate');
+    assert.equal(snapshot.usage.inputTokens, snapshot.stats.totalTokens);
+    assert.equal(snapshot.usage.totalTokens, snapshot.usage.inputTokens + 7);
+    assert.equal(snapshot.usage.cachedInputTokens, null);
+    assert.equal(snapshot.usage.sourceEvent, 'message-received');
+    assert.equal(snapshot.usage.cost.status, 'unavailable');
+});
+
+test('MESSAGE_RECEIVED stays unlinked when active generation correlation is ambiguous', () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    context.chat = [{ extra: { token_count: 9 } }];
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async () => {} },
+        version: 'test',
+    });
+    let usageResult = null;
+    controller.addEventListener('capture-usage', (event) => {
+        usageResult = event.detail;
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('message_received', 0, 'normal');
+
+    assert.equal(usageResult.status, 'unlinked');
+    assert.equal(usageResult.reason, 'ambiguous-generation-type');
+    assert.equal(usageResult.record.usage.status, 'unlinked');
+});
+
+test('MESSAGE_RECEIVED generation type selects one of multiple active sessions exactly', () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    context.chat = [{ extra: { token_count: 6 } }];
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async () => {} },
+        version: 'test',
+    });
+    let usageResult = null;
+    controller.addEventListener('capture-usage', (event) => {
+        usageResult = event.detail;
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('generation_started', 'regenerate');
+    eventSource.emitSynchronously('message_received', 0, 'regenerate');
+
+    assert.equal(usageResult.status, 'linked');
+    assert.equal(usageResult.record.correlationMethod, 'single-active-session');
+});
+
+test('MESSAGE_RECEIVED after generation end reports unavailable instead of guessing', () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    context.chat = [{ extra: { token_count: 5 } }];
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async () => {} },
+        version: 'test',
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', 'normal');
+    eventSource.emitSynchronously('generation_ended');
+    const result = controller.recordMessageReceivedUsage(0, 'normal');
+
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.correlationStatus, 'unlinked');
+    assert.equal(result.reason, 'generation-type-session-not-found');
+});
+
+test('provider usage requires exact public-id correlation and never persists that id', async () => {
+    const eventSource = new FakeEventSource();
+    const stored = new Map();
+    const context = createContext(eventSource);
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: {
+            async addSnapshot(snapshot) {
+                stored.set(snapshot.id, structuredClone(snapshot));
+            },
+            async updateSnapshot(_chatId, snapshotId, updater) {
+                const current = stored.get(snapshotId);
+                if (!current) return { updated: false, reason: 'not-found', snapshot: null };
+                const next = await updater(structuredClone(current));
+                if (next == null) {
+                    return { updated: false, reason: 'unchanged', snapshot: current };
+                }
+                stored.set(snapshotId, structuredClone(next));
+                return { updated: true, reason: null, snapshot: next };
+            },
+        },
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    controller.start();
+
+    eventSource.emitSynchronously('generation_started', {
+        type: 'normal',
+        request_id: 'provider-request-id',
+    });
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        request_id: 'provider-request-id',
+        chat: [{ role: 'user', content: 'Provider usage' }],
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        request_id: 'provider-request-id',
+        messages: [{ role: 'user', content: 'Provider usage' }],
+    });
+    await waitFor(() => stored.size === 1);
+    eventSource.emitSynchronously('generation_ended', {
+        request_id: 'provider-request-id',
+    });
+    const linked = controller.recordResponseUsage({
+        response_id: 'provider-request-id',
+        usage: {
+            prompt_tokens: 11,
+            completion_tokens: 4,
+            total_tokens: 15,
+        },
+    });
+    assert.equal(linked.status, 'linked');
+    await waitFor(() => [...stored.values()][0]?.usage?.status === 'provider-reported');
+
+    const snapshot = [...stored.values()][0];
+    assert.equal(snapshot.usage.inputTokens, 11);
+    assert.equal(snapshot.usage.outputTokens, 4);
+    assert.equal(snapshot.usage.totalTokens, 15);
+    assert.equal(snapshot.usage.sourceEvent, 'provider-response-usage');
+    assert.equal(JSON.stringify(snapshot).includes('provider-request-id'), false);
+
+    const unlinked = controller.recordResponseUsage({
+        usage: { prompt_tokens: 99, completion_tokens: 1, total_tokens: 100 },
+    });
+    assert.equal(unlinked.status, 'unlinked');
+    assert.equal(unlinked.record.usage.status, 'unlinked');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal([...stored.values()][0].usage.totalTokens, 15);
+});
+
+test('malformed provider and local usage fail closed with bounded notifications', () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    context.chat = [{ extra: { token_count: -1 } }];
+    const controller = new CaptureController({
+        getContext: () => context,
+        store: { addSnapshot: async () => {} },
+        version: 'test',
+    });
+    const events = [];
+    controller.addEventListener('capture-usage', (event) => events.push(event.detail));
+    controller.start();
+
+    eventSource.emitSynchronously('message_received', 0, 'normal');
+    const provider = controller.recordResponseUsage({
+        request_id: 'never-exposed',
+        usage: { prompt_tokens: -1 },
+    });
+
+    assert.equal(events[0].status, 'unavailable');
+    assert.equal(provider.status, 'rejected');
+    assert.equal(provider.reason, 'invalid-provider-usage');
+    assert.equal(JSON.stringify(events).includes('never-exposed'), false);
 });
 
 test('generation ended and prompt-only timeout remain separate capture states', async () => {

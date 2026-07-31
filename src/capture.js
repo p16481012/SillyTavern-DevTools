@@ -1,5 +1,11 @@
 import { deepClone, finalizeSnapshot } from './model.js';
+import { GenerationLedger } from './generation-ledger.js';
 import { createProfileContext } from './profile-context.js';
+import {
+    createLocalEstimatedUsage,
+    normalizeProviderUsage,
+    normalizeUsageRecord,
+} from './provider-usage.js';
 import {
     createCaptureBoundary,
     createRequestRecord,
@@ -202,8 +208,12 @@ function snapshotContext(context) {
     };
 }
 
-function pendingKey(promptType) {
-    return promptType === 'chat-completion' ? 'chat-completion' : 'text-completion';
+function correlationIdFromArgs(args) {
+    for (const value of args) {
+        const correlationId = extractRequestCorrelationId(value);
+        if (correlationId) return correlationId;
+    }
+    return null;
 }
 
 function sanitizeCaptureValue(value, pathPrefix) {
@@ -229,6 +239,34 @@ function emptySanitizedLore() {
     };
 }
 
+function unlinkedUsage(usage) {
+    return normalizeUsageRecord({
+        ...usage,
+        status: 'unlinked',
+    });
+}
+
+function mergeSnapshotUsage(existing, incoming) {
+    if (!incoming || incoming.status === 'unavailable' || incoming.status === 'unlinked') {
+        return existing ?? incoming ?? null;
+    }
+    if (incoming.status === 'provider-reported') return incoming;
+    if (existing?.status === 'provider-reported') return existing;
+    const inputTokens = incoming.inputTokens ?? existing?.inputTokens ?? null;
+    const outputTokens = incoming.outputTokens ?? existing?.outputTokens ?? null;
+    return createLocalEstimatedUsage({
+        inputTokens,
+        outputTokens,
+        cachedInputTokens: null,
+        totalTokens: inputTokens !== null && outputTokens !== null
+            ? inputTokens + outputTokens
+            : null,
+    }, {
+        sourceEvent: incoming.sourceEvent,
+        correlatedAt: incoming.correlatedAt,
+    });
+}
+
 function attachStorageChatId(snapshot, chatId) {
     if (!snapshot || typeof snapshot !== 'object') return snapshot;
     Object.defineProperty(snapshot, 'storageChatId', {
@@ -247,6 +285,7 @@ export class CaptureController extends EventTarget {
         version,
         settingsWaitMs = DEFAULT_SETTINGS_WAIT_MS,
         getCaptureMode = () => 'full',
+        generationLedger = null,
     }) {
         super();
         this.getContext = getContext;
@@ -255,16 +294,9 @@ export class CaptureController extends EventTarget {
         this.settingsWaitMs = settingsWaitMs;
         this.getCaptureMode = getCaptureMode;
         this.started = false;
-        this.pendingLore = emptySanitizedLore();
-        this.generationType = 'unknown';
-        this.pending = {
-            'chat-completion': [],
-            'text-completion': [],
-        };
-        this.generationSequence = 0;
-        this.activeGeneration = null;
-        this.attachedRequestBodies = new WeakSet();
-        this.attachedCorrelationIds = new Set();
+        this.generationLedger = generationLedger ?? new GenerationLedger({
+            sessionTimeoutMs: Math.max(120_000, settingsWaitMs * 4),
+        });
     }
 
     start() {
@@ -276,39 +308,53 @@ export class CaptureController extends EventTarget {
         const events = getEventTypes(context);
 
         if (events.GENERATION_STARTED) {
-            context.eventSource.on(events.GENERATION_STARTED, (data, _options, dryRun) => {
+            context.eventSource.on(events.GENERATION_STARTED, (...args) => {
+                const [data, _options, dryRun] = args;
                 if (dryRun) return;
-                this.generationType = typeof data === 'string'
-                    ? data
-                    : data?.type ?? data?.generationType ?? 'unknown';
-                this.pendingLore = emptySanitizedLore();
-                this.activeGeneration = {
-                    id: ++this.generationSequence,
-                    status: 'started',
-                    statusEvent: 'GENERATION_STARTED',
-                    statusUpdatedAt: Date.now(),
-                    snapshots: new Map(),
-                };
+                this.generationLedger.beginGeneration({
+                    publicId: correlationIdFromArgs(args),
+                    generationType: typeof data === 'string'
+                        ? data
+                        : data?.type ?? data?.generationType ?? 'unknown',
+                });
             });
         }
 
         if (events.GENERATION_STOPPED) {
-            context.eventSource.on(events.GENERATION_STOPPED, () => {
-                this.markGenerationStatus('stopped', 'GENERATION_STOPPED');
+            context.eventSource.on(events.GENERATION_STOPPED, (...args) => {
+                this.markGenerationStatus(
+                    'stopped',
+                    'GENERATION_STOPPED',
+                    correlationIdFromArgs(args),
+                );
             });
         }
 
         if (events.GENERATION_ENDED) {
-            context.eventSource.on(events.GENERATION_ENDED, () => {
-                this.markGenerationStatus('ended', 'GENERATION_ENDED');
+            context.eventSource.on(events.GENERATION_ENDED, (...args) => {
+                this.markGenerationStatus(
+                    'ended',
+                    'GENERATION_ENDED',
+                    correlationIdFromArgs(args),
+                );
+            });
+        }
+
+        if (events.MESSAGE_RECEIVED) {
+            context.eventSource.on(events.MESSAGE_RECEIVED, (messageId, type) => {
+                this.recordMessageReceivedUsage(messageId, type);
             });
         }
 
         if (events.WORLD_INFO_ACTIVATED) {
-            context.eventSource.on(events.WORLD_INFO_ACTIVATED, (entries) => {
-                this.pendingLore = sanitizeCaptureValue(
-                    Array.isArray(entries) ? entries : [],
-                    'activatedLore',
+            context.eventSource.on(events.WORLD_INFO_ACTIVATED, (...args) => {
+                const entries = args.find((value) => Array.isArray(value)) ?? [];
+                this.generationLedger.recordLore(
+                    sanitizeCaptureValue(
+                        entries,
+                        'activatedLore',
+                    ),
+                    { publicId: correlationIdFromArgs(args) },
                 );
             });
         }
@@ -360,14 +406,12 @@ export class CaptureController extends EventTarget {
         if (events.GENERATE_AFTER_DATA) {
             context.eventSource.on(events.GENERATE_AFTER_DATA, (data, dryRun) => {
                 if (dryRun) return;
-                const firstPending = this.pending['text-completion']
-                    .find((item) => !item.settled && !item.reserved);
-                if (!firstPending || firstPending.contextState.mainApi === 'openai') return;
                 this.attachRequestBody(
                     'text-completion',
                     data,
                     'GENERATE_AFTER_DATA',
                     'generation-data-ready',
+                    (pending) => pending.contextState.mainApi !== 'openai',
                 );
             });
         }
@@ -376,37 +420,44 @@ export class CaptureController extends EventTarget {
     }
 
     enqueueCapture(promptType, mutablePayload, { correlationId = null } = {}) {
-        const key = pendingKey(promptType);
         const contextState = sanitizeCaptureValue(
             snapshotContext(this.getContext()),
             'contextState',
         );
-        const activatedLore = this.pendingLore;
         const pending = {
             contextState: contextState.value,
             promptType,
             promptReadyPayload: deepClone(mutablePayload),
             promptReadySanitized: null,
-            activatedLore: activatedLore.value,
+            activatedLore: [],
             supplementalRedactedPaths: [
                 ...contextState.redactedPaths,
-                ...activatedLore.redactedPaths,
             ],
             supplementalOmittedMediaPaths: [
                 ...contextState.omittedMediaPaths,
-                ...activatedLore.omittedMediaPaths,
             ],
             fallbackRedactedPaths: [],
             fallbackOmittedMediaPaths: [],
-            generationType: this.generationType,
-            generation: this.activeGeneration,
+            generationType: 'unknown',
+            generationHandle: null,
+            ledgerPromptHandle: null,
             correlationId,
             settled: false,
             reserved: false,
             timer: null,
         };
-        this.pendingLore = emptySanitizedLore();
-        this.pending[key].push(pending);
+        const opened = this.generationLedger.openPrompt({
+            promptType,
+            publicId: correlationId,
+            value: pending,
+        });
+        const activatedLore = opened.activatedLore ?? emptySanitizedLore();
+        pending.activatedLore = activatedLore.value;
+        pending.supplementalRedactedPaths.push(...activatedLore.redactedPaths);
+        pending.supplementalOmittedMediaPaths.push(...activatedLore.omittedMediaPaths);
+        pending.generationType = opened.session?.generationType ?? 'unknown';
+        pending.generationHandle = opened.sessionHandle;
+        pending.ledgerPromptHandle = opened.promptHandle;
         pending.timer = setTimeout(() => {
             const promptReady = this.sanitizePendingPrompt(pending);
             this.finishPending(pending, {
@@ -434,41 +485,27 @@ export class CaptureController extends EventTarget {
         return pending.promptReadySanitized;
     }
 
-    attachRequestBody(promptType, mutableRequestBody, eventName, stage) {
-        const key = pendingKey(promptType);
+    attachRequestBody(
+        promptType,
+        mutableRequestBody,
+        eventName,
+        stage,
+        acceptPending = null,
+    ) {
         const requestCorrelationId = extractRequestCorrelationId(mutableRequestBody);
-        const available = this.pending[key].filter((item) => !item.settled && !item.reserved);
-        const exact = requestCorrelationId
-            ? available.find((item) => item.correlationId === requestCorrelationId)
-            : null;
-        const hasConflictingExplicitId = Boolean(
-            requestCorrelationId
-            && available.some((item) => item.correlationId)
-            && !exact,
-        );
-        const pending = exact ?? (hasConflictingExplicitId ? null : available[0]);
+        const claim = this.generationLedger.claimRequest({
+            promptType,
+            publicId: requestCorrelationId,
+            requestIdentity: mutableRequestBody,
+            acceptValue: acceptPending,
+        });
+        if (claim.status !== 'matched') return;
+        const pending = claim.value;
         if (!pending || pending.settled) return;
-        const canTrackRequestBody = mutableRequestBody !== null
-            && (typeof mutableRequestBody === 'object' || typeof mutableRequestBody === 'function');
-        if (canTrackRequestBody && this.attachedRequestBodies.has(mutableRequestBody)) {
-            return;
-        }
-        if (requestCorrelationId && this.attachedCorrelationIds.has(requestCorrelationId)) {
-            return;
-        }
         pending.reserved = true;
-        if (canTrackRequestBody) {
-            this.attachedRequestBodies.add(mutableRequestBody);
-        }
-        if (requestCorrelationId) {
-            this.attachedCorrelationIds.add(requestCorrelationId);
-            if (this.attachedCorrelationIds.size > 512) {
-                this.attachedCorrelationIds.delete(this.attachedCorrelationIds.values().next().value);
-            }
-        }
 
         setTimeout(() => {
-            if (pending.settled || !this.pending[key].includes(pending)) return;
+            if (pending.settled) return;
             const request = createRequestRecord(mutableRequestBody);
             const requestPayload = extractPromptPayload(
                 request.body,
@@ -482,7 +519,7 @@ export class CaptureController extends EventTarget {
                 eventName,
                 stage,
                 fallback: false,
-                correlationMethod: exact ? 'explicit-id' : 'fifo',
+                correlationMethod: claim.method,
             });
         }, 0);
     }
@@ -498,8 +535,7 @@ export class CaptureController extends EventTarget {
         if (pending.settled) return;
         pending.settled = true;
         clearTimeout(pending.timer);
-        const key = pendingKey(pending.promptType);
-        this.pending[key] = this.pending[key].filter((item) => item !== pending);
+        this.generationLedger.settlePrompt(pending.ledgerPromptHandle);
 
         const normalizedRequest = request ?? createRequestRecord(null);
         normalizedRequest.redactedPaths = [...new Set([
@@ -517,11 +553,17 @@ export class CaptureController extends EventTarget {
             stage,
             requestBodyAvailable: Boolean(normalizedRequest.body),
             fallback,
-            correlationId: normalizedRequest.correlationId ?? pending.correlationId,
+            correlationId: null,
+            hadCorrelationId: Boolean(
+                normalizedRequest.hadCorrelationId || pending.correlationId,
+            ),
             correlationMethod,
-            generationStatus: pending.generation?.status ?? 'unknown',
-            statusEvent: pending.generation?.statusEvent ?? null,
-            statusUpdatedAt: pending.generation?.statusUpdatedAt ?? null,
+            generationStatus: this.generationLedger
+                .getSessionView(pending.generationHandle)?.status ?? 'unknown',
+            statusEvent: this.generationLedger
+                .getSessionView(pending.generationHandle)?.statusEvent ?? null,
+            statusUpdatedAt: this.generationLedger
+                .getSessionView(pending.generationHandle)?.statusUpdatedAt ?? null,
         });
 
         setTimeout(() => {
@@ -533,7 +575,7 @@ export class CaptureController extends EventTarget {
                 activatedLore: pending.activatedLore,
                 capture,
                 request: normalizedRequest,
-                generation: pending.generation,
+                generationHandle: pending.generationHandle,
             }).catch((error) => {
                 console.error('[ST DevTools] Failed to persist prompt snapshot.', error);
             });
@@ -548,9 +590,10 @@ export class CaptureController extends EventTarget {
         activatedLore,
         capture,
         request,
-        generation = null,
+        generationHandle = null,
     }) {
         const context = this.getContext();
+        const generation = this.generationLedger.getSessionView(generationHandle);
         if (generation) {
             capture.generationStatus = generation.status;
             capture.statusEvent = generation.statusEvent;
@@ -576,51 +619,266 @@ export class CaptureController extends EventTarget {
         await this.storeSnapshot(snapshot, {
             storageChatId: finalizedSnapshot.chatId,
         });
-        return this.registerGenerationSnapshot(generation, snapshot);
+        return this.registerGenerationSnapshot(generationHandle, snapshot);
     }
 
-    async registerGenerationSnapshot(generation, snapshot) {
+    async registerGenerationSnapshot(generationHandle, snapshot) {
+        if (!generationHandle) return snapshot;
+        const generation = this.generationLedger.registerSnapshot(
+            generationHandle,
+            snapshot,
+        );
         if (!generation) return snapshot;
-        generation.snapshots.set(snapshot.id, snapshot);
+        let stored = snapshot;
         if (
-            snapshot.capture?.generationStatus === generation.status
-            && snapshot.capture?.statusEvent === generation.statusEvent
+            snapshot.capture?.generationStatus !== generation.status
+            || snapshot.capture?.statusEvent !== generation.statusEvent
         ) {
-            return snapshot;
+            stored = await this.updateGenerationSnapshot(
+                generationHandle,
+                snapshot,
+                {
+                    ...(snapshot.capture ?? {}),
+                    generationStatus: generation.status,
+                    statusEvent: generation.statusEvent,
+                    statusUpdatedAt: generation.statusUpdatedAt,
+                },
+            );
         }
-        const updated = {
+        return this.syncGenerationUsage(
+            generationHandle,
+            [[stored.id, stored]],
+        );
+    }
+
+    async updateGenerationSnapshot(generationHandle, snapshot, capture) {
+        const storageChatId = snapshot.storageChatId ?? snapshot.chatId;
+        if (typeof this.store.updateSnapshot === 'function') {
+            const result = await this.store.updateSnapshot(
+                storageChatId,
+                snapshot.id,
+                (current) => ({
+                    ...current,
+                    capture: {
+                        ...(current.capture ?? {}),
+                        ...capture,
+                    },
+                }),
+            );
+            if (result.updated || result.reason === 'unchanged') {
+                const stored = attachStorageChatId(result.snapshot, storageChatId);
+                this.generationLedger.replaceSnapshot(generationHandle, stored);
+                if (result.updated) {
+                    this.dispatchEvent(new CustomEvent('snapshot', { detail: stored }));
+                }
+                return stored;
+            }
+            throw new Error(
+                `Stored snapshot lifecycle update failed closed: ${result.reason ?? 'unknown'}`,
+            );
+        }
+        const updated = attachStorageChatId({
             ...snapshot,
             capture: {
                 ...(snapshot.capture ?? {}),
-                generationStatus: generation.status,
-                statusEvent: generation.statusEvent,
-                statusUpdatedAt: generation.statusUpdatedAt,
+                ...capture,
             },
-        };
-        generation.snapshots.set(updated.id, updated);
-        await this.storeSnapshot(updated, {
-            storageChatId: snapshot.storageChatId ?? snapshot.chatId,
-        });
+        }, storageChatId);
+        this.generationLedger.replaceSnapshot(generationHandle, updated);
+        await this.storeSnapshot(updated, { storageChatId });
         return updated;
     }
 
-    markGenerationStatus(status, statusEvent) {
-        const generation = this.activeGeneration;
-        if (!generation) return;
-        if (generation.status === 'stopped' && status === 'ended') {
-            this.activeGeneration = null;
-            return;
+    async updateGenerationUsage(generationHandle, snapshot, usage) {
+        const storageChatId = snapshot.storageChatId ?? snapshot.chatId;
+        if (typeof this.store.updateSnapshot === 'function') {
+            const result = await this.store.updateSnapshot(
+                storageChatId,
+                snapshot.id,
+                (current) => {
+                    const merged = mergeSnapshotUsage(current.usage, usage);
+                    if (JSON.stringify(merged) === JSON.stringify(current.usage ?? null)) {
+                        return null;
+                    }
+                    return { ...current, usage: merged };
+                },
+            );
+            if (result.updated || result.reason === 'unchanged') {
+                const stored = attachStorageChatId(result.snapshot, storageChatId);
+                this.generationLedger.replaceSnapshot(generationHandle, stored);
+                if (result.updated) {
+                    this.dispatchEvent(new CustomEvent('snapshot', { detail: stored }));
+                }
+                return stored;
+            }
+            throw new Error(
+                `Stored snapshot usage update failed closed: ${result.reason ?? 'unknown'}`,
+            );
         }
-        generation.status = status;
-        generation.statusEvent = statusEvent;
-        generation.statusUpdatedAt = Date.now();
-        if (status === 'stopped' || status === 'ended') {
-            this.activeGeneration = null;
+        const merged = mergeSnapshotUsage(snapshot.usage, usage);
+        if (JSON.stringify(merged) === JSON.stringify(snapshot.usage ?? null)) {
+            return snapshot;
         }
-        for (const snapshot of generation.snapshots.values()) {
-            this.registerGenerationSnapshot(generation, snapshot).catch((error) => {
+        const updated = attachStorageChatId({
+            ...snapshot,
+            usage: merged,
+        }, storageChatId);
+        this.generationLedger.replaceSnapshot(generationHandle, updated);
+        await this.storeSnapshot(updated, { storageChatId });
+        return updated;
+    }
+
+    async syncGenerationUsage(
+        generationHandle,
+        snapshotEntries = this.generationLedger.getSnapshotEntries(generationHandle),
+    ) {
+        const records = this.generationLedger.getUsageRecords(generationHandle);
+        if (records.length === 0 || snapshotEntries.length === 0) {
+            return snapshotEntries[0]?.[1] ?? null;
+        }
+        const providerUsage = [...records]
+            .reverse()
+            .find(({ usage }) => usage?.status === 'provider-reported')?.usage ?? null;
+        const localUsage = records
+            .map(({ usage }) => usage)
+            .filter((usage) => usage?.status === 'local-estimate')
+            .at(-1) ?? null;
+        const usage = providerUsage ?? localUsage;
+        if (!usage) return snapshotEntries[0]?.[1] ?? null;
+        const updated = await Promise.all(snapshotEntries.map(async ([id, snapshot]) => {
+            if (id !== snapshot?.id) return snapshot;
+            return this.updateGenerationUsage(generationHandle, snapshot, usage);
+        }));
+        return updated[0] ?? null;
+    }
+
+    markGenerationStatus(status, statusEvent, correlationId = null) {
+        const result = this.generationLedger.completeGeneration({
+            status,
+            statusEvent,
+            publicId: correlationId,
+        });
+        if (result.status !== 'matched') return result;
+        for (const [snapshotId, snapshot] of result.snapshotEntries ?? []) {
+            if (snapshotId !== snapshot?.id) continue;
+            this.updateGenerationSnapshot(
+                result.sessionHandle,
+                snapshot,
+                {
+                    generationStatus: result.session.status,
+                    statusEvent: result.session.statusEvent,
+                    statusUpdatedAt: result.session.statusUpdatedAt,
+                },
+            ).catch((error) => {
                 console.error('[ST DevTools] Failed to update capture lifecycle.', error);
             });
+        }
+        this.syncGenerationUsage(
+            result.sessionHandle,
+            result.snapshotEntries,
+        ).catch((error) => {
+            console.error('[ST DevTools] Failed to update capture usage.', error);
+        });
+        return result;
+    }
+
+    recordMessageReceivedUsage(messageId, type = null) {
+        const message = this.getContext()?.chat?.[messageId];
+        const outputTokens = Number(message?.extra?.token_count);
+        if (!Number.isSafeInteger(outputTokens) || outputTokens < 0) {
+            const result = {
+                status: 'unavailable',
+                reason: 'local-token-count-unavailable',
+            };
+            this.dispatchEvent(new CustomEvent('capture-usage', { detail: result }));
+            return result;
+        }
+        try {
+            const usage = createLocalEstimatedUsage({
+                inputTokens: null,
+                outputTokens,
+                cachedInputTokens: null,
+                totalTokens: null,
+            }, {
+                sourceEvent: 'message-received',
+                correlatedAt: Date.now(),
+            });
+            const result = this.generationLedger.recordLocalUsage(usage, {
+                eventName: 'MESSAGE_RECEIVED',
+                unlinkedUsage: unlinkedUsage(usage),
+                generationType: type,
+            });
+            if (result.status === 'linked') {
+                this.syncGenerationUsage(result.sessionHandle).catch((error) => {
+                    console.error('[ST DevTools] Failed to update local capture usage.', error);
+                });
+            }
+            const notification = result.status === 'unlinked'
+                && (
+                    result.reason === 'active-session-not-found'
+                    || result.reason === 'generation-type-session-not-found'
+                )
+                ? {
+                    ...result,
+                    status: 'unavailable',
+                    correlationStatus: 'unlinked',
+                }
+                : result;
+            this.dispatchEvent(new CustomEvent('capture-usage', { detail: notification }));
+            return notification;
+        } catch (error) {
+            const result = {
+                status: 'rejected',
+                reason: 'invalid-local-usage',
+                code: typeof error?.code === 'string' ? error.code : null,
+            };
+            this.dispatchEvent(new CustomEvent('capture-usage', { detail: result }));
+            return result;
+        }
+    }
+
+    recordResponseUsage(payload, ...eventArgs) {
+        const publicId = correlationIdFromArgs([payload, ...eventArgs]);
+        try {
+            const context = this.getContext();
+            const provider = context?.chatCompletionSettings?.chat_completion_source
+                ?? context?.textCompletionSettings?.type
+                ?? context?.mainApi
+                ?? 'unknown';
+            const usage = normalizeProviderUsage(payload, {
+                provider,
+                linked: Boolean(publicId),
+                sourceEvent: 'provider-response-usage',
+                correlatedAt: Date.now(),
+            });
+            if (usage.status === 'unavailable') {
+                const result = { status: 'unavailable', reason: 'provider-usage-not-found' };
+                this.dispatchEvent(new CustomEvent('capture-usage', { detail: result }));
+                return result;
+            }
+            const linkedUsage = usage.status === 'unlinked'
+                ? normalizeUsageRecord({ ...usage, status: 'provider-reported' })
+                : usage;
+            const result = this.generationLedger.recordUsage(linkedUsage, {
+                publicId,
+                eventName: 'PROVIDER_RESPONSE_USAGE',
+                unlinkedUsage: unlinkedUsage(linkedUsage),
+            });
+            if (result.status === 'linked') {
+                this.syncGenerationUsage(result.sessionHandle).catch((error) => {
+                    console.error('[ST DevTools] Failed to update provider capture usage.', error);
+                });
+            }
+            this.dispatchEvent(new CustomEvent('capture-usage', { detail: result }));
+            return result;
+        } catch (error) {
+            const result = {
+                status: 'rejected',
+                reason: 'invalid-provider-usage',
+                code: typeof error?.code === 'string' ? error.code : null,
+            };
+            this.dispatchEvent(new CustomEvent('capture-usage', { detail: result }));
+            return result;
         }
     }
 

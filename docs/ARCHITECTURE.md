@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.10.0의 스키마 v6·구조 provenance, 저장 정책·무결성·archive, 개인정보 모드와 Worker·가상 목록 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.10.1의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드와 Worker·가상 목록 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -8,21 +8,21 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 
 ## 캡처 파이프라인
 
-1. `GENERATION_STARTED`가 생성 유형과 생성 단위 상태를 초기화합니다.
-2. `WORLD_INFO_ACTIVATED`가 활성화된 로어북 항목을 기록합니다.
+1. `GENERATION_STARTED`가 원시 공개 ID를 저장하지 않는 불투명 내부 handle과 생성 유형·수명 제한 상태를 만듭니다.
+2. `WORLD_INFO_ACTIVATED`가 공개 ID로 정확한 session을 찾거나 안전하게 하나만 고를 수 있을 때 해당 generation의 로어북 항목으로 기록합니다.
 3. `CHAT_COMPLETION_PROMPT_READY` 또는 `GENERATE_AFTER_COMBINE_PROMPTS`가 prompt-ready payload와 현재 컨텍스트를 복제합니다.
-4. 가능한 경우 다음 이벤트와 대기 중인 prompt를 FIFO 방식으로 연결합니다.
+4. 가능한 경우 다음 이벤트와 대기 중인 prompt 양쪽의 공개 ID가 정확히 같을 때 연결합니다. 공개 ID가 양쪽 모두 없을 때만 prompt 유형별 request FIFO를 사용합니다.
    - `CHAT_COMPLETION_SETTINGS_READY`
    - `TEXT_COMPLETION_SETTINGS_READY`
    - `GENERATE_AFTER_DATA`
-5. 같은 이벤트 전달 중 동기적으로 설정이 바뀔 수 있으므로 리스너 반환 직후 요청 객체를 복제합니다. 연속 settings-ready 이벤트는 pending 항목을 동기적으로 예약하며, 동일 요청 객체가 다른 호환 이벤트에 다시 전달되면 한 번만 연결합니다.
+5. 같은 이벤트 전달 중 동기적으로 설정이 바뀔 수 있으므로 리스너 반환 직후 요청 객체를 복제합니다. 연속 settings-ready 이벤트는 pending 항목을 동기적으로 예약하며, 동일 요청 객체가 다른 호환 이벤트에 다시 전달되면 한 번만 연결합니다. 공개 ID 충돌이나 한쪽 ID 누락은 다른 pending 항목으로 fallback하지 않습니다.
 6. 요청 객체에서 `messages`, `chat`, `prompt`, `input`을 우선 payload로 사용합니다.
 7. credential 형태의 필드, 토큰 형태 값, Authorization, URL query 비밀값과 PEM 개인 키를 요청·컨텍스트·로어북·payload 전체에서 제거하고 경로를 기록합니다.
 8. 요청 설정 이벤트가 일정 시간 안에 없으면 prompt-ready payload를 대체 캡처합니다.
-9. `GENERATION_STOPPED` 또는 `GENERATION_ENDED`를 받으면 같은 생성 단위에 연결된 스냅샷의 lifecycle을 같은 ID로 갱신합니다.
-10. 토큰 수·소스 연결 상태·payload 구조 위치·멀티모달 토큰 추정치를 비동기로 계산합니다.
+9. `GENERATION_STOPPED` 또는 `GENERATION_ENDED`를 받으면 정확히 식별되거나 하나로 한정된 generation에 연결된 스냅샷의 lifecycle을 같은 ID로 갱신합니다.
+10. prompt tokenizer의 입력 토큰, 소스 연결 상태·payload 구조 위치·멀티모달 토큰 추정치를 비동기로 계산합니다. 유효한 `MESSAGE_RECEIVED` 출력 토큰은 하나의 활성 generation만 고를 수 있을 때 별도 후속 usage로 병합합니다.
 11. 캡처 시점의 사용자 설정에 따라 완성된 스냅샷을 `full`·`redacted`·`metadata` 중 하나로 단방향 변환한 뒤, 원래 채팅 ID는 저장 partition 선택에만 사용하고 변환된 스냅샷을 타임라인에 저장합니다.
-12. 같은 채팅의 저장·읽기·삭제·비우기는 채팅 키 잠금으로 직렬화하고, 모든 저장 변경과 전체 삭제·정책 적용·archive 가져오기는 추가 전역 잠금으로 교차 실행을 막습니다.
+12. 같은 채팅의 저장·읽기·삭제·비우기는 채팅 키 잠금으로 직렬화하고, 모든 저장 변경과 전체 삭제·정책 적용·archive 가져오기는 추가 전역 잠금으로 교차 실행을 막습니다. lifecycle·usage 후속 변경은 저장 identity를 유지하는 원자적 snapshot updater를 사용합니다.
 13. 저장에 실패하면 계산을 마친 동일 스냅샷과 오류를 UI에 전달하여 같은 ID로 재시도합니다.
 
 ## 캡처 경계
@@ -33,28 +33,41 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 
 `prompt-ready`는 요청 설정 이벤트를 사용할 수 없을 때의 대체 경계입니다. v0.2 이하 스냅샷도 이 경계로 마이그레이션됩니다.
 
+### Generation ledger와 usage 경계
+
+`GenerationLedger`는 raw public ID 대신 호출자에게 노출되지 않는 내부 handle을 사용합니다. 활성·완료 session, public-ID 충돌 표시, pending request·usage buffer, lore와 snapshot 참조는 각각 개수·수명 상한을 가집니다. session view에는 공개 ID 값이 아니라 `hasPublicId`·충돌 여부·상태와 제한된 개수만 노출됩니다.
+
+Prompt와 request의 상관관계는 양쪽에서 같은 공개 ID를 확인한 경우가 가장 우선입니다. 한쪽에만 ID가 있거나 같은 ID가 충돌하면 실패로 닫고, prompt와 request 양쪽 모두 ID가 없을 때만 유형별 request FIFO를 사용합니다. Response usage는 공개 ID가 정확히 일치할 때만 session에 들어가며 ID가 없거나 모호하면 별도 `unlinked` record가 됩니다. Response FIFO는 없습니다.
+
+현재 공식 SillyTavern `event_types`에는 provider response usage payload와 이에 대응하는 provider request ID가 없습니다. `MESSAGE_RECEIVED`는 로컬 채팅 메시지 이벤트이며 provider 응답 usage 이벤트가 아닙니다. 따라서 기본 capability matrix는 공개 response·stream usage, public response correlation과 provider-reported cost를 `unsupported`로 선언합니다. OpenAI·Anthropic·Google·호환 usage shape parser와 `recordResponseUsage()` adapter는 별도 integration이 공식적으로 같은 ID와 payload를 주입할 때를 위한 경계이며 기본 이벤트 wiring에는 연결하지 않습니다.
+
+Usage 정규형은 `provider-reported`·`local-estimate`·`unlinked`·`unavailable`, 입력·출력·캐시 입력·합계 토큰, 근거 이벤트·연결 시각과 비용을 정확한 허용 키로만 보존합니다. 로컬 prompt tokenizer 값은 입력 추정치이고 `MESSAGE_RECEIVED`의 `message.extra.token_count`는 출력 추정치입니다. 하나의 활성 generation을 고를 수 없으면 출력값을 임의 session에 붙이지 않습니다. Provider 값은 로컬 값보다 우선할 수 있지만, 기본 공식 이벤트에는 그 값을 제공하는 source가 없습니다.
+
+비용은 provider 응답이 금액과 통화를 직접 보고했거나 사용자가 provider·model·currency별 백만 토큰 단가와 기준일을 저장한 경우에만 계산합니다. 사용자 override는 정확 일치만 허용하고 일부 단가만 있으면 `lower-bound`, 통화가 여러 개로 모호하거나 일치 항목이 없으면 `unavailable`입니다. 내장 가격 catalog는 없습니다.
+
 ## 스냅샷 스키마
 
-스키마 버전 6:
+스키마 버전 7:
 
 - 식별 정보: ID, 시각, 확장 버전, 채팅 ID, 메시지 수
 - 생성 정보: API 전송 계열, Chat Completion source 또는 Text Completion generation type, 모델, 프리셋, 프롬프트 유형, 생성 유형
 - `providerTrace`: 전송 API·프롬프트 형식·생성 유형, SillyTavern에서 선택한 생성 소스와 요청 내 근거 위치, 확인할 수 없는 upstream provider 상태
-- `capture`: 이벤트 이름, 캡처 단계, 대체 캡처 여부, 서버 변환 포함 여부, 요청 캡처 상태, 생성 lifecycle과 상태 이벤트 시각
-- `request`: 민감 정보가 제거된 요청 본문, 프롬프트 필드를 제외한 생성 설정, 제거된 필드 경로
+- `capture`: 이벤트 이름, 캡처 단계, 대체 캡처 여부, 서버 변환 포함 여부, 요청 캡처 상태, 생성 lifecycle과 상태 이벤트 시각, raw ID 없이 공개 ID가 있었는지만 나타내는 `hadCorrelationId`
+- `request`: 민감 정보와 알려진 상관관계 ID 값이 제거된 요청 본문, 프롬프트 필드를 제외한 생성 설정, 제거된 필드 경로와 `hadCorrelationId`
 - `payload`: 변경 불가능하게 복제한 요청 프롬프트와 평탄화 텍스트
 - provenance: 알려진 소스, 연결 방식, 0~1 신뢰도, 소스 메타데이터, 최종 텍스트 문자 범위, 구조 위치 사용 가능 상태와 최대 50개의 JSON pointer·메시지 번호·role·원본 값 범위·최종 범위
 - assistant prefill: 요청 설정의 명시적인 근거로 확인한 `confirmed`와 마지막 assistant 메시지 위치만으로 판단한 `inferred`
 - 멀티모달: 제공자, 입력 유형, 로컬 토큰 추정치, `estimate`·`lower-bound`·`upper-bound`·`unavailable`, 산정 방식
 - 로어북: 활성화된 항목 객체
 - 통계: 토큰, 컨텍스트 한도, 출력 예약량, 사용률, 남은 토큰
+- `usage`: 상태, 입력·출력·캐시·합계 토큰, 근거 이벤트·연결 시각, provider 보고 또는 사용자 override 비용 출처
 - 개인정보: privacy schema, `full`·`redacted`·`metadata` 모드, 원문·채팅 ID·요청 ID 포함 여부와 제한된 요약
 
-스토리지를 읽을 때 스키마 v1~v4는 먼저 v5로, v5는 v6으로 지연 변환합니다. 변환은 기존 payload·최종 텍스트·ID를 변경하지 않는 새 객체를 만들며, 성공한 개별 레코드만 한 번 다시 저장합니다. 경량 인덱스의 `approximateBytes`와 이미 완료된 저장 요약은 변환 전후 바이트 차이만큼 함께 보정합니다. 정상 v6 레코드는 다시 직렬화하거나 쓰지 않습니다.
+스토리지를 읽을 때 스키마 v1~v4는 먼저 v5로, v5는 고정된 v6 단계로, v6은 v7로 지연 변환합니다. v6→v7은 구버전 `stats.totalTokens`가 유효할 때 입력 전용 `legacy-snapshot-token-count` 로컬 추정치로 옮기고 출력·캐시·provider 비용은 추측하지 않습니다. `capture.correlationId`·`request.correlationId`와 요청 root·알려진 metadata container의 correlation key 값을 제거하고 `hadCorrelationId` boolean만 보존합니다. 일반 도메인 `id`와 다른 객체 안의 동명 필드는 보존합니다. 변환은 기존 payload·최종 텍스트·snapshot ID를 변경하지 않는 새 객체를 만들며, 성공한 개별 레코드만 한 번 다시 저장합니다. 경량 인덱스의 `approximateBytes`와 이미 완료된 저장 요약은 변환 전후 바이트 차이만큼 함께 보정합니다. 정상 v7 레코드는 다시 직렬화하거나 쓰지 않습니다.
 
 과거에 캡처하지 않은 요청 본문·멀티모달 크기·구조 위치는 소급하지 않습니다. 기존 provenance 방식과 신뢰도는 유지하되 구조 위치는 빈 목록과 `legacy-unavailable`로 표시합니다. 과거 lifecycle은 `unknown`으로 남기고, 기존 provider 값은 선택한 생성 소스의 `legacy-fallback` 근거로만 사용하며 upstream provider는 계속 `unknown`입니다.
 
-v6 검증 또는 이전 변환에 실패한 개별 레코드는 삭제하거나 덮어쓰지 않습니다. 같은 타임라인의 정상 형제 레코드는 계속 반환하며, 저장 계층은 제한된 `{id, message}` 메타데이터와 손상 개수를 만들지만 UI 경계에서 세부 항목을 폐기하고 개수만 보존합니다. 따라서 손상 원문과 내부 식별자는 패널 상태·DOM·오류 문구에 들어가지 않습니다. v0.10.0 무결성 복구도 손상 body 자체는 고치거나 제거하지 않고 참조와 인덱스만 복구합니다.
+v7 usage·correlation 검증 또는 이전 변환에 실패한 개별 레코드는 삭제하거나 덮어쓰지 않습니다. 같은 타임라인의 정상 형제 레코드는 계속 반환하며, 저장 계층은 제한된 `{id, message}` 메타데이터와 손상 개수를 만들지만 UI 경계에서 세부 항목을 폐기하고 개수만 보존합니다. 따라서 손상 원문과 내부 식별자는 패널 상태·DOM·오류 문구에 들어가지 않습니다. 무결성 복구도 손상 body 자체는 고치거나 제거하지 않고 참조와 인덱스만 복구합니다.
 
 `redacted`는 prompt-bearing 문자열 전체를 길이·UTF-8 바이트·SHA-256을 담은 고정 placeholder로 치환하고 source ID·채팅 ID·요청 ID를 불투명 digest 기반 참조로 바꿉니다. 이것은 이름·이메일 같은 의미 기반 개인정보 탐지가 아니라 원문 제거 변환입니다. `metadata`는 payload·request body·source·lore·preset 같은 프롬프트 구조를 제거하고 capture lifecycle·provider trace·토큰과 개수 요약만 유지합니다. 이미 더 비공개인 스냅샷을 덜 비공개인 모드로 되돌리는 변환은 거부합니다.
 

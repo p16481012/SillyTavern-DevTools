@@ -52,7 +52,10 @@ function snapshotDiagnostic(snapshot) {
             stage: snapshot.capture?.stage ?? null,
             fallback: Boolean(snapshot.capture?.fallback),
             correlationMethod: snapshot.capture?.correlationMethod ?? null,
-            hasCorrelationId: Boolean(snapshot.capture?.correlationId),
+            hasCorrelationId: Boolean(
+                snapshot.capture?.hadCorrelationId
+                ?? snapshot.capture?.correlationId,
+            ),
             requestStatus: snapshot.capture?.requestStatus ?? null,
             generationStatus: snapshot.capture?.generationStatus ?? null,
             statusEvent: snapshot.capture?.statusEvent ?? null,

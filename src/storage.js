@@ -1,4 +1,5 @@
 import { migrateSnapshot } from './migrations.js';
+import { deepClone } from './model.js';
 import {
     normalizeRetentionPolicy,
     planRetentionGc,
@@ -873,6 +874,95 @@ export class SnapshotStore {
             MUTATION_LOCK_KEY,
             () => this.addSnapshotUnlocked(snapshot, options),
         );
+    }
+
+    async updateSnapshot(chatId, snapshotId, updater) {
+        if (
+            typeof snapshotId !== 'string'
+            || !snapshotId
+            || typeof updater !== 'function'
+        ) {
+            throw new TypeError('Snapshot update requires an id and updater.');
+        }
+        const normalizedChatId = chatId || '__global__';
+        const indexKey = this.timelineIndexKey(normalizedChatId);
+        return this.withLock(MUTATION_LOCK_KEY, () => (
+            this.withLock(indexKey, async () => {
+                const index = await this.readTimelineIndexUnlocked(normalizedChatId);
+                const previousEntry = index.entries.find(
+                    ({ id }) => id === snapshotId,
+                );
+                if (!previousEntry) {
+                    return {
+                        updated: false,
+                        reason: 'not-found',
+                        snapshot: null,
+                    };
+                }
+
+                const stored = await this.readSnapshotUnlocked(
+                    normalizedChatId,
+                    snapshotId,
+                );
+                if (!stored.snapshot) {
+                    return {
+                        updated: false,
+                        reason: stored.missing ? 'not-found' : 'corrupt',
+                        snapshot: null,
+                    };
+                }
+
+                const editable = deepClone(stored.snapshot);
+                const candidate = await updater(editable);
+                if (candidate == null) {
+                    return {
+                        updated: false,
+                        reason: 'unchanged',
+                        snapshot: stored.snapshot,
+                    };
+                }
+                const normalized = migrateSnapshot(candidate);
+                if (
+                    !normalized
+                    || typeof normalized !== 'object'
+                    || normalized.id !== snapshotId
+                    || !snapshotMatchesStoragePartition(
+                        normalized,
+                        normalizedChatId,
+                    )
+                ) {
+                    throw new TypeError(
+                        'Snapshot update cannot change its storage identity.',
+                    );
+                }
+
+                const nextBytes = approximateJsonBytes(normalized);
+                const nextEntry = timelineEntry(normalized, nextBytes);
+                const nextEntries = index.entries
+                    .map((entry) => (
+                        entry.id === snapshotId ? nextEntry : entry
+                    ))
+                    .sort((left, right) => left.timestamp - right.timestamp);
+                this.mutationRevision += 1;
+                await this.write(
+                    this.snapshotKey(normalizedChatId, snapshotId),
+                    normalized,
+                );
+                await this.writeTimelineIndex(normalizedChatId, nextEntries);
+                await this.updateCompleteSummary({
+                    byteDelta: nextBytes
+                        - (Number(previousEntry.approximateBytes) || 0),
+                });
+                return {
+                    updated: true,
+                    reason: null,
+                    snapshot: attachStorageChatId(
+                        normalized,
+                        normalizedChatId,
+                    ),
+                };
+            })
+        ));
     }
 
     async getTimelinePageUnlocked(chatId, {

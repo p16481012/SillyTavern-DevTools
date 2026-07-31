@@ -1,12 +1,12 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.10.0 코드와 자동 테스트를 기준으로 남은 기능을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.10.1 코드 기준으로 남은 기능을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.10.0은 캡처한 요청을 읽기 전용으로 탐색·비교하고, 명시적인 지시를 원자 구조로 보존한 뒤 실제 충돌 쌍과 클러스터를 검사합니다. 전체·프리셋·캐릭터·채팅 정책 프로필, 재사용 그룹 동작, 이름 규칙과 수동 지정으로 비교군을 구조화하며, 사용자가 검사 결과를 판정·숨김·범위별 무시하고 정책 변경 전후를 검토할 수 있습니다.
+v0.10.1은 캡처한 요청을 읽기 전용으로 탐색·비교하고, 명시적인 지시를 원자 구조로 보존한 뒤 실제 충돌 쌍과 클러스터를 검사합니다. 전체·프리셋·캐릭터·채팅 정책 프로필, 재사용 그룹 동작, 이름 규칙과 수동 지정으로 비교군을 구조화하며, 사용자가 검사 결과를 판정·숨김·범위별 무시하고 정책 변경 전후를 검토할 수 있습니다.
 
-새 스키마 v6은 source·range·method·confidence에 JSON pointer·message index·role·원본 값 범위·최종 범위를 추가합니다. 선택한 생성 소스와 확인할 수 없는 upstream provider, 확정·추정 assistant prefill을 분리하고, 소스 배치 메타데이터와 동일 UID 로어북 내부 변경을 비교합니다. 이전 레코드는 읽을 때 한 번만 v6으로 다시 저장하며, 손상 레코드는 원본을 보존한 채 정상 형제와 격리합니다.
+스키마 v7은 v6의 구조 provenance에 정규화된 usage·비용 출처와 correlation 개인정보 경계를 추가합니다. generation별 불투명 bounded ledger가 prompt·request·lore·lifecycle·usage를 격리하고, 같은 공개 ID가 양쪽에 있을 때만 정확히 연결합니다. 요청 호환용 FIFO는 response usage에 재사용하지 않습니다. 이전 레코드는 읽을 때 한 번만 v7으로 다시 저장하며, raw correlation ID를 제거하고 `hadCorrelationId`만 남긴 채 손상 레코드는 원본을 보존합니다.
 
 저장은 기간·채팅별 개수·전체 대략적 용량 정책과 무결성 진단을 지원합니다. 대형 목록은 가상 렌더링하고 검색·diff·규칙 분석은 Worker와 메모리 cache를 사용합니다. 새 캡처는 전체 원문·원문 제거본·메타데이터 모드를 선택할 수 있으며, 안전 공유·혼합 privacy archive 병합/교체·진단 보고서 비교가 추가되었습니다.
 
@@ -152,17 +152,21 @@ v0.10.0에 예정했던 저장 레코드 분리와 렌더 지연·계산 재사�
 
 사용자 검토: 실제 SillyTavern IndexedDB에서 기간·용량 삭제 결과, 비공개 모드별 새 캡처, 전체 백업의 복원과 실패 상황을 확인합니다.
 
-## v0.10.1 — 캡처 상관관계와 usage
+## v0.10.1 — 캡처 상관관계와 usage · 완료
 
-- generation 단위 pending lore·generation type·취소 상태
-- 공개 요청 ID가 양쪽에 있을 때의 정확 연결과 ID가 없을 때의 명시적인 FIFO·미연결 상태
-- SillyTavern 최소·현재 버전 이벤트 호환 matrix와 실제 IndexedDB E2E
-- 공개 응답 event에서 같은 요청 ID가 확인될 때만 response usage를 정확 연결
-- provider 보고·로컬 추정·미연결 usage를 분리하고 비용은 provider 보고값 또는 출처가 있는 사용자 가격 override만 표시
+- generation별 불투명 handle과 개수·수명 제한 session ledger로 pending prompt·request·lore·generation type·취소·종료·usage 상태 격리
+- prompt와 request 양쪽에 같은 공개 ID가 있을 때만 정확 연결하고 충돌·한쪽 ID·오래된 session은 실패로 닫음
+- 공개 ID가 없는 prompt→request 호환에만 유형별 FIFO를 사용하고 response usage에는 FIFO를 사용하지 않음
+- 공식 SillyTavern 공개 이벤트에는 provider response usage와 대응 provider request ID가 없음을 capability matrix에서 `unsupported`로 선언
+- 새 스냅샷의 로컬 입력 추정과 안전하게 하나의 generation을 고를 수 있는 `MESSAGE_RECEIVED` 출력 추정, provider 보고·미연결·산정 불가 상태 분리
+- OpenAI·Anthropic·Google·호환 usage parser와 별도 공개 integration용 exact-ID response adapter 제공. 기본 이벤트에는 미연결
+- provider 직접 보고 비용 또는 provider·model·currency 정확 일치 사용자 override만 계산하고 내장 가격표·통화 자동 선택 금지
+- 스키마 v7에서 raw correlation ID 제거, `hadCorrelationId` 보존과 구버전 토큰의 입력 전용 로컬 추정 이전
+- lifecycle·usage 후속 반영의 snapshot identity 보존 원자적 update와 provider capability matrix UI
 
 provider 서버가 후처리한 최종 HTTP packet과 내부 upstream은 공개 hook 또는 별도 companion 없이는 확정하지 않습니다.
 
-## v0.11.0 — 선택적 AI Semantic Inspector
+## v0.11.0 — 선택적 AI Semantic Inspector · 예정
 
 - 로컬 정책과 Rule V3가 좁힌 후보만 사용자가 눌렀을 때 분석
 - 전송할 원문·제외 항목·provider·model·예상 입력 토큰·비용 사전 확인

@@ -7,6 +7,7 @@ import {
     extractPromptPayload,
     sanitizeRequestBody,
     sanitizePromptPayload,
+    stripRequestCorrelationIds,
 } from '../src/request.js';
 
 test('request records redact credential-like fields without mutating input', () => {
@@ -81,6 +82,53 @@ test('multimodal data URLs are omitted without removing their part type', () => 
         '[미디어 데이터 생략됨]',
     );
     assert.equal(JSON.stringify(sanitizePromptPayload(payload)).includes('private-bytes'), false);
+});
+
+test('request correlation scrubber removes only root and known-container public ids', () => {
+    const original = {
+        request_id: 'root-secret',
+        id: 'ordinary-root-id',
+        metadata: {
+            generationId: 'metadata-secret',
+            id: 'ordinary-metadata-id',
+            nested: {
+                response_id: 'ordinary-nested-content',
+                _meta: { responseId: 'nested-container-secret' },
+            },
+        },
+        messages: [{
+            role: 'user',
+            content: { request_id: 'user-authored-content' },
+        }],
+    };
+    const scrubbed = stripRequestCorrelationIds(original);
+
+    assert.equal(scrubbed.request_id, undefined);
+    assert.equal(scrubbed.id, 'ordinary-root-id');
+    assert.equal(scrubbed.metadata.generationId, undefined);
+    assert.equal(scrubbed.metadata.id, 'ordinary-metadata-id');
+    assert.equal(scrubbed.metadata.nested.response_id, 'ordinary-nested-content');
+    assert.equal(scrubbed.metadata.nested._meta.responseId, undefined);
+    assert.equal(
+        scrubbed.messages[0].content.request_id,
+        'user-authored-content',
+    );
+    assert.equal(original.request_id, 'root-secret');
+    assert.equal(original.metadata.generationId, 'metadata-secret');
+});
+
+test('new request records persist only correlation presence, never the raw public id', () => {
+    const request = createRequestRecord({
+        request_id: 'raw-public-id',
+        messages: [{ role: 'user', content: 'hello' }],
+        metadata: { responseId: 'raw-response-id', safe: true },
+    });
+
+    assert.equal(request.correlationId, null);
+    assert.equal(request.hadCorrelationId, true);
+    assert.equal(JSON.stringify(request).includes('raw-public-id'), false);
+    assert.equal(JSON.stringify(request).includes('raw-response-id'), false);
+    assert.equal(request.body.metadata.safe, true);
 });
 
 test('sanitizer redacts token-shaped values and sensitive URL query values', () => {

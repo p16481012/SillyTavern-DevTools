@@ -178,6 +178,9 @@ test('full, redacted, and metadata transforms are pure and mode-explicit', async
     assert.deepEqual(redacted.sources[0].ranges, []);
     assert.deepEqual(redacted.sources[0].provenance.locations, []);
     assert.equal(redacted.sources[0].rangeSummary.quotedValueCount, 1);
+    assert.equal(redacted.usage.status, 'local-estimate');
+    assert.equal(redacted.usage.inputTokens, 42);
+    assert.equal(redacted.usage.sourceEvent, 'legacy-snapshot-token-count');
     assert.deepEqual(
         await transformSnapshotPrivacy(redacted, { mode: 'redacted' }),
         redacted,
@@ -188,6 +191,7 @@ test('full, redacted, and metadata transforms are pure and mode-explicit', async
     assert.equal(metadata.model, original.model);
     assert.equal(metadata.timestamp, original.timestamp);
     assert.equal(metadata.stats.totalTokens, 42);
+    assert.deepEqual(metadata.usage, redacted.usage);
     for (const field of [
         'finalText',
         'payload',

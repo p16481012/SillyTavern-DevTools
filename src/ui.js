@@ -105,6 +105,23 @@ import {
     normalizeUiPreferences,
     readUiPreferencesFromStorage,
 } from './preferences.js';
+import {
+    MAX_PRICE_PER_MILLION,
+    MAX_PRICING_OVERRIDES,
+    PRICING_OVERRIDE_SCHEMA_VERSION,
+    calculateUsageCost,
+    normalizeModelId,
+    normalizePricingOverrides,
+    unavailableCost,
+} from './pricing-overrides.js';
+import {
+    getProviderCapabilities,
+    normalizeProviderId,
+} from './provider-capabilities.js';
+import {
+    createUnavailableUsage,
+    normalizeUsageRecord,
+} from './provider-usage.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -112,6 +129,7 @@ const LEGACY_COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-polic
 const COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-policy:v2`;
 const FINDING_REVIEW_SETTINGS_KEY = `${STORAGE_PREFIX}finding-reviews:v1`;
 const RULE_AUDIT_LOG_KEY = `${STORAGE_PREFIX}rule-audit:v1`;
+const PRICING_OVERRIDES_KEY = `${STORAGE_PREFIX}pricing-overrides:v1`;
 const LAST_TAB_KEY = `${STORAGE_PREFIX}last-tab`;
 const GEOMETRY_KEY = `${STORAGE_PREFIX}geometry`;
 const KNOWN_LOCAL_DATA_KEYS = [
@@ -120,6 +138,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     COMPARISON_POLICY_SETTINGS_KEY,
     FINDING_REVIEW_SETTINGS_KEY,
     RULE_AUDIT_LOG_KEY,
+    PRICING_OVERRIDES_KEY,
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
@@ -137,6 +156,11 @@ const STORAGE_TOOL_METADATA_LIMIT = 25;
 const VIRTUAL_LIST_THRESHOLD = 100;
 const VIRTUAL_LIST_OVERSCAN = 6;
 const VIRTUAL_LIST_FALLBACK_VIEWPORT = 640;
+const PRICING_RATE_FIELDS = Object.freeze([
+    'inputPerMillion',
+    'outputPerMillion',
+    'cachedInputPerMillion',
+]);
 const TABS = [
     ['explorer', 'tab.explorer'],
     ['timeline', 'tab.timeline'],
@@ -378,6 +402,18 @@ function formatBytes(value) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 ** 2)).toFixed(1)} MB`;
+}
+
+function emptyPricingOverrides() {
+    return normalizePricingOverrides({
+        version: PRICING_OVERRIDE_SCHEMA_VERSION,
+        entries: [],
+    });
+}
+
+function restoreStorageValue(storage, key, value) {
+    if (value == null) storage.removeItem(key);
+    else storage.setItem(key, value);
 }
 
 function policyId(prefix) {
@@ -675,6 +711,8 @@ export class DevToolsWindow {
             rebuilding: false,
         };
         this.preferences = this.loadUiPreferences();
+        this.pricingOverrides = this.loadPricingOverrides();
+        this.pendingPricingOverrides = null;
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
         this.ruleSettings = this.loadRuleSettings();
@@ -720,6 +758,7 @@ export class DevToolsWindow {
         this.retentionMaxAgeDaysInput = null;
         this.retentionMaxBytesMiBInput = null;
         this.captureModeInput = null;
+        this.resetPricingEditor = null;
         this.storageToolsStatus = null;
         this.diagnosticCompareFiles = [];
         this.primaryRegions = [];
@@ -1276,16 +1315,263 @@ export class DevToolsWindow {
         return preferences;
     }
 
-    saveUiPreferences(value) {
-        this.preferences = normalizeUiPreferences(value);
+    loadPricingOverrides(storage = null) {
         try {
-            localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify(this.preferences));
-            localStorage.removeItem(V2_UI_PREFERENCES_KEY);
-            localStorage.removeItem(V1_UI_PREFERENCES_KEY);
+            const target = storage ?? globalThis.localStorage;
+            const raw = target?.getItem(PRICING_OVERRIDES_KEY);
+            if (raw == null) return emptyPricingOverrides();
+            return normalizePricingOverrides(JSON.parse(raw));
         } catch {
-            // The current browser may not allow persistent local storage.
+            return emptyPricingOverrides();
         }
-        return this.preferences;
+    }
+
+    saveUiPreferences(value) {
+        const previousPreferences = this.preferences;
+        const previousPricingOverrides = this.pricingOverrides;
+        const preferences = normalizeUiPreferences(value);
+        const pricingOverrides = normalizePricingOverrides(
+            this.pendingPricingOverrides
+            ?? this.pricingOverrides
+            ?? emptyPricingOverrides(),
+        );
+        let storage = null;
+        let backup = null;
+        try {
+            storage = globalThis.localStorage;
+            backup = new Map([
+                [UI_PREFERENCES_KEY, storage.getItem(UI_PREFERENCES_KEY)],
+                [V2_UI_PREFERENCES_KEY, storage.getItem(V2_UI_PREFERENCES_KEY)],
+                [V1_UI_PREFERENCES_KEY, storage.getItem(V1_UI_PREFERENCES_KEY)],
+                [PRICING_OVERRIDES_KEY, storage.getItem(PRICING_OVERRIDES_KEY)],
+            ]);
+            const preferencesRaw = JSON.stringify(preferences);
+            const pricingOverridesRaw = JSON.stringify(pricingOverrides);
+            storage.setItem(UI_PREFERENCES_KEY, preferencesRaw);
+            storage.setItem(PRICING_OVERRIDES_KEY, pricingOverridesRaw);
+            if (
+                storage.getItem(UI_PREFERENCES_KEY) !== preferencesRaw
+                || storage.getItem(PRICING_OVERRIDES_KEY) !== pricingOverridesRaw
+            ) {
+                throw new Error('settings-storage-write-not-observed');
+            }
+            storage.removeItem(V2_UI_PREFERENCES_KEY);
+            storage.removeItem(V1_UI_PREFERENCES_KEY);
+            if (
+                storage.getItem(V2_UI_PREFERENCES_KEY) !== null
+                || storage.getItem(V1_UI_PREFERENCES_KEY) !== null
+            ) {
+                throw new Error('settings-storage-remove-not-observed');
+            }
+            this.preferences = preferences;
+            this.pricingOverrides = pricingOverrides;
+            return this.preferences;
+        } catch (cause) {
+            if (storage && backup) {
+                for (const [key, oldValue] of backup) {
+                    try {
+                        restoreStorageValue(storage, key, oldValue);
+                    } catch {
+                        // Best effort: preserve the original storage failure.
+                    }
+                }
+            }
+            this.preferences = previousPreferences;
+            this.pricingOverrides = previousPricingOverrides;
+            const error = new Error('settings-storage-write-failed', { cause });
+            error.code = 'settings-storage-write-failed';
+            throw error;
+        }
+    }
+
+    buildPricingSettingsEditor() {
+        const details = element('details', {
+            className: 'st-devtools-pricing-editor st-devtools-settings-field',
+        });
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('settings.pricingTitle'),
+            t('settings.pricingDescription'),
+        ));
+        const content = element('div', {
+            className: 'st-devtools-pricing-content',
+        });
+        const rows = element('div', { className: 'st-devtools-pricing-rows' });
+        const status = element('p', {
+            className: 'st-devtools-pricing-status',
+        });
+        status.setAttribute('aria-live', 'polite');
+        const add = element('button', {
+            className: 'menu_button st-devtools-pricing-add',
+            text: t('settings.pricingAdd'),
+            type: 'button',
+        });
+
+        const updateRowLabels = () => {
+            [...rows.querySelectorAll('.st-devtools-pricing-row')]
+                .forEach((row, index) => {
+                    const title = row.querySelector('.st-devtools-pricing-row-title');
+                    if (title) {
+                        title.textContent = t('settings.pricingEntry', {
+                            number: index + 1,
+                        });
+                    }
+                });
+            add.disabled = rows.children.length >= MAX_PRICING_OVERRIDES;
+        };
+        const clearStatus = () => {
+            status.textContent = '';
+            status.classList.remove('is-error');
+            status.removeAttribute('role');
+        };
+        const setError = (message) => {
+            status.textContent = message;
+            status.classList.add('is-error');
+            status.setAttribute('role', 'alert');
+        };
+        const pricingField = (labelKey, field, value = '') => {
+            const wrapper = element('label', {
+                className: 'st-devtools-pricing-field',
+            });
+            const label = element('span', { text: t(labelKey) });
+            const input = element('input');
+            input.dataset.pricingField = field;
+            input.value = value == null ? '' : String(value);
+            if (PRICING_RATE_FIELDS.includes(field)) {
+                input.type = 'number';
+                input.min = '0';
+                input.max = String(MAX_PRICE_PER_MILLION);
+                input.step = 'any';
+                input.inputMode = 'decimal';
+            } else if (field === 'priceAsOf') {
+                input.type = 'date';
+            } else {
+                input.type = 'text';
+                input.maxLength = field === 'model'
+                    ? 128
+                    : field === 'currency'
+                        ? 3
+                        : 64;
+                input.autocomplete = 'off';
+                input.spellcheck = false;
+            }
+            wrapper.append(label, input);
+            return wrapper;
+        };
+        const appendRow = (entry = {}) => {
+            if (rows.children.length >= MAX_PRICING_OVERRIDES) {
+                setError(t('settings.pricingLimit', {
+                    count: MAX_PRICING_OVERRIDES,
+                }));
+                return null;
+            }
+            const row = element('section', {
+                className: 'st-devtools-pricing-row',
+            });
+            const heading = element('div', {
+                className: 'st-devtools-pricing-row-heading',
+            });
+            const rowTitle = element('strong', {
+                className: 'st-devtools-pricing-row-title',
+            });
+            const remove = element('button', {
+                className: 'menu_button st-devtools-pricing-remove',
+                text: t('settings.pricingDelete'),
+                type: 'button',
+            });
+            remove.addEventListener('click', () => {
+                row.remove();
+                clearStatus();
+                updateRowLabels();
+            });
+            heading.append(rowTitle, remove);
+            const fields = element('div', {
+                className: 'st-devtools-pricing-fields',
+            });
+            fields.append(
+                pricingField('settings.pricingProvider', 'provider', entry.provider),
+                pricingField('settings.pricingModel', 'model', entry.model),
+                pricingField('settings.pricingCurrency', 'currency', entry.currency),
+                pricingField(
+                    'settings.pricingInputRate',
+                    'inputPerMillion',
+                    entry.inputPerMillion,
+                ),
+                pricingField(
+                    'settings.pricingOutputRate',
+                    'outputPerMillion',
+                    entry.outputPerMillion,
+                ),
+                pricingField(
+                    'settings.pricingCacheRate',
+                    'cachedInputPerMillion',
+                    entry.cachedInputPerMillion,
+                ),
+                pricingField(
+                    'settings.pricingAsOf',
+                    'priceAsOf',
+                    entry.priceAsOf,
+                ),
+            );
+            row.append(heading, fields);
+            rows.appendChild(row);
+            updateRowLabels();
+            return row;
+        };
+        const resetEntries = (entries = []) => {
+            rows.replaceChildren();
+            clearStatus();
+            for (const entry of entries) appendRow(entry);
+            updateRowLabels();
+        };
+        const readEntries = () => {
+            const entries = [];
+            for (const row of rows.querySelectorAll('.st-devtools-pricing-row')) {
+                const values = Object.fromEntries(
+                    [...row.querySelectorAll('[data-pricing-field]')]
+                        .map((input) => [
+                            input.dataset.pricingField,
+                            String(input.value ?? '').trim(),
+                        ]),
+                );
+                if (Object.values(values).every((value) => value === '')) continue;
+                const entry = {
+                    provider: values.provider,
+                    model: values.model,
+                    currency: values.currency,
+                    priceAsOf: values.priceAsOf,
+                };
+                for (const field of PRICING_RATE_FIELDS) {
+                    if (values[field] !== '') entry[field] = Number(values[field]);
+                }
+                entries.push(entry);
+            }
+            return normalizePricingOverrides({
+                version: PRICING_OVERRIDE_SCHEMA_VERSION,
+                entries,
+            });
+        };
+
+        add.addEventListener('click', () => {
+            clearStatus();
+            const row = appendRow();
+            row?.querySelector('[data-pricing-field="provider"]')?.focus();
+        });
+        content.addEventListener('input', clearStatus);
+        content.append(
+            proseElement('p', t('settings.pricingHint')),
+            rows,
+            add,
+            status,
+        );
+        details.append(summary, content);
+        resetEntries(this.pricingOverrides.entries);
+        return {
+            details,
+            readEntries,
+            resetEntries,
+            setError,
+        };
     }
 
     buildSettingsPanel() {
@@ -1504,6 +1790,7 @@ export class DevToolsWindow {
         readInput.addEventListener('input', syncReadLimit);
         syncReadLimit();
 
+        const pricingEditor = this.buildPricingSettingsEditor();
         const actions = element('div', { className: 'st-devtools-settings-actions' });
         const reset = element('button', {
             className: 'menu_button',
@@ -1519,6 +1806,7 @@ export class DevToolsWindow {
                 DEFAULT_UI_PREFERENCES.retentionMaxBytes / MEBIBYTE,
             );
             captureSelect.value = DEFAULT_UI_PREFERENCES.captureMode;
+            pricingEditor.resetEntries([]);
             syncReadLimit();
             retentionInput.focus();
         });
@@ -1541,6 +1829,7 @@ export class DevToolsWindow {
             byteField,
             readField,
             captureField,
+            pricingEditor.details,
             actions,
         );
         form.addEventListener('submit', async (event) => {
@@ -1577,6 +1866,13 @@ export class DevToolsWindow {
                 || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
             );
             try {
+                let requestedPricingOverrides;
+                try {
+                    requestedPricingOverrides = pricingEditor.readEntries();
+                } catch (error) {
+                    pricingEditor.setError(t('settings.pricingInvalid'));
+                    throw error;
+                }
                 let pruneResult = {
                     snapshotCount: 0,
                     affectedChatCount: 0,
@@ -1669,7 +1965,9 @@ export class DevToolsWindow {
                     this.storageSummaryRebuildScheduled = false;
                     this.storageSummaryRefreshPromise = null;
                 }
+                this.pendingPricingOverrides = requestedPricingOverrides;
                 const preferences = this.saveUiPreferences(requested);
+                this.pendingPricingOverrides = null;
                 themeSelect.value = preferences.themeMode;
                 retentionInput.value = String(preferences.timelineRetentionLimit);
                 readInput.value = String(preferences.timelineReadLimit);
@@ -1678,6 +1976,7 @@ export class DevToolsWindow {
                     preferences.retentionMaxBytes / MEBIBYTE,
                 ));
                 captureSelect.value = preferences.captureMode;
+                pricingEditor.resetEntries(this.pricingOverrides.entries);
                 syncReadLimit();
                 this.syncOpaqueTheme();
                 this.closeSettings();
@@ -1703,7 +2002,11 @@ export class DevToolsWindow {
                 );
                 if (timelineSettingsChanged) this.scheduleSettingsRefresh();
             } catch (error) {
+                this.pendingPricingOverrides = null;
                 console.error('[ST DevTools] Failed to apply storage settings.', error);
+                if (error?.code === 'settings-storage-write-failed') {
+                    pricingEditor.setError(t('settings.pricingSaveFailed'));
+                }
                 globalThis.toastr?.error?.(
                     t('settings.saveFailed'),
                     'ST DevTools',
@@ -1725,6 +2028,10 @@ export class DevToolsWindow {
         this.retentionMaxAgeDaysInput = ageInput;
         this.retentionMaxBytesMiBInput = byteInput;
         this.captureModeInput = captureSelect;
+        this.resetPricingEditor = () => {
+            pricingEditor.details.open = false;
+            pricingEditor.resetEntries(this.pricingOverrides.entries);
+        };
         return overlay;
     }
 
@@ -2232,6 +2539,7 @@ export class DevToolsWindow {
             this.preferences.retentionMaxBytes / MEBIBYTE,
         ));
         this.captureModeInput.value = this.preferences.captureMode;
+        this.resetPricingEditor?.();
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
             region.inert = true;
@@ -3198,6 +3506,7 @@ export class DevToolsWindow {
         page.append(
             proseElement('p', t('privacy.metadataUnavailable')),
             metrics,
+            this.renderUsageCard(snapshot),
         );
         return page;
     }
@@ -5363,6 +5672,184 @@ export class DevToolsWindow {
         return section;
     }
 
+    snapshotUsageView(snapshot) {
+        let usage;
+        try {
+            usage = normalizeUsageRecord(snapshot?.usage);
+        } catch {
+            usage = createUnavailableUsage({
+                sourceEvent: 'ui-normalization-failed',
+                correlatedAt: null,
+            });
+        }
+
+        let cost = usage.cost ?? unavailableCost();
+        if (cost.status !== 'provider-reported') {
+            const provider = normalizeProviderId(snapshotProvider(snapshot));
+            const model = normalizeModelId(snapshot?.model);
+            const matchingEntries = provider && model
+                ? this.pricingOverrides.entries.filter((entry) => (
+                    entry.provider === provider
+                    && entry.model === model
+                ))
+                : [];
+            const currencies = new Set(
+                matchingEntries.map((entry) => entry.currency),
+            );
+            if (currencies.size === 1) {
+                try {
+                    cost = calculateUsageCost(usage, {
+                        overrides: this.pricingOverrides,
+                        provider,
+                        model,
+                        currency: [...currencies][0],
+                    });
+                } catch {
+                    cost = unavailableCost();
+                }
+            } else {
+                cost = unavailableCost();
+            }
+        }
+        return { usage, cost };
+    }
+
+    renderUsageCard(snapshot) {
+        const { usage, cost } = this.snapshotUsageView(snapshot);
+        const section = element('section', {
+            className: 'st-devtools-usage-card',
+        });
+        const heading = element('div', {
+            className: 'st-devtools-usage-heading',
+        });
+        heading.append(
+            explainedTitle(
+                t('context.usageTitle'),
+                t('context.usageDescription'),
+                { tag: 'h3', titleTag: 'span' },
+            ),
+            element('span', {
+                className: `st-devtools-usage-status is-${usage.status}`,
+                text: translatedValue(
+                    `context.usageStatus.${usage.status}`,
+                    usage.status,
+                ),
+            }),
+        );
+
+        const tokenGrid = element('dl', {
+            className: 'st-devtools-usage-token-grid',
+        });
+        const appendToken = (labelKey, value) => {
+            tokenGrid.append(
+                element('div', { className: 'st-devtools-usage-token' }),
+            );
+            const item = tokenGrid.lastElementChild;
+            item.append(
+                element('dt', { text: t(labelKey) }),
+                element('dd', {
+                    text: value == null
+                        ? t('common.unknown')
+                        : t('snapshot.tokens', {
+                            count: Number(value).toLocaleString('ko-KR'),
+                        }),
+                }),
+            );
+        };
+        appendToken('context.usageInput', usage.inputTokens);
+        appendToken('context.usageOutput', usage.outputTokens);
+        appendToken('context.usageCache', usage.cachedInputTokens);
+        appendToken('context.usageTotal', usage.totalTokens);
+
+        const costText = cost.status === 'unavailable'
+            ? t('context.usageCostUnavailable')
+            : t('context.usageCostValue', {
+                amount: Number(cost.amount).toLocaleString('ko-KR', {
+                    maximumFractionDigits: 12,
+                }),
+                currency: cost.currency,
+            });
+        const sourceEvent = translatedValue(
+            `context.usageSource.${usage.sourceEvent}`,
+            usage.sourceEvent,
+        );
+        const costSource = translatedValue(
+            `context.costSource.${cost.priceSource ?? 'unavailable'}`,
+            cost.priceSource ?? t('common.unknown'),
+        );
+        const costStatus = translatedValue(
+            `context.costStatus.${cost.status}`,
+            cost.status,
+        );
+        const metadata = element('dl', {
+            className: 'st-devtools-usage-metadata',
+        });
+        const appendMetadata = (labelKey, value) => {
+            metadata.append(
+                element('dt', { text: t(labelKey) }),
+                element('dd', { text: value }),
+            );
+        };
+        appendMetadata(
+            'context.usageCost',
+            `${costText} · ${costStatus}`,
+        );
+        appendMetadata('context.usageCostSource', costSource);
+        appendMetadata(
+            'context.usagePriceAsOf',
+            cost.priceAsOf ?? t('common.unknown'),
+        );
+        appendMetadata('context.usageSourceEvent', sourceEvent);
+        appendMetadata(
+            'context.usageCorrelatedAt',
+            usage.correlatedAt == null
+                ? t('common.unknown')
+                : formatTimestamp(usage.correlatedAt),
+        );
+
+        const provider = snapshotProvider(snapshot);
+        const capabilities = getProviderCapabilities(provider);
+        const capabilityDetails = element('details', {
+            className: 'st-devtools-usage-capabilities st-devtools-disclosure',
+        });
+        const capabilitySummary = element('summary');
+        capabilitySummary.appendChild(explainedTitle(
+            t('context.usageCapabilities'),
+            t('context.usageCapabilitiesDescription'),
+        ));
+        const capabilityContent = element('div', {
+            className: 'st-devtools-usage-capability-content',
+        });
+        capabilityContent.appendChild(
+            proseElement('p', t('context.usageOfficialBoundary')),
+        );
+        const capabilityList = element('dl', {
+            className: 'st-devtools-usage-capability-list',
+        });
+        for (const key of [
+            'publicRequestEvent',
+            'publicResponseEvent',
+            'publicStreamUsageEvent',
+            'publicRequestCorrelation',
+            'usageShape',
+            'providerReportedCost',
+        ]) {
+            capabilityList.append(
+                element('dt', {
+                    text: t(`context.usageCapability.${key}`),
+                }),
+                element('dd', {
+                    text: t(`context.capabilityState.${capabilities[key]}`),
+                }),
+            );
+        }
+        capabilityContent.appendChild(capabilityList);
+        capabilityDetails.append(capabilitySummary, capabilityContent);
+
+        section.append(heading, tokenGrid, metadata, capabilityDetails);
+        return section;
+    }
+
     renderContext(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         page.appendChild(this.renderSnapshotPicker());
@@ -5574,6 +6061,7 @@ export class DevToolsWindow {
         const providerTrace = this.renderProviderTrace(snapshot);
         page.append(
             coreStats,
+            this.renderUsageCard(snapshot),
             captureCard,
             ...(providerTrace ? [providerTrace] : []),
             detailStats,

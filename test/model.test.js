@@ -531,6 +531,22 @@ test('snapshot finalization counts identical text only once', async () => {
         1,
     );
     assert.equal(result.stats.totalTokens, result.finalText.length);
+    assert.deepEqual(result.usage, {
+        status: 'local-estimate',
+        inputTokens: result.finalText.length,
+        outputTokens: null,
+        cachedInputTokens: null,
+        totalTokens: null,
+        sourceEvent: 'local-prompt-tokenizer',
+        correlatedAt: result.timestamp,
+        cost: {
+            status: 'unavailable',
+            amount: null,
+            currency: null,
+            priceSource: null,
+            priceAsOf: null,
+        },
+    });
 });
 
 test('snapshot finalization separates selected generation source from unknown upstream provider', async () => {

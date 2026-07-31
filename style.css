@@ -204,6 +204,87 @@
     color: var(--st-devtools-status-warning);
 }
 
+.st-devtools-pricing-editor {
+    min-width: 0;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-pricing-editor > summary {
+    padding-top: 1rem;
+    cursor: pointer;
+}
+
+.st-devtools-pricing-content,
+.st-devtools-pricing-rows {
+    display: grid;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.st-devtools-pricing-content > p {
+    margin: 0;
+}
+
+.st-devtools-pricing-row {
+    display: grid;
+    gap: 0.65rem;
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 7px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-pricing-row-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+}
+
+.st-devtools-pricing-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.st-devtools-pricing-field {
+    display: grid;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.st-devtools-pricing-field > span {
+    opacity: 0.78;
+    font-size: 0.8rem;
+}
+
+.st-devtools-pricing-field > input {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+}
+
+.st-devtools-pricing-add {
+    justify-self: start;
+}
+
+.st-devtools-pricing-status {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: break-word;
+}
+
+.st-devtools-pricing-status:empty {
+    display: none;
+}
+
+.st-devtools-pricing-status.is-error {
+    color: var(--st-devtools-status-critical);
+}
+
 .st-devtools-settings-tools {
     display: grid;
     gap: 0.65rem;
@@ -1691,6 +1772,121 @@
     opacity: 0.68;
 }
 
+.st-devtools-usage-card {
+    display: grid;
+    gap: 0.7rem;
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 7px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-usage-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.st-devtools-usage-heading h3 {
+    min-width: 0;
+    margin: 0;
+}
+
+.st-devtools-usage-status {
+    flex: 0 0 auto;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.st-devtools-usage-status.is-provider-reported {
+    border-color: var(--st-devtools-status-success);
+    color: var(--st-devtools-status-success);
+}
+
+.st-devtools-usage-status.is-local-estimate,
+.st-devtools-usage-status.is-unlinked {
+    border-color: var(--st-devtools-status-warning);
+    color: var(--st-devtools-status-warning);
+}
+
+.st-devtools-usage-token-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    min-width: 0;
+    margin: 0;
+}
+
+.st-devtools-usage-token {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 0;
+    padding: 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 5px;
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-usage-token dt {
+    opacity: 0.7;
+    font-size: 0.78rem;
+}
+
+.st-devtools-usage-token dd {
+    min-width: 0;
+    margin: 0;
+    font-weight: 700;
+    overflow-wrap: break-word;
+}
+
+.st-devtools-usage-metadata,
+.st-devtools-usage-capability-list {
+    display: grid;
+    grid-template-columns: minmax(7rem, auto) minmax(0, 1fr);
+    gap: 0.35rem 0.7rem;
+    min-width: 0;
+    margin: 0;
+}
+
+.st-devtools-usage-metadata dt,
+.st-devtools-usage-capability-list dt {
+    opacity: 0.72;
+}
+
+.st-devtools-usage-metadata dd,
+.st-devtools-usage-capability-list dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: break-word;
+}
+
+.st-devtools-usage-capabilities {
+    min-width: 0;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-usage-capabilities > summary {
+    padding-top: 0.65rem;
+    cursor: pointer;
+}
+
+.st-devtools-usage-capability-content {
+    display: grid;
+    gap: 0.65rem;
+    min-width: 0;
+    padding-top: 0.65rem;
+}
+
+.st-devtools-usage-capability-content > p {
+    margin: 0;
+}
+
 .st-devtools-capture-boundary {
     display: block;
     border: 1px solid var(--st-devtools-border);
@@ -2972,4 +3168,34 @@
         min-height: 180px;
     }
 
+}
+
+@media (max-width: 430px) {
+    .st-devtools-settings-header,
+    .st-devtools-pricing-row-heading,
+    .st-devtools-usage-heading {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .st-devtools-pricing-fields,
+    .st-devtools-usage-token-grid,
+    .st-devtools-usage-metadata,
+    .st-devtools-usage-capability-list {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .st-devtools-pricing-row,
+    .st-devtools-usage-card {
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .st-devtools-pricing-add,
+    .st-devtools-pricing-remove {
+        width: 100%;
+        max-width: 100%;
+    }
 }

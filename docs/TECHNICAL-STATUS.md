@@ -1,4 +1,4 @@
-# v0.10.0 기술 구현 현황
+# v0.10.1 기술 구현 현황
 
 ## 구현 완료
 
@@ -6,10 +6,23 @@
 
 - Chat Completion·Text Completion 요청 준비 이벤트를 우선 사용하고 prompt-ready 이벤트를 대체 경계로 사용하는 읽기 전용 캡처
 - 요청 객체 원본을 수정하지 않는 복제, credential·Authorization·URL query 비밀값·PEM 개인 키 정제와 미디어 data URL 생략
-- 생성 lifecycle, 요청 경계, 선택한 생성 소스와 확인할 수 없는 upstream provider를 분리한 스키마 v6
+- 생성 lifecycle, 요청 경계, 선택한 생성 소스와 확인할 수 없는 upstream provider, usage·correlation 개인정보를 분리한 스키마 v7
 - source의 JSON pointer·message index·role·원본 값 범위·최종 문자 범위와 assistant prefill 확정·추정 상태
 - 캐릭터·프리셋·설정 프롬프트·요청 메시지·로어북·tool·멀티모달 소스 분해와 실제 포함 상태
-- v1~v5 레코드의 지연 v6 이전, 성공 레코드만 1회 write-back하고 손상 레코드는 원본 보존
+- v1~v6 레코드의 지연 v7 이전, 성공 레코드만 1회 write-back하고 손상 레코드는 원본 보존
+- generation별 불투명 handle과 개수·수명 제한 ledger에 prompt·request·lore·lifecycle·usage 상태 격리
+- 양쪽의 같은 공개 ID만 정확 연결하고, ID 충돌·한쪽 누락은 실패로 닫으며 id-less prompt→request에만 유형별 FIFO 사용
+
+### Usage·비용과 correlation
+
+- `provider-reported`·`local-estimate`·`unlinked`·`unavailable` 상태와 입력·출력·캐시·합계·근거 이벤트·연결 시각의 엄격한 정규형
+- OpenAI·Anthropic·Google·호환 usage shape의 제한된 parser와 음수·NaN·과대·모순·prototype 오염 거부
+- 새 스냅샷의 로컬 prompt tokenizer 입력 추정과 유효한 `MESSAGE_RECEIVED`의 단일 활성 generation 출력 추정
+- response usage는 같은 공개 ID로만 연결하고 ID가 없거나 모호하면 별도 미연결 상태로 남기며 response FIFO 금지
+- 공식 SillyTavern 공개 이벤트에는 provider response usage와 대응 provider request ID가 없다는 기본 capability matrix
+- provider 직접 보고 비용 또는 사용자의 provider·model·currency 정확 일치 가격 override만 허용하고 내장 가격표 없음
+- lifecycle·usage 후속 쓰기의 snapshot ID·partition 불변 원자적 `updateSnapshot()` 경로
+- v7 이전에서 raw `capture/request.correlationId`와 요청 correlation key를 제거하고 `hadCorrelationId`만 보존
 
 ### 저장 정책과 무결성
 
@@ -67,7 +80,7 @@
 
 ## 검증 범위
 
-### 자동 테스트가 검증하는 것
+### 릴리스 전 자동 검증 대상
 
 - 정책 적용 순서, 보호 항목, 초과 상태, 대규모 경량 인덱스와 stale 미리보기 거부
 - 누락·고아·손상·구버전 중복/충돌 진단과 손상 raw 보존, 복구의 반복 실행 안전성
@@ -77,13 +90,16 @@
 - Worker 성공·오류·timeout·취소·stale 시 종료, cache 상한·만료·원문 없는 key
 - 5,000개 가상 목록 window와 진단 비교의 ID 미노출·출력 상한
 - 캡처 모드별 UI 기능 차단, 설정 preview-first 순서와 origin quota/확장 추정치 구분
+- ledger의 동시 generation·ID 충돌·FIFO 경계·unlinked usage와 atomic snapshot update
+- usage·pricing 상한·정규형·정확 일치와 v1~v6→v7 개인정보 이전
 
-### 결정적 UI 샌드박스가 검증하는 것
+### 릴리스 전 결정적 UI 샌드박스 검토 대상
 
 - 전체 원문·원문 제거본·메타데이터 fixture의 탭별 안내와 사용 불가 기능 차단
 - 보관 정책·privacy mode·저장 도구가 있는 설정/도구 패널의 모바일·데스크톱 배치
 - 저장 실패·임시 메모리·요약 재계산·테마 전환 fixture와 진단 가져오기 성공/거부 상태
 - mixed privacy fixture를 사용하는 archive·safe share·진단 비교 조작 경로
+- usage 상태·비용 출처·capability matrix, 가격 override 추가·삭제·재로드와 모바일 배치
 
 샌드박스는 가짜 저장 backend와 fixture를 사용합니다. 실제 SillyTavern 이벤트, 사용자의 IndexedDB, 브라우저 비공개 모드와 provider 응답을 대신 검증하지 않습니다.
 
@@ -94,6 +110,8 @@
 - 각 privacy mode를 고른 뒤 새로 생성한 Chat/Text Completion 스냅샷의 표시와 기능 제한
 - 전체 backup을 별도 테스트 데이터로 merge·충돌 유지·replace했을 때 새로고침 뒤에도 결과가 유지되는지
 - 실제 provider/model별 구조 provenance, 선택 소스, assistant prefill과 캡처 lifecycle 정확성
+- 단일·동시 generation에서 `MESSAGE_RECEIVED` 출력 추정이 다른 스냅샷에 섞이지 않는지
+- 가격 override의 provider·model·currency 정확 일치, 불일치와 복수 통화 산정 불가 상태
 
 ## 부분 구현 또는 알려진 경계
 
@@ -119,21 +137,15 @@
 
 ### 캡처와 Rule Inspector
 
-- 공개 요청 ID가 없는 동시 생성에서는 프롬프트 유형별 FIFO 경계가 남고 provider 응답 usage는 아직 연결하지 않습니다.
+- 공개 ID가 없는 FIFO는 prompt→request 호환에만 남습니다. 동시 generation의 response usage나 로컬 출력값을 FIFO로 붙이지 않습니다.
+- 공식 SillyTavern 공개 이벤트는 provider response usage와 대응 provider request ID를 제공하지 않으므로 기본 설치의 provider usage·비용은 `unavailable`입니다. 별도 integration이 같은 공개 ID를 제공할 때만 adapter를 사용할 수 있습니다.
+- `MESSAGE_RECEIVED`의 `extra.token_count`는 provider 보고 usage가 아니라 로컬 출력 추정치이며 하나의 활성 generation을 안전하게 고를 수 없으면 미연결 또는 산정 불가로 남습니다.
 - provider 서버가 변환한 최종 HTTP body와 내부 upstream provider는 공개 프런트엔드 이벤트만으로 확정할 수 없습니다.
 - 정적 Rule Inspector는 명시적 언어·형식·역할·포함/금지·이전 지시 무시 표현을 중심으로 하며 자연어 의미 전체를 이해하지 않습니다.
 - 조건·예외의 논리 관계, 말투·정체성·안전·메모리 의미 충돌과 실제 우선순위 승자는 아직 판정하지 않습니다.
 - v0.9.1 이전 스냅샷에는 프리셋·캐릭터·채팅 범위 지문이 없고 v0.9.2 이전 스냅샷에는 구조 provenance가 없습니다.
 
 ## 아직 미구현
-
-### v0.10.1 예정
-
-- generation 단위 session ledger와 pending lore·generation type·취소 상태의 완전한 격리
-- 공개 request ID 기반 request/response 상관관계와 ID가 없을 때의 명시적인 미연결 상태
-- provider 보고 usage, 로컬 추정치와 미연결 usage의 분리
-- provider 보고 비용 또는 출처·기준일이 있는 사용자 가격 override 기반 비용 표시
-- SillyTavern 이벤트 capability matrix와 실제 IndexedDB 통합 시나리오 확대
 
 ### v0.11.0 예정
 
@@ -153,6 +165,5 @@
 
 ## 다음 구현 우선순위
 
-1. v0.10.1에서 요청·응답 상관관계와 usage/cost의 출처를 먼저 고정합니다.
-2. v0.11.0에서 전송 동의·근거 검증·캡처 억제를 갖춘 선택적 AI 분석을 추가합니다.
-3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 체크리스트로 별도 확인합니다.
+1. v0.11.0에서 전송 동의·근거 검증·캡처 억제를 갖춘 선택적 AI 분석을 추가합니다.
+2. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 체크리스트로 별도 확인합니다.

@@ -1,5 +1,32 @@
 # 변경 기록
 
+## 0.10.1 - 2026-07-31
+
+### Generation 상관관계와 lifecycle
+
+- pending prompt·request·lore·lifecycle·usage를 generation별 불투명 handle에 격리하는 크기·수명 제한 session ledger 추가
+- prompt와 request 양쪽에 같은 공개 ID가 있을 때만 정확히 연결하고, 같은 ID 충돌·중복 객체·오래된 session은 실패로 닫히도록 변경
+- 공개 ID가 없는 호환 경로는 prompt→request 연결에만 유형별 FIFO를 사용하고 response usage에는 FIFO를 사용하지 않도록 경계 고정
+- `GENERATION_STARTED`·`GENERATION_STOPPED`·`GENERATION_ENDED`와 중첩 로어북 상태가 동시에 진행되는 generation 사이에서 섞이지 않도록 분리
+- lifecycle과 usage 후속 반영을 스냅샷 ID·저장 partition을 바꿀 수 없는 원자적 `SnapshotStore.updateSnapshot()` 경로로 갱신
+
+### Usage·비용과 공식 이벤트 경계
+
+- OpenAI·Anthropic·Google·호환 응답 형식의 토큰 수를 제한된 정규형으로 변환하는 parser와 음수·NaN·과대·모순값·prototype 오염 거부 추가
+- `provider-reported`·`local-estimate`·`unlinked`·`unavailable` usage, 입력·출력·캐시·합계 토큰, 근거 이벤트·연결 시각을 분리한 컨텍스트 카드 추가
+- 새 스냅샷에 로컬 prompt tokenizer 입력 추정치를 기록하고, 유효한 `MESSAGE_RECEIVED`의 `extra.token_count`를 하나의 활성 generation만 고를 수 있을 때 출력 추정치로 병합
+- 공식 SillyTavern 공개 이벤트에는 provider response usage와 대응 provider request ID가 없음을 capability matrix와 UI 설명에 명시
+- 별도 integration이 같은 공개 ID를 제공할 때만 provider usage를 연결할 수 있는 adapter를 마련하되 기본 설치에서 provider usage를 추측하지 않음
+- provider가 직접 보고한 비용 또는 사용자가 입력한 provider·model·currency 정확 일치 단가만 계산하고 내장 가격표·통화 자동 선택·유사 model 추측을 금지
+
+### 스키마 v7과 개인정보
+
+- 스냅샷 스키마를 v7로 올리고 정규화된 usage와 비용 출처를 추가
+- v1~v6 지연 이전에서 구버전 `stats.totalTokens`만 입력 전용 `legacy-snapshot-token-count` 로컬 추정치로 보존하고 출력·캐시·provider 비용은 산정 불가로 유지
+- 저장된 `capture.correlationId`·`request.correlationId`와 요청 본문의 알려진 상관관계 키를 제거하고 `hadCorrelationId` boolean만 보존
+- 일반 도메인의 `id`와 상관관계 컨테이너 밖의 동명 필드는 제거하지 않는 제한된 scrubber 적용
+- full·redacted·metadata와 archive 이전에서 usage 정규형을 검증하고 raw 요청·응답·공개 ID를 새 필드에 보존하지 않음
+
 ## 0.10.0 - 2026-07-31
 
 ### 저장 정책과 복구

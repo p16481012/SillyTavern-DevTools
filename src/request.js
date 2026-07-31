@@ -173,6 +173,32 @@ export function extractRequestCorrelationId(value) {
     return null;
 }
 
+export function stripRequestCorrelationIds(value) {
+    const seen = new WeakMap();
+    const visit = (current, { root = false, correlationContainer = false } = {}) => {
+        if (current == null || typeof current !== 'object') return current;
+        if (seen.has(current)) return seen.get(current);
+        if (Array.isArray(current)) {
+            const clone = [];
+            seen.set(current, clone);
+            for (const item of current) clone.push(visit(item));
+            return clone;
+        }
+        const clone = {};
+        seen.set(current, clone);
+        for (const [key, item] of Object.entries(current)) {
+            if ((root || correlationContainer) && CORRELATION_KEYS.includes(key)) {
+                continue;
+            }
+            clone[key] = visit(item, {
+                correlationContainer: CORRELATION_CONTAINERS.includes(key),
+            });
+        }
+        return clone;
+    };
+    return visit(value, { root: true });
+}
+
 export function extractPromptPayload(requestBody, promptType, fallbackPayload) {
     if (requestBody && typeof requestBody === 'object') {
         if (promptType === 'chat-completion') {
@@ -207,17 +233,22 @@ export function createRequestRecord(requestBody) {
             redactedPaths: [],
             omittedMediaPaths: [],
             correlationId: null,
+            hadCorrelationId: false,
         };
     }
 
-    const { body, redactedPaths, omittedMediaPaths } = sanitizeRequestBody(requestBody);
+    const correlationId = extractRequestCorrelationId(requestBody);
+    const sanitized = sanitizeRequestBody(requestBody);
+    const body = stripRequestCorrelationIds(sanitized.body);
+    const { redactedPaths, omittedMediaPaths } = sanitized;
     return {
         body,
         settings: extractRequestSettings(body),
         bodyKeys: Array.isArray(body) ? [] : Object.keys(body),
         redactedPaths,
         omittedMediaPaths,
-        correlationId: extractRequestCorrelationId(requestBody),
+        correlationId: null,
+        hadCorrelationId: Boolean(correlationId),
     };
 }
 
@@ -228,6 +259,7 @@ export function createCaptureBoundary({
     fallback = false,
     migratedFrom = null,
     correlationId = null,
+    hadCorrelationId = false,
     correlationMethod = null,
     requestStatus = null,
     generationStatus = 'unknown',
@@ -242,7 +274,8 @@ export function createCaptureBoundary({
         clientBackendRequestCaptured: stage === 'backend-request-ready',
         serverTransformationsIncluded: false,
         migratedFrom,
-        correlationId,
+        correlationId: null,
+        hadCorrelationId: Boolean(hadCorrelationId || correlationId),
         correlationMethod: correlationMethod ?? (fallback ? 'prompt-only' : 'fifo'),
         requestStatus: requestStatus ?? (
             requestBodyAvailable

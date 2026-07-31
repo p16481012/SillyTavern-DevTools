@@ -27,6 +27,7 @@ const requestedSourceCount = fixtureCount('sourceCount', 2, 5_000);
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     const provider = additions.provider ?? additions.chatCompletionSource ?? 'openai';
     const model = additions.model ?? 'gpt-4o';
+    const outputTokens = additions.outputTokens ?? 96;
     const koreanInstruction = additions.koreanInstruction ?? '반드시 한국어로 답변하세요.';
     const japaneseInstruction = 'Always respond in Japanese.';
     const englishInstruction = 'Always respond in English.';
@@ -53,8 +54,8 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
         assistantPrefill,
     ].join('\n');
     return {
-        schemaVersion: 6,
-        extensionVersion: '0.10.0',
+        schemaVersion: 7,
+        extensionVersion: '0.10.1',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -125,7 +126,8 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
             stage: 'backend-request-ready',
             fallback: false,
             correlationMethod: additions.correlationMethod ?? 'fifo',
-            correlationId: additions.correlationId ?? null,
+            correlationId: null,
+            hadCorrelationId: Boolean(additions.correlationId),
             requestStatus: additions.requestStatus ?? 'captured',
             generationStatus: additions.generationStatus ?? 'ended',
             statusEvent: additions.statusEvent ?? 'GENERATION_ENDED',
@@ -146,6 +148,8 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
             bodyKeys: ['model', 'messages', 'tools'],
             redactedPaths: ['api_key'],
             omittedMediaPaths: ['messages[1].content[0].image_url.url'],
+            correlationId: null,
+            hadCorrelationId: Boolean(additions.correlationId),
         },
         sources: [
             {
@@ -509,6 +513,22 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
             },
         ],
         lorebookEntries: additions.lorebookEntries ?? [],
+        usage: {
+            status: 'local-estimate',
+            inputTokens: totalTokens,
+            outputTokens,
+            cachedInputTokens: null,
+            totalTokens: totalTokens + outputTokens,
+            sourceEvent: 'message-received',
+            correlatedAt: timestamp,
+            cost: {
+                status: 'unavailable',
+                amount: null,
+                currency: null,
+                priceSource: null,
+                priceAsOf: null,
+            },
+        },
         stats: {
             totalTokens,
             maxContext: 4096,
@@ -675,6 +695,13 @@ function applyStressSources(snapshot, count) {
         },
     ];
     snapshot.stats.totalTokens = snapshot.sources.at(-1).tokenCount;
+    if (snapshot.usage?.status === 'local-estimate') {
+        snapshot.usage.inputTokens = snapshot.stats.totalTokens;
+        snapshot.usage.totalTokens = (
+            snapshot.stats.totalTokens
+            + (Number(snapshot.usage.outputTokens) || 0)
+        );
+    }
     snapshot.stats.contextUsage = Math.min(
         1,
         snapshot.stats.totalTokens / snapshot.stats.usableContext,
@@ -1177,6 +1204,21 @@ const context = {
     getCurrentChatId: () => 'sandbox',
     chatId: 'sandbox',
 };
+const sandboxPricingKey = 'st-devtools:pricing-overrides:v1';
+if (localStorage.getItem(sandboxPricingKey) == null) {
+    localStorage.setItem(sandboxPricingKey, JSON.stringify({
+        version: 1,
+        entries: [{
+            provider: 'claude',
+            model: 'claude-sonnet-4',
+            currency: 'USD',
+            inputPerMillion: 3,
+            outputPerMillion: 15,
+            cachedInputPerMillion: 1.5,
+            priceAsOf: '2026-07-31',
+        }],
+    }));
+}
 if (requestedFixtureSize != null) {
     localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
         ...DEFAULT_UI_PREFERENCES,
@@ -1188,9 +1230,9 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.10.0',
+    version: '0.10.1',
 });
-document.body.dataset.fixtureSchema = '6';
+document.body.dataset.fixtureSchema = '7';
 document.body.dataset.fixtureSize = String(timeline.length);
 document.body.dataset.sourceCount = String(
     timeline.find((snapshot) => (snapshot.privacy?.mode ?? 'full') === 'full')
@@ -1209,6 +1251,8 @@ document.body.dataset.fixtureFeatures = [
     'metadata-diff',
     'lore-changed',
     'corrupt-warning',
+    'usage-local-estimate',
+    'pricing-user-override',
     'privacy-redacted',
     'privacy-metadata',
     'retention-policy',
@@ -1281,7 +1325,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.10.0',
+        extensionVersion: '0.10.1',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,

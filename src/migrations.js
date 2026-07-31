@@ -11,12 +11,36 @@ import {
     MAX_PROVENANCE_LOCATIONS,
     normalizeProvenanceLocation,
 } from './provenance.js';
-import { createCaptureBoundary, createRequestRecord } from './request.js';
+import {
+    createLocalEstimatedUsage,
+    createUnavailableUsage,
+    MAX_USAGE_TOKENS,
+    normalizeUsageRecord,
+} from './provider-usage.js';
+import {
+    createCaptureBoundary,
+    createRequestRecord,
+    stripRequestCorrelationIds,
+} from './request.js';
 
 const SCHEMA_V5 = 5;
+const SCHEMA_V6 = 6;
+const SCHEMA_V7 = 7;
 const MAX_JSON_POINTER_LENGTH = 1_024;
 const MAX_PROVENANCE_ROLE_LENGTH = 64;
 const MAX_PROVENANCE_LOCATION_COUNT = 100_000;
+const MAX_CORRELATED_AT = 8_640_000_000_000_000;
+const REQUEST_CORRELATION_KEYS = [
+    'request_id',
+    'requestId',
+    'generation_id',
+    'generationId',
+    'completion_id',
+    'completionId',
+    'response_id',
+    'responseId',
+];
+const REQUEST_CORRELATION_CONTAINERS = ['metadata', 'meta', '_meta', 'request_metadata'];
 
 export class SnapshotMigrationError extends Error {
     constructor(code, message) {
@@ -190,7 +214,66 @@ function providerEvidencePointersAreValid(snapshot) {
     ));
 }
 
-function assertMigratableSnapshot(snapshot, { validateV6 = false } = {}) {
+function usageRecordsEqual(left, right) {
+    const usageKeys = [
+        'status',
+        'inputTokens',
+        'outputTokens',
+        'cachedInputTokens',
+        'totalTokens',
+        'sourceEvent',
+        'correlatedAt',
+    ];
+    const costKeys = ['status', 'amount', 'currency', 'priceSource', 'priceAsOf'];
+    return usageKeys.every((key) => left?.[key] === right?.[key])
+        && costKeys.every((key) => left?.cost?.[key] === right?.cost?.[key]);
+}
+
+function hasKnownRequestCorrelationId(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (REQUEST_CORRELATION_KEYS.some((key) => Object.hasOwn(value, key))) return true;
+    return REQUEST_CORRELATION_CONTAINERS.some((containerKey) => {
+        const container = value[containerKey];
+        return container
+            && typeof container === 'object'
+            && !Array.isArray(container)
+            && REQUEST_CORRELATION_KEYS.some((key) => Object.hasOwn(container, key));
+    });
+}
+
+function assertV7UsageAndCorrelation(snapshot) {
+    let normalizedUsage;
+    try {
+        normalizedUsage = normalizeUsageRecord(snapshot.usage);
+    } catch {
+        throw new SnapshotMigrationError(
+            'invalid-usage',
+            'Snapshot usage is not a canonical v7 usage record.',
+        );
+    }
+    if (!usageRecordsEqual(normalizedUsage, snapshot.usage)) {
+        throw new SnapshotMigrationError(
+            'invalid-usage',
+            'Snapshot usage is not a canonical v7 usage record.',
+        );
+    }
+    if (
+        (snapshot.capture && snapshot.capture.correlationId !== null)
+        || (snapshot.request && snapshot.request.correlationId !== null)
+        || hasKnownRequestCorrelationId(snapshot.request?.body)
+        || hasKnownRequestCorrelationId(snapshot.request?.settings)
+    ) {
+        throw new SnapshotMigrationError(
+            'raw-correlation-id',
+            'Snapshot contains a raw request correlation identifier.',
+        );
+    }
+}
+
+function assertMigratableSnapshot(snapshot, {
+    validateV6 = false,
+    validateV7 = false,
+} = {}) {
     if (snapshot.finalText != null && typeof snapshot.finalText !== 'string') {
         throw new SnapshotMigrationError(
             'invalid-final-text',
@@ -264,6 +347,7 @@ function assertMigratableSnapshot(snapshot, { validateV6 = false } = {}) {
             'Snapshot provider trace evidence pointers are invalid.',
         );
     }
+    if (validateV7) assertV7UsageAndCorrelation(snapshot);
 }
 
 function legacySourceProvenance(attribution, templateMatch) {
@@ -396,7 +480,7 @@ function legacyProviderTrace(snapshot) {
 
 export function migrateV5ToV6(snapshot, originalVersion = Number(snapshot?.schemaVersion) || 5) {
     assertMigratableSnapshot(snapshot);
-    if ((Number(snapshot.schemaVersion) || 1) >= SNAPSHOT_SCHEMA_VERSION) return snapshot;
+    if ((Number(snapshot.schemaVersion) || 1) >= SCHEMA_V6) return snapshot;
 
     const sources = (snapshot.sources ?? []).map((source) => {
         const metadata = source.type === 'assistant_prefill'
@@ -422,7 +506,7 @@ export function migrateV5ToV6(snapshot, originalVersion = Number(snapshot?.schem
 
     return {
         ...snapshot,
-        schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+        schemaVersion: SCHEMA_V6,
         capture: snapshot.capture
             ? {
                 ...snapshot.capture,
@@ -434,6 +518,78 @@ export function migrateV5ToV6(snapshot, originalVersion = Number(snapshot?.schem
     };
 }
 
+function legacyUsage(snapshot) {
+    const totalTokens = snapshot.stats?.totalTokens;
+    const correlatedAt = Number.isSafeInteger(snapshot.timestamp)
+        && snapshot.timestamp >= 0
+        && snapshot.timestamp <= MAX_CORRELATED_AT
+        ? snapshot.timestamp
+        : null;
+    if (
+        Number.isSafeInteger(totalTokens)
+        && totalTokens >= 0
+        && totalTokens <= MAX_USAGE_TOKENS
+    ) {
+        return createLocalEstimatedUsage({
+            inputTokens: totalTokens,
+            outputTokens: null,
+            cachedInputTokens: null,
+            totalTokens: null,
+        }, {
+            sourceEvent: 'legacy-snapshot-token-count',
+            correlatedAt,
+        });
+    }
+    return createUnavailableUsage();
+}
+
+function migratedRequest(request) {
+    if (!request) return request;
+    const hasBody = Object.hasOwn(request, 'body');
+    const hasSettings = Object.hasOwn(request, 'settings');
+    const body = hasBody ? stripRequestCorrelationIds(request.body) : undefined;
+    const settings = hasSettings ? stripRequestCorrelationIds(request.settings) : undefined;
+    return {
+        ...request,
+        ...(hasBody ? { body } : {}),
+        ...(hasSettings ? { settings } : {}),
+        ...(hasBody ? {
+            bodyKeys: body && typeof body === 'object' && !Array.isArray(body)
+                ? Object.keys(body)
+                : [],
+        } : {}),
+        correlationId: null,
+        hadCorrelationId: Boolean(request.hadCorrelationId || request.correlationId),
+    };
+}
+
+export function migrateV6ToV7(snapshot) {
+    assertMigratableSnapshot(snapshot, { validateV6: true });
+    if ((Number(snapshot.schemaVersion) || 1) >= SCHEMA_V7) return snapshot;
+    const migrated = {
+        ...snapshot,
+        schemaVersion: SCHEMA_V7,
+        ...(snapshot.capture !== undefined ? {
+            capture: snapshot.capture
+                ? {
+                    ...snapshot.capture,
+                    correlationId: null,
+                    hadCorrelationId: Boolean(
+                        snapshot.capture.hadCorrelationId
+                        || snapshot.capture.correlationId,
+                    ),
+                }
+                : snapshot.capture,
+        } : {}),
+        ...(snapshot.request !== undefined
+            ? { request: migratedRequest(snapshot.request) }
+            : {}),
+        usage: legacyUsage(snapshot),
+    };
+    assertMigratableSnapshot(migrated, { validateV6: true, validateV7: true });
+    return migrated;
+}
+
 export function migrateSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
         return snapshot;
@@ -441,7 +597,7 @@ export function migrateSnapshot(snapshot) {
     const version = Number(snapshot.schemaVersion) || 1;
     if (version >= SNAPSHOT_SCHEMA_VERSION) {
         if (version === SNAPSHOT_SCHEMA_VERSION) {
-            assertMigratableSnapshot(snapshot, { validateV6: true });
+            assertMigratableSnapshot(snapshot, { validateV6: true, validateV7: true });
         }
         return snapshot;
     }
@@ -450,10 +606,13 @@ export function migrateSnapshot(snapshot) {
     if (version < SCHEMA_V5) {
         migrated = migrateV4ToV5(migrated, version);
     }
-    if ((Number(migrated.schemaVersion) || 1) < SNAPSHOT_SCHEMA_VERSION) {
+    if ((Number(migrated.schemaVersion) || 1) < SCHEMA_V6) {
         migrated = migrateV5ToV6(migrated, version);
     }
-    assertMigratableSnapshot(migrated, { validateV6: true });
+    if ((Number(migrated.schemaVersion) || 1) < SCHEMA_V7) {
+        migrated = migrateV6ToV7(migrated);
+    }
+    assertMigratableSnapshot(migrated, { validateV6: true, validateV7: true });
     return migrated;
 }
 
