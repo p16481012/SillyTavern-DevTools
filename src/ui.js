@@ -552,6 +552,8 @@ export class DevToolsWindow {
             manual: false,
             preview: false,
         };
+        this.instructionModelOpen = false;
+        this.instructionAtomsOpen = false;
         this.timelineSnapshotsOpen = false;
         this.previouslyFocused = null;
         this.settingsPreviouslyFocused = null;
@@ -4292,6 +4294,281 @@ export class DevToolsWindow {
         return details;
     }
 
+    renderInstructionModel(model) {
+        const details = element('details', {
+            className: 'st-devtools-instruction-model',
+        });
+        details.open = this.instructionModelOpen;
+        details.addEventListener('toggle', () => {
+            this.instructionModelOpen = details.open;
+        });
+
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('rules.v3.title'),
+            t('rules.v3.description'),
+        ));
+        const stats = model?.stats ?? {};
+        summary.append(
+            element('span', {
+                className: 'st-devtools-instruction-count',
+                text: t('rules.v3.atomCount', { count: stats.atoms ?? 0 }),
+            }),
+            element('span', {
+                className: 'st-devtools-instruction-count',
+                text: t('rules.v3.relationCount', {
+                    count: model?.relations?.length ?? 0,
+                }),
+            }),
+        );
+        if ((model?.alerts?.length ?? 0) > 0) {
+            summary.appendChild(element('span', {
+                className: 'st-devtools-instruction-count',
+                text: t('rules.v3.alertCount', {
+                    count: model.alerts.length,
+                }),
+            }));
+        }
+        details.appendChild(summary);
+
+        const content = element('div', {
+            className: 'st-devtools-instruction-content',
+        });
+        const overview = element('div', {
+            className: 'st-devtools-instruction-overview',
+        });
+        overview.append(
+            element('span', {
+                text: t('rules.v3.instructionSources', {
+                    count: stats.instructionSources ?? 0,
+                }),
+            }),
+            element('span', {
+                text: t('rules.v3.referenceSources', {
+                    count: stats.referenceSources ?? 0,
+                }),
+            }),
+            element('span', {
+                className: 'determination-confirmed',
+                text: `${t('rules.determination.confirmed')} ${
+                    stats.confirmedRelations ?? 0
+                }`,
+            }),
+            element('span', {
+                className: 'determination-candidate',
+                text: `${t('rules.determination.candidate')} ${
+                    stats.candidateRelations ?? 0
+                }`,
+            }),
+            element('span', {
+                className: 'determination-insufficient-evidence',
+                text: `${t('rules.determination.insufficient-evidence')} ${
+                    stats.insufficientRelations ?? 0
+                }`,
+            }),
+        );
+        content.appendChild(overview);
+        if (
+            stats.atomsTruncated
+            || stats.relationsTruncated
+            || stats.alertsTruncated
+        ) {
+            content.appendChild(proseElement(
+                'p',
+                t('rules.v3.analysisLimited'),
+                { className: 'st-devtools-instruction-limit' },
+            ));
+        }
+
+        const capabilities = element('details', {
+            className: 'st-devtools-instruction-section',
+        });
+        const capabilitySummary = element('summary');
+        capabilitySummary.appendChild(explainedTitle(
+            t('rules.v3.capabilityTitle'),
+            t('rules.v3.capabilityDescription'),
+            { titleTag: 'span' },
+        ));
+        capabilities.appendChild(capabilitySummary);
+        const capabilityCounts = new Map();
+        let inactiveCapabilityCount = 0;
+        for (const capability of model?.capabilities ?? []) {
+            const key = capability.kind ?? 'mixed';
+            capabilityCounts.set(key, (capabilityCounts.get(key) ?? 0) + 1);
+            if (!capability.active) inactiveCapabilityCount += 1;
+        }
+        const capabilityList = element('div', {
+            className: 'st-devtools-instruction-capabilities',
+        });
+        for (const [kind, count] of capabilityCounts) {
+            capabilityList.appendChild(element('span', {
+                text: t('rules.v3.capabilityItem', {
+                    kind: t(`rules.capability.${kind}`),
+                    count,
+                }),
+            }));
+        }
+        if (inactiveCapabilityCount > 0) {
+            capabilityList.appendChild(element('span', {
+                text: t('rules.v3.capabilityItem', {
+                    kind: t('rules.capability.inactive'),
+                    count: inactiveCapabilityCount,
+                }),
+            }));
+        }
+        capabilities.appendChild(capabilityList);
+        content.appendChild(capabilities);
+
+        const atoms = element('details', {
+            className: 'st-devtools-instruction-section',
+        });
+        atoms.open = this.instructionAtomsOpen;
+        atoms.addEventListener('toggle', () => {
+            this.instructionAtomsOpen = atoms.open;
+        });
+        const atomSummary = element('summary');
+        atomSummary.appendChild(explainedTitle(
+            `${t('rules.v3.atomTitle')} · ${model?.atoms?.length ?? 0}`,
+            t('rules.v3.atomDescription'),
+            { titleTag: 'span' },
+        ));
+        atoms.appendChild(atomSummary);
+        attachLazyDetailsContent(atoms, () => {
+            const atomList = element('div', {
+                className: 'st-devtools-instruction-atoms',
+            });
+            if ((model?.atoms?.length ?? 0) === 0) {
+                atomList.appendChild(proseElement('p', t('rules.v3.noAtoms')));
+            }
+            const visibleAtoms = (model?.atoms ?? []).slice(0, 100);
+            if ((model?.atoms?.length ?? 0) > visibleAtoms.length) {
+                atomList.appendChild(proseElement(
+                    'p',
+                    t('rules.v3.displayLimited', {
+                        total: model.atoms.length,
+                        shown: visibleAtoms.length,
+                    }),
+                    { className: 'st-devtools-instruction-limit' },
+                ));
+            }
+            for (const atom of visibleAtoms) {
+                const card = element('article', {
+                    className: `st-devtools-instruction-atom determination-${
+                        atom.status
+                    }`,
+                });
+                const header = element('header');
+                header.append(
+                    element('strong', {
+                        text: t('rules.v3.atomHeading', {
+                            property: translatedValue(
+                                `rules.property.${atom.property}`,
+                                atom.property,
+                            ),
+                            value: atom.valueLabel ?? atom.value,
+                        }),
+                    }),
+                    element('span', {
+                        className: 'st-devtools-determination',
+                        text: t(`rules.determination.${atom.status}`),
+                    }),
+                );
+                const metadata = element('div', {
+                    className: 'st-devtools-instruction-atom-meta',
+                });
+                metadata.append(
+                    element('span', {
+                        text: t('rules.v3.atomSource', {
+                            source: atom.sourceLabel ?? atom.sourceId,
+                        }),
+                    }),
+                    element('span', {
+                        text: t('rules.v3.atomPolarity', {
+                            polarity: t(`rules.polarity.${atom.polarity}`),
+                            scope: translatedValue(
+                                `rules.scope.${atom.scope}`,
+                                atom.scope,
+                            ),
+                        }),
+                    }),
+                    element('span', {
+                        text: t('rules.v3.atomContext', {
+                            role: atom.sourceRole ?? t('common.unknown'),
+                            position: atom.position ?? t('common.unknown'),
+                            depth: atom.depth ?? t('common.unknown'),
+                        }),
+                    }),
+                    element('span', {
+                        text: t('rules.v3.atomTargetAction', {
+                            target: translatedValue(
+                                `rules.target.${atom.target}`,
+                                atom.target,
+                            ),
+                            action: translatedValue(
+                                `rules.action.${atom.action}`,
+                                atom.action,
+                            ),
+                            priority: translatedValue(
+                                `rules.priority.${atom.priority}`,
+                                atom.priority,
+                            ),
+                        }),
+                    }),
+                    element('span', {
+                        text: t('rules.v3.atomLocation', {
+                            start: atom.localRange?.start ?? 0,
+                            end: atom.localRange?.end ?? 0,
+                            count: atom.finalRanges?.length ?? 0,
+                            method: translatedValue(
+                                `rules.range.${atom.rangeMethod}`,
+                                atom.rangeMethod,
+                            ),
+                        }),
+                    }),
+                );
+                card.append(header, metadata);
+                if (atom.condition) {
+                    card.appendChild(proseElement('p', t('rules.v3.condition', {
+                        value: atom.condition,
+                    })));
+                }
+                if (atom.exception) {
+                    card.appendChild(proseElement('p', t('rules.v3.exception', {
+                        value: atom.exception,
+                    })));
+                }
+                card.appendChild(element('small', {
+                    text: t('rules.v3.methodConfidence', {
+                        method: atom.method,
+                        confidence: Math.round((Number(atom.confidence) || 0) * 100),
+                    }),
+                }));
+                const evidence = element('details', {
+                    className: 'st-devtools-instruction-atom-evidence',
+                });
+                const evidenceSummary = element('summary');
+                evidenceSummary.appendChild(explainedTitle(
+                    t('rules.v3.atomEvidence'),
+                    t('rules.v3.atomEvidenceDescription'),
+                    { titleTag: 'span' },
+                ));
+                evidence.append(
+                    evidenceSummary,
+                    element('pre', { text: atom.text }),
+                    element('small', {
+                        text: t('rules.v3.atomSourceId', { id: atom.sourceId }),
+                    }),
+                );
+                card.appendChild(evidence);
+                atomList.appendChild(card);
+            }
+            return atomList;
+        });
+        content.appendChild(atoms);
+        details.appendChild(content);
+        return details;
+    }
+
     renderRules(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         page.append(
@@ -4306,12 +4583,26 @@ export class DevToolsWindow {
         );
         const findings = analysis?.findings ?? [];
         page.appendChild(this.renderComparisonAnalysis(snapshot, analysis?.comparison));
+        page.appendChild(this.renderInstructionModel(analysis?.instructions));
         const counts = findings.reduce((result, item) => {
             if (Object.prototype.hasOwnProperty.call(result, item.severity)) {
                 result[item.severity] += 1;
             }
             return result;
         }, { critical: 0, warning: 0, info: 0 });
+        const determinations = findings.reduce((result, item) => {
+            if (item.determination && Object.prototype.hasOwnProperty.call(
+                result,
+                item.determination,
+            )) {
+                result[item.determination] += 1;
+            }
+            return result;
+        }, {
+            confirmed: 0,
+            candidate: 0,
+            'insufficient-evidence': 0,
+        });
 
         const summary = element('div', { className: 'st-devtools-rule-summary' });
         summary.append(
@@ -4329,6 +4620,18 @@ export class DevToolsWindow {
             }),
         );
         page.appendChild(summary);
+        if (Object.values(determinations).some((count) => count > 0)) {
+            const determinationSummary = element('div', {
+                className: 'st-devtools-rule-determination-summary',
+            });
+            for (const [status, count] of Object.entries(determinations)) {
+                determinationSummary.appendChild(element('span', {
+                    className: `st-devtools-determination determination-${status}`,
+                    text: `${t(`rules.determination.${status}`)} ${count}`,
+                }));
+            }
+            page.appendChild(determinationSummary);
+        }
 
         if (findings.length === 0) {
             const empty = element('div', { className: 'st-devtools-rule-empty' });
@@ -4352,6 +4655,11 @@ export class DevToolsWindow {
         }
 
         const list = element('div', { className: 'st-devtools-rule-list' });
+        const clusterById = new Map(
+            (analysis?.instructions?.clusters ?? []).map(
+                (cluster) => [cluster.id, cluster],
+            ),
+        );
         for (const item of findings) {
             const card = element('article', {
                 className: `st-devtools-rule-card severity-${item.severity}`,
@@ -4366,7 +4674,47 @@ export class DevToolsWindow {
                 }),
                 element('strong', { text: item.title }),
             );
+            if (item.determination) {
+                header.appendChild(element('span', {
+                    className: `st-devtools-determination determination-${
+                        item.determination
+                    }`,
+                    text: t(`rules.determination.${item.determination}`),
+                }));
+            }
             card.append(header, proseElement('p', item.message));
+            if (item.determination) {
+                const metadata = element('div', {
+                    className: 'st-devtools-rule-finding-meta',
+                });
+                metadata.appendChild(element('small', {
+                    text: t('rules.v3.findingMeta', {
+                        determination: t(
+                            `rules.determination.${item.determination}`,
+                        ),
+                        method: item.method,
+                        confidence: Math.round(
+                            (Number(item.confidence) || 0) * 100,
+                        ),
+                    }),
+                }));
+                if (item.clusterId) {
+                    const cluster = clusterById.get(item.clusterId);
+                    metadata.appendChild(element('small', {
+                        text: cluster
+                            ? t('rules.v3.cluster', {
+                                category: translatedValue(
+                                    `rules.setting.${cluster.category}`,
+                                    cluster.category,
+                                ),
+                                atoms: cluster.atomIds.length,
+                                relations: cluster.relationIds.length,
+                            })
+                            : item.clusterId,
+                    }));
+                }
+                card.appendChild(metadata);
+            }
             if (item.evidence) {
                 const evidence = element('details', { className: 'st-devtools-rule-evidence' });
                 const evidenceTitle = t(item.ruleId === 'unmatched'

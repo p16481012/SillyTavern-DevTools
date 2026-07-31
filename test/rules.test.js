@@ -153,12 +153,14 @@ test('rule inspector flags incompatible output formats and large sources', () =>
 
 test('role conflict detection scans past repeated declarations', () => {
     const finalText = [
-        ...Array.from({ length: 20 }, () => 'You are a helpful assistant.'),
-        'You are a pirate.',
+        ...Array.from({ length: 20 }, () => 'You are a pirate captain.'),
+        'You are a medieval doctor.',
     ].join('\n');
     const findings = analyzeSnapshot(snapshot({ finalText }));
 
-    assert.equal(findings.find(({ id }) => id === 'role-conflict')?.severity, 'info');
+    const role = findings.find(({ id }) => id === 'role-conflict');
+    assert.equal(role?.severity, 'info');
+    assert.equal(role?.determination, 'insufficient-evidence');
 });
 
 test('rule settings normalize invalid thresholds and disable individual checks', () => {

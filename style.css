@@ -1473,6 +1473,194 @@
     gap: 0.55rem;
 }
 
+.st-devtools-instruction-model {
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 6px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-instruction-model > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.65rem 0.75rem;
+    cursor: pointer;
+}
+
+.st-devtools-instruction-model > summary > .st-devtools-explained-title {
+    min-width: min(16rem, 100%);
+    flex: 1;
+}
+
+.st-devtools-instruction-count {
+    display: inline-flex;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.st-devtools-instruction-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 0.75rem;
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-instruction-overview,
+.st-devtools-instruction-capabilities,
+.st-devtools-rule-determination-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.st-devtools-instruction-overview > span,
+.st-devtools-instruction-capabilities > span {
+    padding: 0.28rem 0.5rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 4px;
+    background: var(--st-devtools-surface);
+    font-size: 0.82rem;
+}
+
+.st-devtools-instruction-section {
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 5px;
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-instruction-section > summary {
+    padding: 0.55rem 0.65rem;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.st-devtools-instruction-capabilities,
+.st-devtools-instruction-atoms {
+    padding: 0.65rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-instruction-atoms {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.st-devtools-instruction-atoms > p {
+    margin: 0;
+}
+
+.st-devtools-instruction-limit {
+    margin: 0;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--st-devtools-status-warning);
+    border-radius: 5px;
+    color: var(--st-devtools-text);
+    background: color-mix(
+        in srgb,
+        var(--st-devtools-status-warning) 12%,
+        var(--st-devtools-surface)
+    );
+}
+
+.st-devtools-instruction-atom {
+    --determination-color: var(--st-devtools-border);
+    padding: 0.65rem;
+    border: 1px solid var(--st-devtools-border);
+    border-left: 4px solid var(--determination-color);
+    border-radius: 5px;
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-instruction-atom > header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.st-devtools-instruction-atom > header > strong {
+    min-width: min(14rem, 100%);
+    flex: 1;
+}
+
+.st-devtools-instruction-atom > p {
+    margin: 0.45rem 0 0;
+}
+
+.st-devtools-instruction-atom > small {
+    display: block;
+    margin-top: 0.5rem;
+    opacity: 0.72;
+}
+
+.st-devtools-instruction-atom-evidence {
+    margin-top: 0.55rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-instruction-atom-evidence > summary {
+    padding: 0.5rem 0 0;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.st-devtools-instruction-atom-evidence > pre {
+    max-width: 100%;
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    overflow-x: auto;
+    border-radius: 4px;
+    background: var(--st-devtools-surface);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.st-devtools-instruction-atom-evidence > small {
+    display: block;
+    overflow-wrap: anywhere;
+    opacity: 0.72;
+}
+
+.st-devtools-instruction-atom-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 0.3rem 0.65rem;
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    opacity: 0.78;
+}
+
+.determination-confirmed {
+    --determination-color: var(--st-devtools-status-success);
+}
+
+.determination-candidate {
+    --determination-color: var(--st-devtools-status-warning);
+}
+
+.determination-insufficient-evidence {
+    --determination-color: var(--st-devtools-status-info);
+}
+
+.st-devtools-determination {
+    display: inline-flex;
+    padding: 0.18rem 0.48rem;
+    border: 1px solid var(--determination-color);
+    border-radius: 999px;
+    color: var(--determination-color);
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
 .st-devtools-rule-settings {
     border: 1px solid var(--st-devtools-border);
     border-radius: 6px;
@@ -1843,13 +2031,31 @@
 }
 
 .st-devtools-rule-card > header {
+    flex-wrap: wrap;
     display: flex;
     align-items: center;
     gap: 0.6rem;
 }
 
+.st-devtools-rule-card > header > strong {
+    min-width: min(14rem, 100%);
+    flex: 1;
+}
+
 .st-devtools-rule-card > p {
     margin: 0.65rem 0 0;
+}
+
+.st-devtools-rule-finding-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.8rem;
+    margin-top: 0.55rem;
+    opacity: 0.72;
+}
+
+.st-devtools-rule-finding-meta small:last-child {
+    overflow-wrap: anywhere;
 }
 
 .st-devtools-rule-actions {

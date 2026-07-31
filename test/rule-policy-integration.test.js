@@ -143,14 +143,18 @@ test('alternative members still compare with a prompt outside their group', () =
         templatePolicy(),
     );
 
-    const language = analysis.findings.find(({ id }) => id === 'language-conflict');
-    assert.equal(language?.severity, 'critical');
+    const language = analysis.findings.filter(({ ruleId }) => ruleId === 'language');
+    assert.equal(language.length, 2);
+    assert.equal(language.every(({ severity }) => severity === 'critical'), true);
     assert.deepEqual(
-        new Set(language?.sourceIds),
+        new Set(language.flatMap(({ sourceIds }) => sourceIds)),
         new Set(['utility:ko', 'utility:en', 'request:external']),
     );
+    assert.equal(language.every(({ sourceIds }) => sourceIds.length === 2), true);
     assert.equal(analysis.comparison.suppressedComparisons.length, 1);
-    assert.equal(language?.finalRanges.length, 3);
+    assert.equal(language.every(({ finalRanges }) => finalRanges.length === 2), true);
+    assert.equal(analysis.instructions.relations.length, 2);
+    assert.equal(analysis.instructions.clusters.length, 1);
 });
 
 test('manual assignments support arbitrary naming and override name parsing', () => {

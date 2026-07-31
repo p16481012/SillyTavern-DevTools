@@ -174,7 +174,7 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });
 
-test('v0.8.12 safety and theme controls remain responsive', async () => {
+test('v0.9.0 safety and theme controls remain responsive', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');

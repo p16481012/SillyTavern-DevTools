@@ -1,0 +1,122 @@
+[
+  {
+    "id": "unconditional-language-conflict",
+    "sources": [
+      { "id": "ko", "type": "system", "content": "반드시 한국어로 답변하세요." },
+      { "id": "en", "type": "extension", "content": "Always respond in English." }
+    ],
+    "expectedRelations": ["language:confirmed"]
+  },
+  {
+    "id": "conditional-language-branches",
+    "sources": [
+      { "id": "ja", "type": "system", "content": "사용자가 일본인인 경우 일본어로 답변하세요." },
+      { "id": "en", "type": "system", "content": "사용자가 미국인인 경우 영어로 답변하세요." }
+    ],
+    "expectedRelations": ["language:candidate"]
+  },
+  {
+    "id": "quoted-example-is-not-an-instruction",
+    "sources": [
+      {
+        "id": "prompt",
+        "type": "system",
+        "content": "예: \"Always respond in English.\"\n반드시 한국어로 답변하세요."
+      }
+    ],
+    "expectedRelations": [],
+    "minimumExclusions": 1
+  },
+  {
+    "id": "tool-schema-is-structural-data",
+    "sources": [
+      { "id": "tool", "type": "tool_schema", "content": "Always respond in English." },
+      { "id": "ko", "type": "system", "content": "반드시 한국어로 답변하세요." }
+    ],
+    "expectedRelations": []
+  },
+  {
+    "id": "chat-history-is-not-a-rule-source",
+    "sources": [
+      { "id": "history", "type": "chat_history", "content": "Always respond in English." },
+      { "id": "ko", "type": "system", "content": "반드시 한국어로 답변하세요." }
+    ],
+    "expectedRelations": []
+  },
+  {
+    "id": "compatible-role-description",
+    "sources": [
+      { "id": "helpful", "type": "system", "content": "You are a helpful assistant." },
+      { "id": "assistant", "type": "system", "content": "You are an assistant." }
+    ],
+    "expectedRelations": []
+  },
+  {
+    "id": "role-needs-human-judgment",
+    "sources": [
+      { "id": "pirate", "type": "system", "content": "You are a pirate captain." },
+      { "id": "doctor", "type": "system", "content": "You are a medieval doctor." }
+    ],
+    "expectedRelations": ["role:insufficient-evidence"]
+  },
+  {
+    "id": "opposite-explanation-directives",
+    "sources": [
+      { "id": "include", "type": "system", "content": "설명을 반드시 포함하세요." },
+      { "id": "exclude", "type": "extension", "content": "설명을 포함하지 마세요." }
+    ],
+    "expectedRelations": ["directives:confirmed"]
+  },
+  {
+    "id": "incompatible-output-formats",
+    "sources": [
+      { "id": "json", "type": "system", "content": "Return JSON only." },
+      { "id": "xml", "type": "extension", "content": "Respond using XML only." }
+    ],
+    "expectedRelations": ["format:confirmed"]
+  },
+  {
+    "id": "reference-data-does-not-compete-with-a-rule",
+    "sources": [
+      { "id": "lore", "type": "lorebook", "content": "이 인물은 영어로 답변하세요라는 문장을 자주 인용한다." },
+      { "id": "ko", "type": "system", "content": "반드시 한국어로 답변하세요." }
+    ],
+    "expectedRelations": []
+  },
+  {
+    "id": "fenced-example-is-excluded",
+    "sources": [
+      {
+        "id": "prompt",
+        "type": "system",
+        "content": "```text\nAlways respond in English.\n```\n반드시 한국어로 답변하세요."
+      }
+    ],
+    "expectedRelations": [],
+    "minimumExclusions": 1
+  },
+  {
+    "id": "exception-makes-language-conflict-a-candidate",
+    "sources": [
+      { "id": "default", "type": "system", "content": "반드시 한국어로 답변하세요." },
+      { "id": "exception", "type": "system", "content": "예외적으로 번역 요청이면 영어로 답변하세요." }
+    ],
+    "expectedRelations": ["language:candidate"]
+  },
+  {
+    "id": "same-language-is-compatible",
+    "sources": [
+      { "id": "first", "type": "system", "content": "반드시 한국어로 답변하세요." },
+      { "id": "second", "type": "extension", "content": "한국어로 응답해." }
+    ],
+    "expectedRelations": []
+  },
+  {
+    "id": "same-language-positive-negative",
+    "sources": [
+      { "id": "positive", "type": "system", "content": "한국어로 답변하세요." },
+      { "id": "negative", "type": "extension", "content": "한국어를 사용하지 마세요." }
+    ],
+    "expectedRelations": ["language:confirmed"]
+  }
+]

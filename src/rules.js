@@ -7,6 +7,7 @@ import {
     summarizeAlternativeGroups,
 } from './comparison-policy.js';
 import { sourceDisplayLabel, t } from './i18n.js';
+import { buildInstructionModel } from './instruction-atoms.js';
 
 export const RULE_DEFINITIONS = Object.freeze([
     { id: 'context', labelKey: 'rules.setting.context' },
@@ -27,45 +28,6 @@ export const DEFAULT_RULE_SETTINGS = Object.freeze({
     largeSourceShare: 0.4,
     minimumSentenceLength: 20,
 });
-
-const LANGUAGE_PATTERNS = [
-    ['한국어', /(?:한국어|korean)(?:로|으로| in)?[^\n.!?]{0,24}(?:답변|응답|작성|출력|respond|reply|answer|write)|(?:respond|reply|answer|write)[^\n.!?]{0,24}(?:한국어|korean)/giu],
-    ['영어', /(?:영어|english)(?:로|으로| in)?[^\n.!?]{0,24}(?:답변|응답|작성|출력|respond|reply|answer|write)|(?:respond|reply|answer|write)[^\n.!?]{0,24}(?:영어|english)/giu],
-    ['일본어', /(?:일본어|japanese)(?:로|으로| in)?[^\n.!?]{0,24}(?:답변|응답|작성|출력|respond|reply|answer|write)|(?:respond|reply|answer|write)[^\n.!?]{0,24}(?:일본어|japanese)/giu],
-    ['중국어', /(?:중국어|chinese)(?:로|으로| in)?[^\n.!?]{0,24}(?:답변|응답|작성|출력|respond|reply|answer|write)|(?:respond|reply|answer|write)[^\n.!?]{0,24}(?:중국어|chinese)/giu],
-];
-
-const FORMAT_PATTERNS = [
-    ['JSON', /\bjson\b|JSON\s*형식/giu],
-    ['XML', /\bxml\b|XML\s*형식/giu],
-    ['Markdown', /\bmarkdown\b|마크다운(?:으로| 형식)/giu],
-    ['일반 텍스트', /\bplain\s*text\b|일반\s*텍스트|마크다운(?:을|을 절대)?\s*사용하지/giu],
-];
-
-const DIRECTIVE_PAIRS = [
-    {
-        label: '설명 포함 여부',
-        positive: /(?:설명|해설|근거)[^\n.!?]{0,16}(?:포함(?!\s*하지)|제공(?!\s*하지))|(?<!not )(?<!do not )(?<!without )(?:include|provide)[^\n.!?]{0,20}(?:explanation|rationale)/iu,
-        negative: /(?:설명|해설|근거)[^\n.!?]{0,16}(?:하지|제외|생략)|(?:no|without|do not (?:include|provide))[^\n.!?]{0,20}(?:explanation|rationale)/iu,
-    },
-    {
-        label: '인용 포함 여부',
-        positive: /(?:인용|출처)[^\n.!?]{0,16}(?:포함(?!\s*하지)|표시(?!\s*하지)|제공(?!\s*하지))|(?<!not )(?<!do not )(?<!without )(?:include|provide|add)[^\n.!?]{0,20}(?:citation|source)/iu,
-        negative: /(?:인용|출처)[^\n.!?]{0,16}(?:하지|제외|생략)|(?:no|without|do not (?:include|provide|add))[^\n.!?]{0,20}(?:citation|source)/iu,
-    },
-    {
-        label: '이모지 사용 여부',
-        positive: /(?:이모지|emoji)[^\n.!?]{0,12}(?:사용(?!\s*하지)|포함(?!\s*하지))|(?<!not )(?<!do not )(?<!without )(?:use|include)[^\n.!?]{0,15}(?:emoji)/iu,
-        negative: /(?:이모지|emoji)[^\n.!?]{0,12}(?:사용\s*하지|포함\s*하지|금지|제외)|(?:no|without|do not use)[^\n.!?]{0,15}(?:emoji)/iu,
-    },
-    {
-        label: '코드 블록 사용 여부',
-        positive: /(?:코드\s*블록)[^\n.!?]{0,12}(?:사용(?!\s*하지)|포함(?!\s*하지))|(?<!not )(?<!do not )(?<!without )(?:use|include)[^\n.!?]{0,18}(?:code block|fenced code)/iu,
-        negative: /(?:코드\s*블록)[^\n.!?]{0,12}(?:사용\s*하지|포함\s*하지|금지|제외)|(?:no|without|do not use)[^\n.!?]{0,18}(?:code block|fenced code)/iu,
-    },
-];
-
-const OVERRIDE_PATTERN = /(?:이전|앞선|위의|기존)[^\n.!?]{0,20}(?:지시|규칙|명령)[^\n.!?]{0,16}(?:무시|취소|덮어)|(?:ignore|disregard|override)[^\n.!?]{0,24}(?:previous|earlier|above|all)[^\n.!?]{0,16}(?:instruction|rule)/giu;
 
 function finiteNumber(value, fallback) {
     if (value === null || value === undefined || value === '') {
@@ -133,6 +95,11 @@ function finding(ruleId, id, severity, titleKey, messageKey, variables = {}, det
         finalRanges: details.finalRanges ?? [],
         method: details.method ?? 'source-static',
         confidence: details.confidence ?? 'medium',
+        determination: details.determination ?? null,
+        atomIds: details.atomIds ?? [],
+        relationId: details.relationId ?? null,
+        clusterId: details.clusterId ?? null,
+        evidenceRecords: details.evidenceRecords ?? [],
     };
 }
 
@@ -167,110 +134,6 @@ function sourceRanges(sources, sourceIds) {
         .flatMap(validRanges);
 }
 
-function projectLocalRange(source, start, end) {
-    if (source.synthetic) {
-        return [{ start, end }];
-    }
-    const contentLength = source.content?.length ?? 0;
-    return validRanges(source).map((range) => {
-        if (
-            source.attribution === 'exact'
-            && contentLength > 0
-            && range.end - range.start === contentLength
-        ) {
-            return {
-                start: Math.min(range.end, range.start + start),
-                end: Math.min(range.end, range.start + end),
-            };
-        }
-        return range;
-    }).filter((range) => range.end > range.start);
-}
-
-function sourceIdsFromRecords(records) {
-    return [...new Set(records
-        .map(({ source }) => source)
-        .filter((source) => !source.synthetic)
-        .map(({ id }) => id))];
-}
-
-function finalRangesFromRecords(records) {
-    const seen = new Set();
-    return records
-        .flatMap((record) => record.finalRanges ?? [])
-        .filter(({ start, end }) => {
-            const key = `${start}:${end}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-}
-
-function detectPatternMatches(text, patterns) {
-    const matches = [];
-    for (const [label, pattern] of patterns) {
-        pattern.lastIndex = 0;
-        for (const match of text.matchAll(pattern)) {
-            matches.push({
-                label,
-                text: match[0],
-                start: match.index,
-                end: match.index + match[0].length,
-            });
-        }
-    }
-    return matches;
-}
-
-function detectRoles(text) {
-    const matches = [];
-    const patterns = [
-        /\b(?:you are|act as|role is)\s+([^.\n]{3,80})/giu,
-        /(?:너는|당신은)\s+([^.\n]{3,80})(?:이다|입니다|로 행동)/gu,
-        /(?:역할은|역할:)\s*([^.\n]{3,80})/gu,
-    ];
-    for (const pattern of patterns) {
-        pattern.lastIndex = 0;
-        for (const match of text.matchAll(pattern)) {
-            matches.push({
-                label: match[1].replace(/\s+/gu, ' ').trim().toLocaleLowerCase(),
-                text: match[0],
-                start: match.index,
-                end: match.index + match[0].length,
-            });
-        }
-    }
-    return matches;
-}
-
-function matchRanges(text, pattern) {
-    pattern.lastIndex = 0;
-    return [...text.matchAll(pattern)].map((match) => ({
-        text: match[0],
-        start: match.index,
-        end: match.index + match[0].length,
-    }));
-}
-
-function matchFirst(text, pattern) {
-    pattern.lastIndex = 0;
-    const match = pattern.exec(text);
-    if (!match) return null;
-    return {
-        text: match[0],
-        start: match.index,
-        end: match.index + match[0].length,
-    };
-}
-
-function recordsForSources(sources, detector) {
-    return sources.flatMap((source) => detector(source.content).map((match) => ({
-        ...match,
-        source,
-        finalRanges: projectLocalRange(source, match.start, match.end),
-    })));
-}
-
 function suppressionCollector() {
     const records = [];
     const keys = new Set();
@@ -298,27 +161,6 @@ function suppressionCollector() {
             return false;
         },
     };
-}
-
-function conflictingRecords(records, category, incompatible, collector) {
-    const selected = new Set();
-    for (let leftIndex = 0; leftIndex < records.length; leftIndex += 1) {
-        for (let rightIndex = leftIndex + 1; rightIndex < records.length; rightIndex += 1) {
-            const left = records[leftIndex];
-            const right = records[rightIndex];
-            if (!incompatible(left.label, right.label)) continue;
-            if (!collector.compare(left.source, right.source, category)) continue;
-            selected.add(left);
-            selected.add(right);
-        }
-    }
-    return [...selected];
-}
-
-function formatsConflict(left, right) {
-    const pair = new Set([left, right]);
-    return (pair.has('JSON') && pair.has('XML'))
-        || (pair.has('Markdown') && pair.has('일반 텍스트'));
 }
 
 function shadowedUnmatchedSources(sources) {
@@ -405,7 +247,140 @@ function analyzeDuplicates(sources, minimumLength, collector) {
 
 function sortFindings(findings) {
     const order = { critical: 0, warning: 1, info: 2 };
-    return findings.sort((left, right) => order[left.severity] - order[right.severity]);
+    const determinationOrder = {
+        confirmed: 0,
+        candidate: 1,
+        'insufficient-evidence': 2,
+    };
+    return findings.sort((left, right) => (
+        order[left.severity] - order[right.severity]
+        || (determinationOrder[left.determination] ?? 3)
+            - (determinationOrder[right.determination] ?? 3)
+    ));
+}
+
+function instructionFindingSeverity(relation) {
+    if (relation.status === 'insufficient-evidence') return 'info';
+    if (relation.category === 'language' && relation.status === 'confirmed') {
+        return 'critical';
+    }
+    if (relation.status === 'confirmed') return 'warning';
+    return relation.category === 'language' ? 'warning' : 'info';
+}
+
+function instructionFindingDefinition(relation, atoms) {
+    const values = atoms
+        .map(({ valueLabel, value }) => valueLabel ?? value)
+        .filter(Boolean);
+    if (relation.category === 'language') {
+        return {
+            ruleId: 'language',
+            idPrefix: 'language-conflict',
+            titleKey: 'rules.language.title',
+            messageKey: 'rules.v3.language.message',
+            variables: {
+                left: values[0] ?? t('common.unknown'),
+                right: values[1] ?? t('common.unknown'),
+            },
+        };
+    }
+    if (relation.category === 'format') {
+        return {
+            ruleId: 'format',
+            idPrefix: 'format-conflict',
+            titleKey: 'rules.format.title',
+            messageKey: 'rules.v3.format.message',
+            variables: {
+                left: values[0] ?? t('common.unknown'),
+                right: values[1] ?? t('common.unknown'),
+            },
+        };
+    }
+    if (relation.category === 'directives') {
+        return {
+            ruleId: 'directives',
+            idPrefix: 'directive-conflict',
+            titleKey: 'rules.directive.title',
+            messageKey: 'rules.v3.directive.message',
+            variables: {
+                target: values[0] ?? t('common.unknown'),
+            },
+        };
+    }
+    return {
+        ruleId: 'role',
+        idPrefix: 'role-conflict',
+        titleKey: 'rules.role.title',
+        messageKey: 'rules.v3.role.message',
+        variables: {
+            left: values[0] ?? t('common.unknown'),
+            right: values[1] ?? t('common.unknown'),
+        },
+    };
+}
+
+function findingsFromInstructionModel(model) {
+    const atomById = new Map(model.atoms.map((atom) => [atom.id, atom]));
+    const categoryIndexes = new Map();
+    const results = model.relations.map((relation) => {
+        const atoms = relation.atomIds
+            .map((atomId) => atomById.get(atomId))
+            .filter(Boolean);
+        const definition = instructionFindingDefinition(relation, atoms);
+        const evidence = relation.localEvidence
+            .map((record) => `${record.sourceLabel}: ${record.text}`)
+            .join('\n');
+        const categoryIndex = categoryIndexes.get(relation.category) ?? 0;
+        categoryIndexes.set(relation.category, categoryIndex + 1);
+        const id = categoryIndex === 0
+            ? definition.idPrefix
+            : `${definition.idPrefix}:${relation.id.split(':').at(-1)}`;
+        return finding(
+            definition.ruleId,
+            id,
+            instructionFindingSeverity(relation),
+            definition.titleKey,
+            definition.messageKey,
+            definition.variables,
+            {
+                evidence,
+                sourceIds: relation.sourceIds,
+                finalRanges: relation.finalRanges,
+                method: relation.method,
+                confidence: relation.confidence,
+                determination: relation.status,
+                atomIds: relation.atomIds,
+                relationId: relation.id,
+                clusterId: relation.clusterId,
+                evidenceRecords: relation.localEvidence,
+            },
+        );
+    });
+    for (const alert of model.alerts) {
+        results.push(finding(
+            'directives',
+            model.alerts.length === 1
+                ? 'override-attempt'
+                : `override-attempt:${alert.id.split(':').at(-1)}`,
+            alert.status === 'confirmed' ? 'warning' : 'info',
+            'rules.override.title',
+            'rules.override.message',
+            {},
+            {
+                evidence: alert.localEvidence
+                    .map((record) => `${record.sourceLabel}: ${record.text}`)
+                    .join('\n'),
+                sourceIds: alert.sourceIds,
+                finalRanges: alert.finalRanges,
+                method: alert.method,
+                confidence: alert.confidence,
+                determination: alert.status,
+                atomIds: alert.atomIds,
+                evidenceRecords: alert.localEvidence,
+            },
+        ));
+    }
+    return results;
 }
 
 export function analyzeSnapshotDetailed(
@@ -461,8 +436,28 @@ export function analyzeSnapshotDetailed(
             attribution: 'synthetic',
             ranges: [{ start: 0, end: finalText.length }],
             synthetic: true,
-        }];
+    }];
     const collector = suppressionCollector();
+    const activeSourceIds = new Set(eligibleSources.map(({ id }) => id));
+    if (analysisSources.some(({ synthetic }) => synthetic)) {
+        analysisSources
+            .filter(({ synthetic }) => synthetic)
+            .forEach(({ id }) => activeSourceIds.add(id));
+    }
+    const instructionSources = analysisSources.some(({ synthetic }) => synthetic)
+        ? [...annotatedSources, ...analysisSources.filter(({ synthetic }) => synthetic)]
+        : annotatedSources;
+    const instructionModel = buildInstructionModel(instructionSources, {
+        activeSourceIds,
+        categoryEnabled: (category) => (
+            category === 'priority'
+                ? settings.enabled.directives
+                : settings.enabled[category] !== false
+        ),
+        compareSources: (left, right, category) => (
+            collector.compare(left, right, category)
+        ),
+    });
     const usage = snapshot?.stats?.contextUsage;
 
     if (settings.enabled.context && usage >= settings.contextCritical) {
@@ -495,153 +490,10 @@ export function analyzeSnapshotDetailed(
         ));
     }
 
-    if (settings.enabled.language) {
-        const matches = recordsForSources(
-            analysisSources,
-            (text) => detectPatternMatches(text, LANGUAGE_PATTERNS),
-        );
-        const conflicts = conflictingRecords(
-            matches,
-            'language',
-            (left, right) => left !== right,
-            collector,
-        );
-        if (conflicts.length > 0) {
-            const languages = [...new Set(conflicts.map(({ label }) => label))];
-            findings.push(finding(
-                'language',
-                'language-conflict',
-                'critical',
-                'rules.language.title',
-                'rules.language.message',
-                { languages: languages.join(', ') },
-                {
-                    evidence: conflicts.map(({ text }) => text).join('\n'),
-                    sourceIds: sourceIdsFromRecords(conflicts),
-                    finalRanges: finalRangesFromRecords(conflicts),
-                    confidence: 'high',
-                },
-            ));
-        }
-    }
-
-    if (settings.enabled.format) {
-        const matches = recordsForSources(
-            analysisSources,
-            (text) => detectPatternMatches(text, FORMAT_PATTERNS),
-        );
-        const conflicts = conflictingRecords(matches, 'format', formatsConflict, collector);
-        if (conflicts.length > 0) {
-            const formats = [...new Set(conflicts.map(({ label }) => label))];
-            findings.push(finding(
-                'format',
-                'format-conflict',
-                'warning',
-                'rules.format.title',
-                'rules.format.message',
-                { formats: formats.join(', ') },
-                {
-                    evidence: conflicts.map(({ text }) => text).join('\n'),
-                    sourceIds: sourceIdsFromRecords(conflicts),
-                    finalRanges: finalRangesFromRecords(conflicts),
-                    confidence: 'high',
-                },
-            ));
-        }
-    }
-
-    if (settings.enabled.role) {
-        const matches = recordsForSources(analysisSources, detectRoles);
-        const conflicts = conflictingRecords(
-            matches,
-            'role',
-            (left, right) => left !== right,
-            collector,
-        ).slice(0, 10);
-        if (conflicts.length > 0) {
-            findings.push(finding(
-                'role',
-                'role-conflict',
-                'info',
-                'rules.role.title',
-                'rules.role.message',
-                { count: new Set(conflicts.map(({ label }) => label)).size },
-                {
-                    evidence: conflicts.map(({ text }) => text).join('\n'),
-                    sourceIds: sourceIdsFromRecords(conflicts),
-                    finalRanges: finalRangesFromRecords(conflicts),
-                    confidence: 'medium',
-                },
-            ));
-        }
-    }
-
-    if (settings.enabled.directives) {
-        const directiveLabels = [];
-        const directiveMatches = new Set();
-        for (const pair of DIRECTIVE_PAIRS) {
-            const positives = recordsForSources(analysisSources, (text) => {
-                const match = matchFirst(text, pair.positive);
-                return match ? [{ ...match, label: 'positive' }] : [];
-            });
-            const negatives = recordsForSources(analysisSources, (text) => {
-                const match = matchFirst(text, pair.negative);
-                return match ? [{ ...match, label: 'negative' }] : [];
-            });
-            let pairConflict = false;
-            for (const positive of positives) {
-                for (const negative of negatives) {
-                    if (!collector.compare(positive.source, negative.source, 'directives')) continue;
-                    pairConflict = true;
-                    directiveMatches.add(positive);
-                    directiveMatches.add(negative);
-                }
-            }
-            if (pairConflict) directiveLabels.push(pair.label);
-        }
-
-        const conflicts = [...directiveMatches];
-        if (conflicts.length > 0) {
-            findings.push(finding(
-                'directives',
-                'directive-conflict',
-                'warning',
-                'rules.directive.title',
-                'rules.directive.message',
-                { directives: directiveLabels.join(', ') },
-                {
-                    evidence: conflicts.map(({ text }) => text).join('\n'),
-                    sourceIds: sourceIdsFromRecords(conflicts),
-                    finalRanges: finalRangesFromRecords(conflicts),
-                    confidence: 'high',
-                },
-            ));
-        }
-
-        const overrideMatches = recordsForSources(
-            analysisSources,
-            (text) => matchRanges(text, OVERRIDE_PATTERN).map((match) => ({
-                ...match,
-                label: 'override',
-            })),
-        );
-        if (overrideMatches.length > 0) {
-            findings.push(finding(
-                'directives',
-                'override-attempt',
-                'warning',
-                'rules.override.title',
-                'rules.override.message',
-                {},
-                {
-                    evidence: overrideMatches.map(({ text }) => text).join('\n'),
-                    sourceIds: sourceIdsFromRecords(overrideMatches),
-                    finalRanges: finalRangesFromRecords(overrideMatches),
-                    confidence: 'high',
-                },
-            ));
-        }
-    }
+    findings.push(...findingsFromInstructionModel({
+        ...instructionModel,
+        alerts: settings.enabled.directives ? instructionModel.alerts : [],
+    }));
 
     if (settings.enabled.largeSource) {
         const totalTokens = snapshot?.stats?.totalTokens || 0;
@@ -722,6 +574,7 @@ export function analyzeSnapshotDetailed(
 
     return {
         findings: sortFindings(findings),
+        instructions: instructionModel,
         comparison: {
             suppressedComparisons: collector.records,
             skippedSources,

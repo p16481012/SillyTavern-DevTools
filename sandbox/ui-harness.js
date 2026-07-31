@@ -27,7 +27,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 5,
-        extensionVersion: '0.8.12',
+        extensionVersion: '0.9.0',
         id,
         timestamp,
         chatId: additions.chatId ?? 'sandbox',
@@ -549,7 +549,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.8.12',
+    version: '0.9.0',
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
