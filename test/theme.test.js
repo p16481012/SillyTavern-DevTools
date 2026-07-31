@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { inferPanelThemeFromTextColor } from '../src/theme.js';
+import {
+    inferPanelThemeFromTextColor,
+    resolvePanelTheme,
+} from '../src/theme.js';
 
 function cssBlock(css, selector) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -39,6 +42,13 @@ test('light theme text selects a dark opaque panel', () => {
 
 test('dark theme text selects a light opaque panel', () => {
     assert.equal(inferPanelThemeFromTextColor('rgba(31, 41, 55, 0.7)'), 'light');
+});
+
+test('explicit panel theme overrides SillyTavern while auto keeps inference', () => {
+    assert.equal(resolvePanelTheme('light', 'rgb(238, 238, 238)'), 'light');
+    assert.equal(resolvePanelTheme('dark', 'rgb(31, 41, 55)'), 'dark');
+    assert.equal(resolvePanelTheme('auto', 'rgb(238, 238, 238)'), 'dark');
+    assert.equal(resolvePanelTheme('invalid', 'rgb(31, 41, 55)'), 'light');
 });
 
 test('panel background does not depend on a transparent SillyTavern tint', async () => {
@@ -164,7 +174,7 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     assert.match(ui, /control\.setAttribute\('aria-describedby', tooltipId\)/);
 });
 
-test('v0.8.10 safety controls remain visible, responsive, and confirm destructive actions', async () => {
+test('v0.8.11 safety and theme controls remain responsive', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
@@ -198,6 +208,11 @@ test('v0.8.10 safety controls remain visible, responsive, and confirm destructiv
     assert.match(i18n, /'settings\.timelineRetentionLimitHint':/);
     assert.match(i18n, /'settings\.timelineRetentionDecreaseConfirm':/);
     assert.match(i18n, /'settings\.timelineReadLimitHint':/);
+    assert.match(i18n, /'settings\.themeMode\.auto':/);
+    assert.match(i18n, /'settings\.themeMode\.light':/);
+    assert.match(i18n, /'settings\.themeMode\.dark':/);
+    assert.match(ui, /this\.preferences\.themeMode/);
+    assert.match(ui, /resolvePanelTheme\(/);
     assert.match(ui, /this\.store\.getRetentionPrunePreview/);
     assert.match(ui, /this\.store\.applyRetentionLimit/);
 });

@@ -187,7 +187,8 @@
     opacity: 0.82;
 }
 
-.st-devtools-settings-field input {
+.st-devtools-settings-field input,
+.st-devtools-settings-field select {
     width: min(11rem, 100%);
 }
 

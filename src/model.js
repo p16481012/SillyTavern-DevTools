@@ -13,6 +13,7 @@ import { compileUserRegex, UserRegexError } from './regex-safety.js';
 
 export const SNAPSHOT_SCHEMA_VERSION = 5;
 export const SEARCH_QUERY_MAX_LENGTH = 512;
+const TEMPLATE_REGEX_MAX_LENGTH = 12_000;
 
 function nonEmptyString(value) {
     if (typeof value !== 'string') return null;
@@ -277,14 +278,15 @@ function literalTemplatePattern(value) {
 }
 
 export function findTemplateRanges(finalText, content, limit = 20) {
+    const noMatch = () => ({ ranges: [], confidence: null, method: null });
     const template = contentToText(content).trim();
     if (template.length > 50_000) {
-        return { ranges: [], confidence: null, method: null };
+        return noMatch();
     }
     const macroPattern = /\{\{[^{}\r\n]{1,100}\}\}|\$\{[^{}\r\n]{1,100}\}|<%[^%\r\n]{1,100}%>|<<[^<>\r\n]{1,100}>>/gu;
     const macros = [...template.matchAll(macroPattern)];
     if (macros.length === 0 || macros.length > 20) {
-        return { ranges: [], confidence: null, method: null };
+        return noMatch();
     }
 
     const literals = [];
@@ -297,27 +299,29 @@ export function findTemplateRanges(finalText, content, limit = 20) {
     const literalLength = literals.join('').replace(/\s+/g, '').length;
     const meaningfulLiterals = literals.filter((value) => value.trim());
     if (literalLength < 12 || meaningfulLiterals.length < 2) {
-        return { ranges: [], confidence: null, method: null };
+        return noMatch();
     }
 
     const pattern = meaningfulLiterals
         .map((literal) => literalTemplatePattern(literal))
         .join('[\\s\\S]{0,500}?');
-    let expression;
-    try {
-        expression = new RegExp(pattern, 'giu');
-    } catch {
-        return { ranges: [], confidence: null, method: null };
-    }
+    if (pattern.length > TEMPLATE_REGEX_MAX_LENGTH) return noMatch();
 
     const ranges = [];
-    for (const match of String(finalText ?? '').matchAll(expression)) {
-        if (!match[0] || match.index == null) continue;
-        ranges.push({ start: match.index, end: match.index + match[0].length });
-        if (ranges.length >= limit) break;
+    try {
+        const expression = new RegExp(pattern, 'giu');
+        for (const match of String(finalText ?? '').matchAll(expression)) {
+            if (!match[0] || match.index == null) continue;
+            ranges.push({ start: match.index, end: match.index + match[0].length });
+            if (ranges.length >= limit) break;
+        }
+    } catch {
+        // Some browser engines defer compiling large expressions until the first match.
+        return noMatch();
     }
+
     if (ranges.length === 0) {
-        return { ranges: [], confidence: null, method: null };
+        return noMatch();
     }
 
     const literalShare = literalLength / Math.max(1, template.replace(/\s+/g, '').length);

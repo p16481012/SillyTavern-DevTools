@@ -35,7 +35,7 @@ import {
     annotateSourcesWithPolicies,
     normalizeComparisonPolicySettings,
 } from './comparison-policy.js';
-import { inferPanelThemeFromTextColor } from './theme.js';
+import { resolvePanelTheme } from './theme.js';
 import { descriptionParagraphs } from './text-format.js';
 import {
     USER_REGEX_MAX_LENGTH,
@@ -53,6 +53,7 @@ import {
     MAX_TIMELINE_READ_LIMIT,
     MIN_TIMELINE_RETENTION_LIMIT,
     MIN_TIMELINE_READ_LIMIT,
+    PANEL_THEME_MODES,
     UI_PREFERENCES_KEY,
     migrateLegacyUiPreferences,
     normalizeUiPreferences,
@@ -556,6 +557,7 @@ export class DevToolsWindow {
         this.settingsPreviouslyFocused = null;
         this.settingsOverlay = null;
         this.settingsPanel = null;
+        this.themeModeInput = null;
         this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
         this.primaryRegions = [];
@@ -669,6 +671,29 @@ export class DevToolsWindow {
         heading.append(titleGroup, close);
 
         const form = element('form', { className: 'st-devtools-settings-form' });
+        const themeField = element('div', { className: 'st-devtools-settings-field' });
+        const themeLabel = element('label');
+        themeLabel.htmlFor = 'st-devtools-settings-theme';
+        themeLabel.appendChild(element('strong', { text: t('settings.themeMode') }));
+        const themeDescription = proseElement(
+            'span',
+            t('settings.themeModeDescription'),
+            { className: 'st-devtools-settings-description' },
+        );
+        themeDescription.id = 'st-devtools-settings-theme-description';
+        const themeSelect = element('select');
+        themeSelect.id = 'st-devtools-settings-theme';
+        themeSelect.setAttribute('aria-describedby', themeDescription.id);
+        for (const mode of PANEL_THEME_MODES) {
+            const option = element('option', {
+                text: t(`settings.themeMode.${mode}`),
+            });
+            option.value = mode;
+            themeSelect.appendChild(option);
+        }
+        themeSelect.value = this.preferences.themeMode;
+        themeField.append(themeLabel, themeDescription, themeSelect);
+
         const retentionField = element('div', { className: 'st-devtools-settings-field' });
         const retentionLabel = element('label');
         retentionLabel.htmlFor = 'st-devtools-settings-retention-limit';
@@ -763,6 +788,7 @@ export class DevToolsWindow {
             type: 'button',
         });
         reset.addEventListener('click', () => {
+            themeSelect.value = DEFAULT_UI_PREFERENCES.themeMode;
             retentionInput.value = String(DEFAULT_UI_PREFERENCES.timelineRetentionLimit);
             readInput.value = String(DEFAULT_UI_PREFERENCES.timelineReadLimit);
             syncReadLimit();
@@ -780,12 +806,13 @@ export class DevToolsWindow {
             type: 'submit',
         });
         actions.append(reset, cancel, apply);
-        form.append(retentionField, readField, actions);
+        form.append(themeField, retentionField, readField, actions);
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             if (apply.disabled) return;
             apply.disabled = true;
             const requested = normalizeUiPreferences({
+                themeMode: themeSelect.value,
                 timelineRetentionLimit: retentionInput.value,
                 timelineReadLimit: readInput.value,
             });
@@ -844,9 +871,11 @@ export class DevToolsWindow {
                 this.storageSummaryRebuildScheduled = false;
                 this.storageSummaryRefreshPromise = null;
                 const preferences = this.saveUiPreferences(requested);
+                themeSelect.value = preferences.themeMode;
                 retentionInput.value = String(preferences.timelineRetentionLimit);
                 readInput.value = String(preferences.timelineReadLimit);
                 syncReadLimit();
+                this.syncOpaqueTheme();
                 this.closeSettings();
                 await this.refresh();
                 globalThis.toastr?.success?.(
@@ -860,9 +889,7 @@ export class DevToolsWindow {
             } catch (error) {
                 console.error('[ST DevTools] Failed to apply storage settings.', error);
                 globalThis.toastr?.error?.(
-                    t('settings.saveFailed', {
-                        message: error?.message || t('storage.unknownError'),
-                    }),
+                    t('settings.saveFailed'),
                     'ST DevTools',
                 );
             } finally {
@@ -874,6 +901,7 @@ export class DevToolsWindow {
         overlay.appendChild(panel);
         this.settingsOverlay = overlay;
         this.settingsPanel = panel;
+        this.themeModeInput = themeSelect;
         this.timelineRetentionLimitInput = retentionInput;
         this.timelineReadLimitInput = readInput;
         return overlay;
@@ -882,6 +910,7 @@ export class DevToolsWindow {
     openSettings() {
         if (!this.settingsOverlay || !this.settingsPanel) return;
         this.settingsPreviouslyFocused = document.activeElement;
+        this.themeModeInput.value = this.preferences.themeMode;
         this.timelineRetentionLimitInput.value = String(
             this.preferences.timelineRetentionLimit,
         );
@@ -1039,12 +1068,18 @@ export class DevToolsWindow {
 
     syncOpaqueTheme() {
         if (!this.root) return;
-        const probe = element('span');
-        probe.style.cssText = 'position:fixed;pointer-events:none;visibility:hidden;color:var(--SmartThemeBodyColor, #eeeeee)';
-        document.body.appendChild(probe);
-        const color = getComputedStyle(probe).color;
-        probe.remove();
-        const darkTheme = inferPanelThemeFromTextColor(color) === 'dark';
+        let textColor = '';
+        if (this.preferences.themeMode === 'auto') {
+            const probe = element('span');
+            probe.style.cssText = 'position:fixed;pointer-events:none;visibility:hidden;color:var(--SmartThemeBodyColor, #eeeeee)';
+            document.body.appendChild(probe);
+            textColor = getComputedStyle(probe).color;
+            probe.remove();
+        }
+        const darkTheme = resolvePanelTheme(
+            this.preferences.themeMode,
+            textColor,
+        ) === 'dark';
         this.root.classList.toggle('st-devtools-theme-dark', darkTheme);
         this.root.classList.toggle('st-devtools-theme-light', !darkTheme);
     }
@@ -1399,6 +1434,9 @@ export class DevToolsWindow {
         };
         this.preferences = normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
+        if (this.themeModeInput) {
+            this.themeModeInput.value = this.preferences.themeMode;
+        }
         if (this.timelineRetentionLimitInput) {
             this.timelineRetentionLimitInput.value = String(
                 this.preferences.timelineRetentionLimit,

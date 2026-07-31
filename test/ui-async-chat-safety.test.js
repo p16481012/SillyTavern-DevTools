@@ -123,7 +123,7 @@ test('refresh migrates v0.8.9 read settings without lowering retention', async (
     assert.equal(localStorage.getItem('st-devtools:preferences:v1'), null);
     assert.deepEqual(
         JSON.parse(localStorage.getItem('st-devtools:preferences:v2')),
-        { timelineRetentionLimit: 100, timelineReadLimit: 7 },
+        { timelineRetentionLimit: 100, timelineReadLimit: 7, themeMode: 'auto' },
     );
 });
 
@@ -143,6 +143,7 @@ test('a fresh profile configures the new 30 snapshot retention default', () => {
 
     assert.equal(devTools.preferences.timelineRetentionLimit, 30);
     assert.equal(devTools.preferences.timelineReadLimit, 20);
+    assert.equal(devTools.preferences.themeMode, 'auto');
     assert.deepEqual(limits, [30]);
 });
 

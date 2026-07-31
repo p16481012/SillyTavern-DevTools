@@ -9,3 +9,9 @@ export function inferPanelThemeFromTextColor(color) {
     const luminance = (channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722) / 255;
     return luminance >= 0.55 ? 'dark' : 'light';
 }
+
+export function resolvePanelTheme(themeMode, textColor) {
+    return themeMode === 'light' || themeMode === 'dark'
+        ? themeMode
+        : inferPanelThemeFromTextColor(textColor);
+}

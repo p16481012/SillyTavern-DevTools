@@ -48,6 +48,40 @@ test('v1 snapshots migrate to schema v5 without changing captured text', () => {
     });
 });
 
+test('legacy storage settings skip oversized template regexes without failing migration', async () => {
+    const literal = 'word '.repeat(4_000);
+    const oversized = {
+        ...legacySnapshot(),
+        finalText: `${literal}VALUE tail sentence`,
+        sources: [{
+            id: 'large-template',
+            type: 'system',
+            label: 'Large template',
+            content: `${literal}{{slot}} tail sentence`,
+            attribution: 'unmatched',
+        }],
+    };
+    const migrated = migrateSnapshot(oversized);
+
+    assert.equal(migrated.schemaVersion, 5);
+    assert.equal(migrated.sources[0].attribution, 'unmatched');
+    assert.deepEqual(migrated.sources[0].ranges, []);
+    assert.deepEqual(migrated.sources[0].provenance, {
+        method: 'unmatched',
+        confidence: 0,
+    });
+
+    const store = new SnapshotStore({ namespace: 'test', maxSnapshotsPerChat: 100 });
+    store.memory.set(store.timelineKey('chat'), [
+        oversized,
+        { ...legacySnapshot(), id: 'newer', timestamp: 2 },
+    ]);
+    const preview = await store.getRetentionPrunePreview(1);
+    assert.equal(preview.snapshotCount, 1);
+    await store.applyRetentionLimit(1, { expectedRevision: preview.revision });
+    assert.deepEqual((await store.getTimeline('chat')).map(({ id }) => id), ['newer']);
+});
+
 test('timeline reads persist one-time schema migration', async () => {
     const store = new SnapshotStore({ namespace: 'test' });
     store.memory.set(store.timelineKey('chat'), [legacySnapshot()]);

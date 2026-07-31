@@ -5,9 +5,11 @@ export const MAX_TIMELINE_READ_LIMIT = 100;
 export const MIN_TIMELINE_RETENTION_LIMIT = 1;
 export const MAX_TIMELINE_RETENTION_LIMIT = 100;
 export const LEGACY_TIMELINE_RETENTION_LIMIT = 100;
+export const PANEL_THEME_MODES = Object.freeze(['auto', 'light', 'dark']);
 export const DEFAULT_UI_PREFERENCES = Object.freeze({
     timelineRetentionLimit: 30,
     timelineReadLimit: 20,
+    themeMode: 'auto',
 });
 
 function clampInteger(value, fallback, minimum, maximum) {
@@ -33,7 +35,11 @@ export function normalizeUiPreferences(value = {}) {
             MAX_TIMELINE_READ_LIMIT,
         ),
     );
-    return { timelineRetentionLimit, timelineReadLimit };
+    const requestedThemeMode = String(value?.themeMode ?? '');
+    const themeMode = PANEL_THEME_MODES.includes(requestedThemeMode)
+        ? requestedThemeMode
+        : DEFAULT_UI_PREFERENCES.themeMode;
+    return { timelineRetentionLimit, timelineReadLimit, themeMode };
 }
 
 export function migrateLegacyUiPreferences(value = {}) {
