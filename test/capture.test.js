@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CaptureController, getConfiguredPrompts } from '../src/capture.js';
 import { GenerationLedger } from '../src/generation-ledger.js';
+import { SnapshotStore } from '../src/storage.js';
 
 class FakeEventSource {
     constructor() {
@@ -194,22 +195,27 @@ test('capture status reports a bounded capturing-processing-saved sequence', asy
 
     assert.deepEqual(
         statuses.map(({ state }) => state),
-        ['capturing', 'processing', 'saved'],
+        ['capturing', 'processing', 'processing', 'processing', 'saved'],
     );
     assert.deepEqual(Object.keys(statuses[0]).sort(), [
         'at',
         'promptType',
         'state',
     ]);
-    for (const detail of statuses.slice(1)) {
+    for (const detail of statuses.slice(1, -1)) {
         assert.deepEqual(Object.keys(detail).sort(), [
             'at',
+            'phase',
             'promptType',
             'stage',
             'state',
         ]);
         assert.equal(detail.stage, 'backend-request-ready');
     }
+    assert.deepEqual(
+        statuses.filter(({ state }) => state === 'processing').map(({ phase }) => phase),
+        ['finalizing', 'privacy', 'storage'],
+    );
     assert.equal(statuses.every((detail) => Object.isFrozen(detail)), true);
     assert.equal(statuses.every((detail) => Number.isFinite(detail.at)), true);
     const serialized = JSON.stringify(statuses);
@@ -265,7 +271,10 @@ test('a token counter that never settles falls back and still saves the snapshot
 
     assert.deepEqual(
         statuses.map(({ state }) => state),
-        ['capturing', 'processing', 'saved', 'capturing', 'processing', 'saved'],
+        [
+            'capturing', 'processing', 'processing', 'processing', 'saved',
+            'capturing', 'processing', 'processing', 'processing', 'saved',
+        ],
     );
     assert.ok(saved[0].stats.totalTokens > 0);
     assert.ok(saved[1].stats.totalTokens > 0);
@@ -307,9 +316,202 @@ test('concurrent captures share one bounded token counter probe', async () => {
     assert.equal(saved.every(({ stats }) => stats.totalTokens > 0), true);
 });
 
-test('request preparation failure settles its ledger prompt and clears its fallback timer', async () => {
+test('production storage saves a minimal snapshot before oversized source analysis', async () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    context.chatCompletionSettings.prompts = Array.from(
+        { length: 401 },
+        (_, index) => ({
+            identifier: `inactive-${index}`,
+            name: `Inactive ${index}`,
+            enabled: false,
+            content: `unused configured prompt ${index}`,
+        }),
+    );
+    let tokenCounterCalls = 0;
+    context.getTokenCountAsync = () => {
+        tokenCounterCalls += 1;
+        return new Promise(() => {});
+    };
+    const store = new SnapshotStore({
+        namespace: 'capture-first-test',
+        maxSnapshotsPerChat: 10,
+    });
+    const controller = new CaptureController({
+        getContext: () => context,
+        store,
+        version: 'test',
+        settingsWaitMs: 50,
+        tokenCounterWaitMs: 5,
+    });
+    const snapshots = [];
+    const statuses = [];
+    controller.addEventListener('snapshot', (event) => snapshots.push(event.detail));
+    controller.addEventListener('capture-status', (event) => statuses.push(event.detail));
+    controller.start();
+
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: [{ role: 'user', content: 'capture before expensive analysis' }],
+        request_id: 'capture-first-request',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages: [{ role: 'user', content: 'capture before expensive analysis' }],
+        request_id: 'capture-first-request',
+    });
+    await waitFor(() => snapshots.length === 1);
+
+    assert.equal(statuses.at(-1).state, 'saved');
+    assert.deepEqual(
+        statuses.filter(({ state }) => state === 'processing').map(({ phase }) => phase),
+        ['finalizing', 'privacy', 'storage', 'storage-verify'],
+    );
+    assert.equal(snapshots[0].sources.length, 1);
+    assert.equal(snapshots[0].sources[0].type, 'final');
+    assert.equal(snapshots[0].stats.structured.sourceAnalysis, 'limited');
+    assert.equal(tokenCounterCalls, 0);
+    const persisted = await store.getSnapshot('chat', snapshots[0].id);
+    assert.equal(persisted?.id, snapshots[0].id);
+    assert.equal(persisted?.finalText.includes('capture before expensive analysis'), true);
+});
+
+test('capture-first storage replaces the same record with detailed sources in the background', async () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    context.extensionPrompts = {
+        extensionRule: { name: 'Extension rule', value: 'Keep the answer concise.' },
+    };
+    const store = new SnapshotStore({
+        namespace: 'capture-enrichment-test',
+        maxSnapshotsPerChat: 10,
+    });
+    const controller = new CaptureController({
+        getContext: () => context,
+        store,
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    const snapshots = [];
+    controller.addEventListener('snapshot', (event) => snapshots.push(event.detail));
+    controller.start();
+
+    const messages = [
+        { role: 'system', content: 'Keep the answer concise.' },
+        { role: 'user', content: 'Explain capture-first storage.' },
+    ];
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: messages,
+        request_id: 'capture-enrichment-request',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages,
+        request_id: 'capture-enrichment-request',
+    });
+    await waitFor(() => snapshots.length >= 2);
+
+    assert.equal(snapshots[0].stats.structured.sourceAnalysis, 'deferred');
+    assert.equal(snapshots.at(-1).stats.structured.sourceAnalysis, 'complete');
+    assert.equal(snapshots.at(-1).sources.length > 1, true);
+    assert.equal(snapshots.at(-1).id, snapshots[0].id);
+    const timeline = await store.getTimeline('chat');
+    assert.equal(timeline.length, 1);
+    assert.equal(timeline[0].id, snapshots[0].id);
+    assert.equal(timeline[0].stats.structured.sourceAnalysis, 'complete');
+});
+
+test('capture-first storage survives a persistent backend reload in every privacy mode', async (t) => {
+    const previous = globalThis.SillyTavern;
+    const values = new Map();
+    globalThis.SillyTavern = {
+        libs: {
+            localforage: {
+                createInstance() {
+                    return {
+                        async ready() {},
+                        driver: () => 'asyncStorage',
+                        getItem: async (key) => (
+                            values.has(key) ? structuredClone(values.get(key)) : null
+                        ),
+                        setItem: async (key, value) => {
+                            values.set(key, structuredClone(value));
+                        },
+                        removeItem: async (key) => values.delete(key),
+                        keys: async () => [...values.keys()],
+                    };
+                },
+            },
+        },
+    };
+
+    try {
+        for (const mode of ['full', 'redacted', 'metadata']) {
+            await t.test(mode, async () => {
+                values.clear();
+                const eventSource = new FakeEventSource();
+                const context = createContext(eventSource);
+                context.chatCompletionSettings.prompts = Array.from(
+                    { length: 401 },
+                    (_, index) => ({
+                        identifier: `persistent-inactive-${index}`,
+                        enabled: false,
+                        content: '',
+                    }),
+                );
+                const store = new SnapshotStore({
+                    namespace: `capture-persistent-${mode}`,
+                    maxSnapshotsPerChat: 10,
+                });
+                await store.initialize();
+                const controller = new CaptureController({
+                    getContext: () => context,
+                    store,
+                    version: 'test',
+                    settingsWaitMs: 50,
+                    getCaptureMode: () => mode,
+                });
+                const snapshots = [];
+                controller.addEventListener('snapshot', (event) => {
+                    snapshots.push(event.detail);
+                });
+                controller.start();
+
+                const messages = [{
+                    role: 'user',
+                    content: `persistent ${mode} capture`,
+                }];
+                eventSource.emitSynchronously('chat_completion_prompt_ready', {
+                    chat: messages,
+                    request_id: `persistent-${mode}`,
+                    dryRun: false,
+                });
+                eventSource.emitSynchronously('chat_completion_settings_ready', {
+                    messages,
+                    request_id: `persistent-${mode}`,
+                });
+                await waitFor(() => snapshots.length >= 1);
+
+                assert.equal(snapshots[0].privacy.mode, mode);
+                const reloadedStore = new SnapshotStore({
+                    namespace: `capture-persistent-reload-${mode}`,
+                    maxSnapshotsPerChat: 10,
+                });
+                await reloadedStore.initialize();
+                const timeline = await reloadedStore.getTimeline('chat');
+                assert.equal(timeline.length, 1);
+                assert.equal(timeline[0].id, snapshots[0].id);
+                assert.equal(timeline[0].privacy.mode, mode);
+            });
+        }
+    } finally {
+        globalThis.SillyTavern = previous;
+    }
+});
+
+test('request getters that throw are omitted without losing the prompt capture', async () => {
     const eventSource = new FakeEventSource();
     const statuses = [];
+    const saved = [];
     const ledger = new GenerationLedger();
     const settlePrompt = ledger.settlePrompt.bind(ledger);
     let settleCalls = 0;
@@ -320,7 +522,7 @@ test('request preparation failure settles its ledger prompt and clears its fallb
     const context = createContext(eventSource);
     const controller = new CaptureController({
         getContext: () => context,
-        store: { addSnapshot: async () => assert.fail('failed capture must not save') },
+        store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
         version: 'test',
         settingsWaitMs: 10_000,
         generationLedger: ledger,
@@ -344,10 +546,17 @@ test('request preparation failure settles its ledger prompt and clears its fallb
         },
     });
     eventSource.emitSynchronously('chat_completion_settings_ready', invalidRequest);
-    await waitFor(() => statuses.at(-1) === 'failed');
+    await waitFor(() => statuses.at(-1) === 'saved');
 
-    assert.deepEqual(statuses, ['capturing', 'failed']);
+    assert.deepEqual(statuses, [
+        'capturing', 'processing', 'processing', 'processing', 'saved',
+    ]);
     assert.equal(settleCalls, 1);
+    assert.equal(saved.length, 1);
+    assert.equal(
+        saved[0].request.body.invalid,
+        '[ST DevTools: unsupported value omitted]',
+    );
 });
 
 test('a privacy failure terminates processing without exposing capture data in status', async () => {
@@ -380,7 +589,7 @@ test('a privacy failure terminates processing without exposing capture data in s
 
     assert.deepEqual(
         statuses.map(({ state }) => state),
-        ['capturing', 'processing', 'failed'],
+        ['capturing', 'processing', 'processing', 'failed'],
     );
     assert.equal(saved.length, 0);
     const serialized = JSON.stringify(statuses);
@@ -424,7 +633,7 @@ test('a storage operation that never settles reaches failed instead of staying p
 
     assert.deepEqual(
         statuses.map(({ state }) => state),
-        ['capturing', 'processing', 'failed'],
+        ['capturing', 'processing', 'processing', 'processing', 'failed'],
     );
     assert.equal(failures.length, 1);
     assert.equal(failures[0].operation, 'addSnapshot');

@@ -1,6 +1,10 @@
 const REDACTED_VALUE = '[민감 정보 제거됨]';
 const CIRCULAR_VALUE = '[순환 참조]';
 const OMITTED_MEDIA_VALUE = '[미디어 데이터 생략됨]';
+const UNSUPPORTED_VALUE = '[ST DevTools: unsupported value omitted]';
+const SANITIZE_MAX_DEPTH = 24;
+const SANITIZE_MAX_NODES = 200_000;
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const PROMPT_BODY_KEYS = new Set([
     'messages',
     'chat',
@@ -100,8 +104,13 @@ export function sanitizeRequestBody(value) {
     const redactedPaths = [];
     const omittedMediaPaths = [];
     const seen = new WeakSet();
+    let visitedNodes = 0;
 
-    const visit = (current, path) => {
+    const visit = (current, path, depth = 0) => {
+        visitedNodes += 1;
+        if (depth > SANITIZE_MAX_DEPTH || visitedNodes > SANITIZE_MAX_NODES) {
+            return UNSUPPORTED_VALUE;
+        }
         if (typeof current === 'string') {
             if (/^data:(?:image|audio|video)\//iu.test(current)) {
                 omittedMediaPaths.push(path);
@@ -111,8 +120,26 @@ export function sanitizeRequestBody(value) {
             if (sanitized.changed) redactedPaths.push(path);
             return sanitized.value;
         }
-        if (current == null || typeof current !== 'object') {
+        if (current == null || typeof current === 'boolean') {
             return current;
+        }
+        if (typeof current === 'number') {
+            return Number.isFinite(current) ? current : null;
+        }
+        if (typeof current === 'bigint') return String(current);
+        if (['undefined', 'function', 'symbol'].includes(typeof current)) {
+            return null;
+        }
+        if (current instanceof Date) {
+            return Number.isFinite(current.getTime()) ? current.toISOString() : null;
+        }
+        if (
+            current instanceof ArrayBuffer
+            || ArrayBuffer.isView(current)
+            || (typeof Blob !== 'undefined' && current instanceof Blob)
+        ) {
+            omittedMediaPaths.push(path);
+            return OMITTED_MEDIA_VALUE;
         }
         if (seen.has(current)) {
             return CIRCULAR_VALUE;
@@ -120,18 +147,50 @@ export function sanitizeRequestBody(value) {
         seen.add(current);
 
         if (Array.isArray(current)) {
-            return current.map((item, index) => visit(item, `${path}[${index}]`));
+            const clone = [];
+            const length = Math.min(
+                current.length,
+                Math.max(0, SANITIZE_MAX_NODES - visitedNodes),
+            );
+            for (let index = 0; index < length; index += 1) {
+                let item;
+                try {
+                    item = current[index];
+                } catch {
+                    clone.push(UNSUPPORTED_VALUE);
+                    continue;
+                }
+                clone.push(visit(item, `${path}[${index}]`, depth + 1));
+            }
+            if (length < current.length) clone.push(UNSUPPORTED_VALUE);
+            return clone;
         }
 
         const clone = {};
-        for (const [key, item] of Object.entries(current)) {
+        let keys;
+        try {
+            keys = Object.keys(current);
+        } catch {
+            return UNSUPPORTED_VALUE;
+        }
+        for (const key of keys) {
             const nextPath = path ? `${path}.${key}` : key;
+            if (UNSAFE_OBJECT_KEYS.has(key)) {
+                continue;
+            }
             if (isSensitiveKey(key)) {
                 clone[key] = REDACTED_VALUE;
                 redactedPaths.push(nextPath);
                 continue;
             }
-            clone[key] = visit(item, nextPath);
+            let item;
+            try {
+                item = current[key];
+            } catch {
+                clone[key] = UNSUPPORTED_VALUE;
+                continue;
+            }
+            clone[key] = visit(item, nextPath, depth + 1);
         }
         return clone;
     };

@@ -549,6 +549,41 @@ test('snapshot finalization counts identical text only once', async () => {
     });
 });
 
+test('minimal finalization preserves the exact payload with one bounded final source', async () => {
+    const timestamp = 1_753_920_000_000;
+    const result = await finalizeSnapshot({
+        contextState: {
+            chatId: 'capture-first-chat',
+            character: {},
+            characterFields: {},
+            extensionPrompts: {},
+            configuredPrompts: Array.from({ length: 1_000 }, (_, index) => ({
+                name: `inactive-${index}`,
+                enabled: false,
+                content: 'unused '.repeat(1_000),
+            })),
+            maxContext: 8_192,
+        },
+        payload: [{ role: 'user', content: 'capture this before analysis' }],
+        promptType: 'chat-completion',
+        generationType: 'normal',
+        activatedLore: [],
+        extensionVersion: 'test',
+        tokenCounter: async (text) => String(text).length,
+        sourceMode: 'minimal',
+        timestamp,
+        snapshotId: 'capture-first-id',
+    });
+
+    assert.equal(result.id, 'capture-first-id');
+    assert.equal(result.timestamp, timestamp);
+    assert.equal(result.sources.length, 1);
+    assert.equal(result.sources[0].type, 'final');
+    assert.equal(result.sources[0].content, result.finalText);
+    assert.equal(result.stats.structured.sourceAnalysis, 'deferred');
+    assert.doesNotThrow(() => structuredClone(result));
+});
+
 test('snapshot finalization separates selected generation source from unknown upstream provider', async () => {
     const result = await finalizeSnapshot({
         contextState: {

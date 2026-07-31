@@ -176,6 +176,37 @@ test('sanitizer handles large non-secret text without changing it', () => {
     assert.deepEqual(sanitized.redactedPaths, []);
 });
 
+test('sanitizer produces persistable JSON from browser-only and unsupported values', () => {
+    const input = {
+        count: 12n,
+        invalidNumber: Number.NaN,
+        callback: () => 'not serializable',
+        marker: Symbol('not serializable'),
+        bytes: new Uint8Array([1, 2, 3]),
+        createdAt: new Date('2026-07-31T00:00:00.000Z'),
+    };
+    Object.defineProperty(input, 'throwingGetter', {
+        enumerable: true,
+        get() {
+            throw new Error('must not escape sanitizer');
+        },
+    });
+
+    const sanitized = sanitizeRequestBody(input);
+    assert.equal(sanitized.body.count, '12');
+    assert.equal(sanitized.body.invalidNumber, null);
+    assert.equal(sanitized.body.callback, null);
+    assert.equal(sanitized.body.marker, null);
+    assert.equal(sanitized.body.bytes, '[미디어 데이터 생략됨]');
+    assert.equal(sanitized.body.createdAt, '2026-07-31T00:00:00.000Z');
+    assert.equal(
+        sanitized.body.throwingGetter,
+        '[ST DevTools: unsupported value omitted]',
+    );
+    assert.doesNotThrow(() => structuredClone(sanitized.body));
+    assert.doesNotThrow(() => JSON.stringify(sanitized.body));
+});
+
 test('sanitizer fuzz preserves shape and never leaks seeded secret values', () => {
     const secrets = [
         ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-'),

@@ -1,5 +1,6 @@
 import { DevToolsWindow } from '../src/ui.js';
 import { CaptureController } from '../src/capture.js';
+import { SnapshotStore } from '../src/storage.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 import { createProfileContext } from '../src/profile-context.js';
 import { createCaptureBoundary } from '../src/request.js';
@@ -61,7 +62,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.11.2',
+        extensionVersion: '0.11.3',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1408,7 +1409,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.11.2',
+    version: '0.11.3',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1545,7 +1546,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.11.2',
+        extensionVersion: '0.11.3',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1583,17 +1584,16 @@ async function runArchiveRollbackSmokeTest() {
 
 async function runHungTokenizerCaptureSmokeTest() {
     const statuses = [];
-    let storedSnapshot = null;
+    const smokeStore = new SnapshotStore({
+        namespace: 'sandbox-capture-first',
+        maxSnapshotsPerChat: 10,
+    });
     const controller = new CaptureController({
         getContext: () => ({
             getTokenCountAsync: () => new Promise(() => {}),
         }),
-        store: {
-            async addSnapshot(snapshot) {
-                storedSnapshot = snapshot;
-            },
-        },
-        version: '0.11.2',
+        store: smokeStore,
+        version: '0.11.3',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1604,7 +1604,7 @@ async function runHungTokenizerCaptureSmokeTest() {
         promptType: 'chat-completion',
         stage: 'backend-request-ready',
     });
-    await controller.persistCapture({
+    const persistedSnapshot = await controller.persistCapture({
         contextState: {
             chatId: 'sandbox-hung-tokenizer',
             messageCount: 1,
@@ -1628,10 +1628,16 @@ async function runHungTokenizerCaptureSmokeTest() {
         }),
         request: null,
     });
+    const storedSnapshot = await smokeStore.getSnapshot(
+        'sandbox-hung-tokenizer',
+        persistedSnapshot.id,
+    );
     const result = {
         saved: Boolean(storedSnapshot),
+        verified: storedSnapshot?.id === persistedSnapshot.id,
         states: statuses,
         totalTokens: storedSnapshot?.stats?.totalTokens ?? null,
+        sourceAnalysis: storedSnapshot?.stats?.structured?.sourceAnalysis ?? null,
     };
     document.body.dataset.hungTokenizerCapture = JSON.stringify(result);
     return result;

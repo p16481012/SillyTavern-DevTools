@@ -1427,6 +1427,26 @@ export function buildSources(contextState, payload, activatedLore = [], request 
     return sources;
 }
 
+export function buildMinimalSources(payload) {
+    const flattened = flattenPromptWithLocations(payload);
+    const finalText = flattened.text;
+    const sources = [];
+    addSource(sources, {
+        type: 'final',
+        label: 'Final Prompt',
+        labelKey: 'source.finalPrompt',
+        content: finalText,
+        finalText,
+        attribution: 'exact',
+        included: true,
+        metadata: { sourceAnalysis: 'deferred' },
+        ranges: finalText ? [{ start: 0, end: finalText.length }] : [],
+        provenance: { method: 'exact', confidence: 1 },
+        payloadLocations: flattened.locations,
+    });
+    return sources;
+}
+
 export function createSnapshotId(timestamp, payload) {
     const input = `${timestamp}:${flattenPrompt(payload)}`;
     let hash = 2166136261;
@@ -1447,11 +1467,18 @@ export async function finalizeSnapshot({
     tokenCounter,
     capture,
     request,
+    sourceMode = 'full',
+    timestamp: requestedTimestamp = null,
+    snapshotId = null,
 }) {
-    const timestamp = Date.now();
+    const timestamp = Number.isFinite(requestedTimestamp)
+        ? Number(requestedTimestamp)
+        : Date.now();
     const finalText = flattenPrompt(payload);
     const normalizedRequest = request ?? createRequestRecord(null);
-    const sources = buildSources(contextState, payload, activatedLore, normalizedRequest);
+    const sources = sourceMode === 'minimal'
+        ? buildMinimalSources(payload)
+        : buildSources(contextState, payload, activatedLore, normalizedRequest);
     const normalizedCapture = capture ?? createCaptureBoundary({
         eventName: promptType === 'chat-completion'
             ? 'CHAT_COMPLETION_PROMPT_READY'
@@ -1504,7 +1531,9 @@ export async function finalizeSnapshot({
 
     return {
         schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-        id: createSnapshotId(timestamp, payload),
+        id: typeof snapshotId === 'string' && snapshotId
+            ? snapshotId
+            : createSnapshotId(timestamp, payload),
         timestamp,
         extensionVersion,
         chatId: contextState.chatId || '__global__',
@@ -1540,6 +1569,7 @@ export async function finalizeSnapshot({
             contextUsage: usableContext ? totalTokens / usableContext : null,
             remainingContext: usableContext ? Math.max(0, usableContext - totalTokens) : null,
             structured: {
+                sourceAnalysis: sourceMode === 'minimal' ? 'deferred' : 'complete',
                 toolSchemas: sources.filter((source) => source.type === 'tool_schema').length,
                 toolCalls: sources.filter((source) => source.type === 'tool_call').length,
                 toolResults: sources.filter((source) => source.type === 'tool_result').length,

@@ -31,6 +31,54 @@ const CAPTURE_PROMPT_TYPES = new Set([
     'chat-completion',
     'text-completion',
 ]);
+const CAPTURE_PIPELINE_PHASES = new Set([
+    'finalizing',
+    'privacy',
+    'storage',
+    'storage-verify',
+]);
+const DETAILED_ANALYSIS_MAX_FINAL_CHARS = 500_000;
+const DETAILED_ANALYSIS_MAX_SOURCE_CHARS = 2_000_000;
+const DETAILED_ANALYSIS_MAX_SOURCE_COUNT = 400;
+const DETAILED_ANALYSIS_MAX_MATCH_WORK = 50_000_000;
+
+function fallbackTokenCount(text) {
+    return Math.ceil(new TextEncoder().encode(String(text ?? '')).length / 3.35);
+}
+
+function detailedAnalysisFitsBudget(contextState, finalText, activatedLore = []) {
+    const values = [
+        ...Object.values(contextState?.characterFields ?? {}),
+        contextState?.personaDescription,
+        contextState?.authorsNote,
+        ...Object.values(contextState?.extensionPrompts ?? {}).map(
+            (prompt) => prompt?.value ?? prompt?.content,
+        ),
+        ...(Array.isArray(contextState?.configuredPrompts)
+            ? contextState.configuredPrompts
+            : []).map((prompt) => prompt?.content),
+        ...(Array.isArray(activatedLore) ? activatedLore : [])
+            .map((entry) => entry?.content),
+    ];
+    let sourceCharacters = 0;
+    for (const value of values) {
+        sourceCharacters += typeof value === 'string' ? value.length : 1_024;
+        if (sourceCharacters > DETAILED_ANALYSIS_MAX_SOURCE_CHARS) return false;
+    }
+    const finalCharacters = String(finalText ?? '').length;
+    return finalCharacters <= DETAILED_ANALYSIS_MAX_FINAL_CHARS
+        && values.length <= DETAILED_ANALYSIS_MAX_SOURCE_COUNT
+        && finalCharacters * Math.min(values.length, 100)
+            <= DETAILED_ANALYSIS_MAX_MATCH_WORK;
+}
+
+function scheduleDeferredCaptureWork(operation) {
+    if (typeof globalThis.requestIdleCallback === 'function') {
+        globalThis.requestIdleCallback(() => void operation(), { timeout: 1_500 });
+        return;
+    }
+    setTimeout(() => void operation(), 50);
+}
 
 function boundedAsyncWait(value, fallback) {
     return Number.isSafeInteger(value) && value >= 1 && value <= MAX_ASYNC_WAIT_MS
@@ -85,7 +133,9 @@ function selectPromptOrder(settings, prompts) {
 
 export function getConfiguredPrompts(context) {
     const settings = context.chatCompletionSettings ?? {};
-    const prompts = Array.isArray(settings.prompts) ? deepClone(settings.prompts) : [];
+    const prompts = Array.isArray(settings.prompts)
+        ? settings.prompts.map((prompt) => ({ ...prompt }))
+        : [];
     const selectedOrder = selectPromptOrder(settings, prompts);
     if (!selectedOrder) {
         return prompts.map((prompt, promptOrder) => ({
@@ -149,7 +199,7 @@ function getCharacterFields(context, character) {
     try {
         const fields = context.getCharacterCardFields?.();
         if (fields) {
-            return deepClone({
+            return {
                 description: fields.description ?? '',
                 personality: fields.personality ?? '',
                 scenario: fields.scenario ?? '',
@@ -158,14 +208,14 @@ function getCharacterFields(context, character) {
                 systemPrompt: fields.system ?? '',
                 postHistoryInstructions: fields.jailbreak ?? '',
                 depthPrompt: fields.charDepthPrompt ?? '',
-            });
+            };
         }
     } catch {
         // Use raw card fields on older SillyTavern versions.
     }
 
     const data = character?.data ?? character ?? {};
-    return deepClone({
+    return {
         description: data.description ?? character?.description ?? '',
         personality: data.personality ?? character?.personality ?? '',
         scenario: context.chatMetadata?.scenario ?? data.scenario ?? character?.scenario ?? '',
@@ -174,7 +224,7 @@ function getCharacterFields(context, character) {
         systemPrompt: context.chatMetadata?.system_prompt ?? data.system_prompt ?? '',
         postHistoryInstructions: data.post_history_instructions ?? '',
         depthPrompt: data.extensions?.depth_prompt?.prompt ?? '',
-    });
+    };
 }
 
 function selectedGroupContext(context) {
@@ -240,11 +290,11 @@ function snapshotContext(context) {
         }),
         maxContext: context.maxContext,
         maxOutput: getMaxOutput(context),
-        character: deepClone(character),
+        character,
         characterFields: getCharacterFields(context, character),
         personaDescription: context.powerUserSettings?.persona_description ?? '',
         authorsNote: getAuthorsNote(context),
-        extensionPrompts: deepClone(context.extensionPrompts ?? {}),
+        extensionPrompts: context.extensionPrompts ?? {},
         configuredPrompts: getConfiguredPrompts(context),
     };
 }
@@ -369,6 +419,7 @@ export class CaptureController extends EventTarget {
     dispatchCaptureStatus(state, {
         promptType = null,
         stage = null,
+        phase = null,
     } = {}) {
         if (!CAPTURE_STATUS_STATES.has(state)) return null;
         const detail = { state };
@@ -378,16 +429,20 @@ export class CaptureController extends EventTarget {
         if (typeof stage === 'string' && stage.length > 0 && stage.length <= 64) {
             detail.stage = stage;
         }
+        if (CAPTURE_PIPELINE_PHASES.has(phase)) {
+            detail.phase = phase;
+        }
         detail.at = Date.now();
         Object.freeze(detail);
         this.dispatchEvent(new CustomEvent('capture-status', { detail }));
         return detail;
     }
 
-    reportCaptureFailure(promptType, stage = null) {
+    reportCaptureFailure(promptType, stage = null, phase = null) {
         return this.dispatchCaptureStatus('failed', {
             promptType,
             stage,
+            phase,
         });
     }
 
@@ -609,11 +664,15 @@ export class CaptureController extends EventTarget {
             snapshotContext(this.getContext()),
             'contextState',
         );
+        const promptReady = sanitizeCaptureValue(
+            mutablePayload,
+            'promptReadyPayload',
+        );
         const pending = {
             contextState: contextState.value,
             promptType,
-            promptReadyPayload: deepClone(mutablePayload),
-            promptReadySanitized: null,
+            promptReadyPayload: null,
+            promptReadySanitized: promptReady,
             activatedLore: [],
             supplementalRedactedPaths: [
                 ...contextState.redactedPaths,
@@ -621,8 +680,8 @@ export class CaptureController extends EventTarget {
             supplementalOmittedMediaPaths: [
                 ...contextState.omittedMediaPaths,
             ],
-            fallbackRedactedPaths: [],
-            fallbackOmittedMediaPaths: [],
+            fallbackRedactedPaths: [...promptReady.redactedPaths],
+            fallbackOmittedMediaPaths: [...promptReady.omittedMediaPaths],
             generationType: 'unknown',
             generationHandle: null,
             ledgerPromptHandle: null,
@@ -781,6 +840,7 @@ export class CaptureController extends EventTarget {
                 this.dispatchCaptureStatus('processing', {
                     promptType: pending.promptType,
                     stage,
+                    phase: 'finalizing',
                 });
                 this.persistCapture({
                     contextState: pending.contextState,
@@ -801,6 +861,63 @@ export class CaptureController extends EventTarget {
         }, 0);
     }
 
+    createTokenCounter(context) {
+        const localCounter = async (text) => fallbackTokenCount(text);
+        if (typeof context.getTokenCountAsync !== 'function') return localCounter;
+        return async (text) => {
+            if (this.tokenCounterUnavailable) return localCounter(text);
+            if (this.tokenCounterProbe === null) {
+                this.tokenCounterProbe = withCaptureTimeout(
+                    () => context.getTokenCountAsync(text),
+                    this.tokenCounterWaitMs,
+                    'capture-token-counter-timeout',
+                ).then(
+                    (value) => ({ available: true, value }),
+                    () => {
+                        this.tokenCounterUnavailable = true;
+                        return { available: false, value: null };
+                    },
+                );
+                const probe = await this.tokenCounterProbe;
+                return probe.available ? probe.value : localCounter(text);
+            }
+            await this.tokenCounterProbe;
+            if (this.tokenCounterUnavailable) return localCounter(text);
+            try {
+                return await withCaptureTimeout(
+                    () => context.getTokenCountAsync(text),
+                    this.tokenCounterWaitMs,
+                    'capture-token-counter-timeout',
+                );
+            } catch {
+                this.tokenCounterUnavailable = true;
+                return localCounter(text);
+            }
+        };
+    }
+
+    reportPipelineFailure(error, {
+        promptType,
+        stage,
+        phase,
+        operation,
+        snapshot = null,
+    }) {
+        this.reportCaptureFailure(promptType, stage, phase);
+        const fallbackCode = `capture-${phase ?? 'pipeline'}-failed`;
+        const rawCode = typeof error?.code === 'string' ? error.code : fallbackCode;
+        const code = /^[a-z0-9-]{1,80}$/u.test(rawCode) ? rawCode : fallbackCode;
+        const safeError = new Error(code);
+        safeError.code = code;
+        this.dispatchEvent(new CustomEvent('capture-error', {
+            detail: {
+                operation: operation ?? phase ?? 'capturePipeline',
+                snapshot,
+                error: safeError,
+            },
+        }));
+    }
+
     async persistCapture({
         contextState,
         payload,
@@ -813,7 +930,11 @@ export class CaptureController extends EventTarget {
     }) {
         let finalizedSnapshot;
         let snapshot;
+        const supportsDeferredAnalysis = typeof this.store.updateSnapshot === 'function';
+        let privacyMode = 'full';
+        let detailedAnalysisAllowed = false;
         try {
+            privacyMode = this.getCaptureMode();
             const context = this.getContext();
             const generation = this.generationLedger.getSessionView(generationHandle);
             if (generation) {
@@ -821,47 +942,9 @@ export class CaptureController extends EventTarget {
                 capture.statusEvent = generation.statusEvent;
                 capture.statusUpdatedAt = generation.statusUpdatedAt;
             }
-            const fallbackTokenCounter = async (text) => (
-                Math.ceil(new TextEncoder().encode(text).length / 3.35)
-            );
-            const tokenCounter = typeof context.getTokenCountAsync === 'function'
-                ? async (text) => {
-                    if (this.tokenCounterUnavailable) {
-                        return fallbackTokenCounter(text);
-                    }
-                    if (this.tokenCounterProbe === null) {
-                        this.tokenCounterProbe = withCaptureTimeout(
-                            () => context.getTokenCountAsync(text),
-                            this.tokenCounterWaitMs,
-                            'capture-token-counter-timeout',
-                        ).then(
-                            (value) => ({ available: true, value }),
-                            () => {
-                                this.tokenCounterUnavailable = true;
-                                return { available: false, value: null };
-                            },
-                        );
-                        const probe = await this.tokenCounterProbe;
-                        return probe.available
-                            ? probe.value
-                            : fallbackTokenCounter(text);
-                    }
-                    await this.tokenCounterProbe;
-                    if (this.tokenCounterUnavailable) {
-                        return fallbackTokenCounter(text);
-                    }
-                    try {
-                        return await withCaptureTimeout(
-                            () => context.getTokenCountAsync(text),
-                            this.tokenCounterWaitMs,
-                            'capture-token-counter-timeout',
-                        );
-                    } catch {
-                        this.tokenCounterUnavailable = true;
-                        return fallbackTokenCounter(text);
-                    }
-                }
-                : fallbackTokenCounter;
+            const tokenCounter = supportsDeferredAnalysis
+                ? async (text) => fallbackTokenCount(text)
+                : this.createTokenCounter(context);
             finalizedSnapshot = await finalizeSnapshot({
                 contextState,
                 payload,
@@ -872,22 +955,140 @@ export class CaptureController extends EventTarget {
                 tokenCounter,
                 capture,
                 request,
+                sourceMode: supportsDeferredAnalysis ? 'minimal' : 'full',
+            });
+            detailedAnalysisAllowed = supportsDeferredAnalysis
+                && detailedAnalysisFitsBudget(
+                    contextState,
+                    finalizedSnapshot.finalText,
+                    activatedLore,
+                );
+            if (supportsDeferredAnalysis && !detailedAnalysisAllowed) {
+                finalizedSnapshot.stats.structured.sourceAnalysis = 'limited';
+                if (finalizedSnapshot.sources[0]?.metadata) {
+                    finalizedSnapshot.sources[0].metadata.sourceAnalysis = 'limited';
+                }
+            }
+            this.dispatchCaptureStatus('processing', {
+                promptType,
+                stage: capture?.stage,
+                phase: 'privacy',
             });
             snapshot = await withCaptureTimeout(
                 () => transformSnapshotPrivacy(finalizedSnapshot, {
-                    mode: this.getCaptureMode(),
+                    mode: privacyMode,
                 }),
                 this.storageWaitMs,
                 'capture-privacy-timeout',
             );
         } catch (error) {
-            this.reportCaptureFailure(promptType, capture?.stage);
+            const phase = finalizedSnapshot ? 'privacy' : 'finalizing';
+            this.reportPipelineFailure(error, {
+                promptType,
+                stage: capture?.stage,
+                phase,
+                operation: phase === 'privacy' ? 'transformPrivacy' : 'finalizeSnapshot',
+            });
             throw error;
         }
-        await this.storeSnapshot(snapshot, {
+        this.dispatchCaptureStatus('processing', {
+            promptType,
+            stage: capture?.stage,
+            phase: 'storage',
+        });
+        const storedSnapshot = await this.storeSnapshot(snapshot, {
             storageChatId: finalizedSnapshot.chatId,
         });
-        return this.registerGenerationSnapshot(generationHandle, snapshot);
+        const registeredSnapshot = await this.registerGenerationSnapshot(
+            generationHandle,
+            storedSnapshot,
+        );
+        if (
+            supportsDeferredAnalysis
+            && detailedAnalysisAllowed
+        ) {
+            scheduleDeferredCaptureWork(() => this.enrichStoredCapture({
+                contextState,
+                payload,
+                promptType,
+                generationType,
+                activatedLore,
+                capture,
+                request,
+                generationHandle,
+                baseSnapshot: registeredSnapshot,
+                rawChatId: finalizedSnapshot.chatId,
+                privacyMode,
+            }));
+        }
+        return registeredSnapshot;
+    }
+
+    async enrichStoredCapture({
+        contextState,
+        payload,
+        promptType,
+        generationType,
+        activatedLore,
+        capture,
+        request,
+        generationHandle,
+        baseSnapshot,
+        rawChatId,
+        privacyMode,
+    }) {
+        try {
+            const detailedSnapshot = await finalizeSnapshot({
+                contextState,
+                payload,
+                promptType,
+                generationType,
+                activatedLore,
+                extensionVersion: this.version,
+                tokenCounter: this.createTokenCounter(this.getContext()),
+                capture,
+                request,
+                sourceMode: 'full',
+                timestamp: baseSnapshot.timestamp,
+                snapshotId: baseSnapshot.id,
+            });
+            const privateDetailedSnapshot = await withCaptureTimeout(
+                () => transformSnapshotPrivacy(detailedSnapshot, {
+                    mode: privacyMode,
+                }),
+                this.storageWaitMs,
+                'capture-enrichment-privacy-timeout',
+            );
+            const result = await withCaptureTimeout(
+                () => this.store.updateSnapshot(
+                    rawChatId,
+                    baseSnapshot.id,
+                    (current) => ({
+                        ...privateDetailedSnapshot,
+                        capture: {
+                            ...(privateDetailedSnapshot.capture ?? {}),
+                            ...(current.capture ?? {}),
+                        },
+                        usage: current.usage ?? privateDetailedSnapshot.usage,
+                    }),
+                ),
+                this.storageWaitMs,
+                'capture-enrichment-storage-timeout',
+            );
+            if (!result?.snapshot || !['unchanged', null].includes(result.reason)) return;
+            const stored = attachStorageChatId(result.snapshot, rawChatId);
+            if (generationHandle) {
+                this.generationLedger.replaceSnapshot(generationHandle, stored);
+            }
+            if (result.updated) {
+                this.dispatchEvent(new CustomEvent('snapshot', { detail: stored }));
+            }
+        } catch (error) {
+            console.warn(
+                '[ST DevTools] Snapshot was saved, but detailed source analysis was skipped.',
+                error,
+            );
+        }
     }
 
     async registerGenerationSnapshot(generationHandle, snapshot) {
@@ -1159,6 +1360,8 @@ export class CaptureController extends EventTarget {
     async storeSnapshot(snapshot, {
         storageChatId = snapshot?.storageChatId ?? snapshot?.chatId,
     } = {}) {
+        let phase = 'storage';
+        let persistedSnapshot = snapshot;
         try {
             attachStorageChatId(snapshot, storageChatId);
             await withCaptureTimeout(
@@ -1168,14 +1371,36 @@ export class CaptureController extends EventTarget {
                 this.storageWaitMs,
                 'capture-storage-timeout',
             );
+            if (typeof this.store.getSnapshot === 'function') {
+                phase = 'storage-verify';
+                this.dispatchCaptureStatus('processing', {
+                    promptType: snapshot?.promptType,
+                    stage: snapshot?.capture?.stage,
+                    phase,
+                });
+                const verified = await withCaptureTimeout(
+                    () => this.store.getSnapshot(snapshot.storageChatId, snapshot.id),
+                    Math.min(this.storageWaitMs, 5_000),
+                    'capture-storage-verification-timeout',
+                );
+                if (!verified || verified.id !== snapshot.id) {
+                    const error = new Error('capture-storage-verification-failed');
+                    error.code = 'capture-storage-verification-failed';
+                    throw error;
+                }
+                persistedSnapshot = verified;
+            }
         } catch (error) {
             this.dispatchCaptureStatus('failed', {
                 promptType: snapshot?.promptType,
                 stage: snapshot?.capture?.stage,
+                phase,
             });
             this.dispatchEvent(new CustomEvent('capture-error', {
                 detail: {
-                    operation: 'addSnapshot',
+                    operation: phase === 'storage-verify'
+                        ? 'verifySnapshot'
+                        : 'addSnapshot',
                     snapshot,
                     error,
                 },
@@ -1183,10 +1408,10 @@ export class CaptureController extends EventTarget {
             throw error;
         }
         this.dispatchCaptureStatus('saved', {
-            promptType: snapshot?.promptType,
-            stage: snapshot?.capture?.stage,
+            promptType: persistedSnapshot?.promptType,
+            stage: persistedSnapshot?.capture?.stage,
         });
-        this.dispatchEvent(new CustomEvent('snapshot', { detail: snapshot }));
-        return snapshot;
+        this.dispatchEvent(new CustomEvent('snapshot', { detail: persistedSnapshot }));
+        return persistedSnapshot;
     }
 }

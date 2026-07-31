@@ -78,7 +78,7 @@ test('capture status producer emits only bounded public metadata', () => {
     const controller = new CaptureController({
         getContext: () => ({}),
         store: {},
-        version: '0.11.2-test',
+        version: '0.11.3-test',
     });
     const emitted = [];
     controller.addEventListener('capture-status', (event) => {
@@ -123,7 +123,7 @@ test('beginner UI consumes only the capture-status whitelist', () => {
             getContext: () => ({ chatId: 'beginner-chat' }),
             store: {},
             capture,
-            version: '0.11.2-test',
+            version: '0.11.3-test',
         });
 
         assert.equal(capture.listeners.has('capture-status'), true);
@@ -142,6 +142,32 @@ test('beginner UI consumes only the capture-status whitelist', () => {
                 stage: 'prompt-ready',
             });
         }
+
+        capture.emit('capture-status', {
+            state: 'processing',
+            at: 99,
+            promptType: 'chat-completion',
+            stage: 'prompt-ready',
+            phase: 'storage-verify',
+            rawPrompt: 'private-processing-phase',
+        });
+        assert.deepEqual(ui.captureStatus, {
+            state: 'processing',
+            at: 99,
+            promptType: 'chat-completion',
+            stage: 'prompt-ready',
+            phase: 'storage-verify',
+        });
+
+        capture.emit('capture-status', {
+            state: 'processing',
+            at: 100,
+            phase: 'private-arbitrary-phase',
+        });
+        assert.deepEqual(ui.captureStatus, {
+            state: 'processing',
+            at: 100,
+        });
 
         const beforeInvalid = structuredClone(ui.captureStatus);
         capture.emit('capture-status', {
@@ -333,8 +359,16 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
         'capture.status.waiting',
         'capture.status.capturing',
         'capture.status.processing',
+        'capture.status.processing.finalizing',
+        'capture.status.processing.privacy',
+        'capture.status.processing.storage',
+        'capture.status.processing.storage-verify',
         'capture.status.saved',
         'capture.status.failed',
+        'capture.status.failed.finalizing',
+        'capture.status.failed.privacy',
+        'capture.status.failed.storage',
+        'capture.status.failed.storage-verify',
         'capture.status.excludedSemantic',
         'capture.status.skippedSafety',
     ];

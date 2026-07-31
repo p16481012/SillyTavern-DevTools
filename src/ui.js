@@ -191,6 +191,12 @@ const CAPTURE_STATUS_STATES = new Set([
     'excluded-semantic',
     'skipped-safety',
 ]);
+const CAPTURE_PIPELINE_PHASES = new Set([
+    'finalizing',
+    'privacy',
+    'storage',
+    'storage-verify',
+]);
 let tooltipSequence = 0;
 let fieldSequence = 0;
 
@@ -3380,6 +3386,9 @@ export class DevToolsWindow {
             ...(typeof detail?.stage === 'string'
                 ? { stage: detail.stage }
                 : {}),
+            ...(CAPTURE_PIPELINE_PHASES.has(detail?.phase)
+                ? { phase: detail.phase }
+                : {}),
         };
         this.updateCaptureStatus();
     }
@@ -3401,7 +3410,16 @@ export class DevToolsWindow {
         const copy = this.captureStatusRegion.querySelector(
             '.st-devtools-capture-status-copy',
         );
-        if (copy) copy.textContent = t(`capture.status.${keySuffix}`);
+        if (copy) {
+            const phase = this.captureStatus?.phase;
+            const phasedKey = (
+                ['processing', 'failed'].includes(state)
+                && CAPTURE_PIPELINE_PHASES.has(phase)
+            )
+                ? `capture.status.${keySuffix}.${phase}`
+                : null;
+            copy.textContent = t(phasedKey ?? `capture.status.${keySuffix}`);
+        }
     }
 
     renderQuickStart({ showHeading = false } = {}) {

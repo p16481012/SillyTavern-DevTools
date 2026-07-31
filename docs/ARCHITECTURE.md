@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.11.2의 스키마 v7, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.11.3의 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -22,14 +22,14 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 7. credential 형태의 필드, 토큰 형태 값, Authorization, URL query 비밀값과 PEM 개인 키를 요청·컨텍스트·로어북·payload 전체에서 제거하고 경로를 기록합니다.
 8. 요청 설정 이벤트가 일정 시간 안에 없으면 prompt-ready payload를 대체 캡처합니다.
 9. `GENERATION_STOPPED` 또는 `GENERATION_ENDED`를 받으면 정확히 식별되거나 하나로 한정된 generation에 연결된 스냅샷의 lifecycle을 같은 ID로 갱신합니다.
-10. prompt tokenizer의 입력 토큰, 소스 연결 상태·payload 구조 위치·멀티모달 토큰 추정치를 비동기로 계산합니다. 패널 세션의 첫 tokenizer 호출을 공유 가용성 probe로 사용하고 5초 안에 끝나지 않으면 나머지 호출을 시작하지 않은 채 같은 세션의 입력 토큰을 `ceil(UTF-8 bytes / 3.35)`로 추정합니다. 유효한 `MESSAGE_RECEIVED` 출력 토큰은 하나의 활성 generation만 고를 수 있을 때 별도 후속 usage로 병합합니다.
-11. 캡처 시점의 사용자 설정에 따라 완성된 스냅샷을 `full`·`redacted`·`metadata` 중 하나로 단방향 변환한 뒤, 원래 채팅 ID는 저장 partition 선택에만 사용하고 변환된 스냅샷을 타임라인에 저장합니다. 개인정보 변환 Promise는 30초 뒤 실패로 닫습니다.
-12. 같은 채팅의 저장·읽기·삭제·비우기는 채팅 키 잠금으로 직렬화하고, 모든 저장 변경과 전체 삭제·정책 적용·archive 가져오기는 추가 전역 잠금으로 교차 실행을 막습니다. lifecycle·usage 후속 변경은 저장 identity를 유지하는 원자적 snapshot updater를 사용합니다.
-13. `store.addSnapshot()`은 30초 안에 끝나지 않아도 실패로 닫습니다. 저장에 실패하면 계산을 마친 동일 스냅샷과 오류를 UI에 전달하여 같은 ID로 재시도합니다. 저장 전 단계의 오류도 별도 재시도용 원문을 노출하지 않고 terminal `failed` 상태를 보냅니다.
+10. 정확한 payload와 finalText, 로컬 추정 usage, 단일 final source를 가진 최소 스냅샷을 먼저 만듭니다. 캡처 시점의 사용자 설정에 따라 `full`·`redacted`·`metadata` 중 하나로 단방향 변환하고 원래 채팅 partition에 저장합니다.
+11. `store.addSnapshot()` 뒤 같은 partition과 ID를 즉시 다시 읽어 레코드와 timeline index를 검증합니다. 저장·재읽기는 각각 제한 시간 안에 끝나지 않으면 단계가 구분된 `failed`로 닫습니다.
+12. 저장이 확인된 뒤 prompt tokenizer의 입력 토큰, 소스 연결 상태·payload 구조 위치·멀티모달 토큰 추정치를 유휴 작업에서 계산하고 같은 ID를 원자적으로 보강합니다. 작업량 상한을 넘거나 후처리가 실패하면 최소 스냅샷을 그대로 유지합니다. 유효한 `MESSAGE_RECEIVED` 출력 토큰은 하나의 활성 generation만 고를 수 있을 때 별도 후속 usage로 병합합니다.
+13. 같은 채팅의 저장·읽기·삭제·비우기는 채팅 키 잠금으로 직렬화하고, 모든 저장 변경과 전체 삭제·정책 적용·archive 가져오기는 추가 전역 잠금으로 교차 실행을 막습니다. lifecycle·usage·상세 분석 후속 변경은 저장 identity를 유지하는 원자적 snapshot updater를 사용합니다.
 
 ### 개인정보 없는 캡처 상태
 
-v0.11.2의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`로 제한합니다. 실제 저장을 시작한 모든 경로는 tokenizer·privacy·storage Promise의 미종료를 포함해 `saved` 또는 `failed`로 종결합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장된 스냅샷 전달에, `capture-error`는 계산을 마친 동일 스냅샷 재시도에 계속 사용합니다.
+v0.11.3의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, phase?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`, phase는 `finalizing`·`privacy`·`storage`·`storage-verify`로 제한합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장 또는 같은 ID로 보강된 스냅샷 전달에, `capture-error`는 저장 실패한 동일 스냅샷 재시도에 계속 사용합니다.
 
 ## 캡처 경계
 
@@ -167,7 +167,7 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.11.2의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
+v0.11.3의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
 
 처리 흐름은 다음과 같습니다.
 
