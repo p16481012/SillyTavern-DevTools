@@ -170,10 +170,9 @@ const PRICING_RATE_FIELDS = Object.freeze([
 ]);
 const TABS = [
     ['explorer', 'tab.explorer', 'nav.short.explorer', 'fa-layer-group'],
-    ['rules', 'tab.rules', 'nav.short.rules', 'fa-shield-halved'],
     ['timeline', 'tab.timeline', 'nav.short.timeline', 'fa-clock-rotate-left'],
     ['diff', 'tab.diff', 'nav.short.diff', 'fa-code-compare'],
-    ['context', 'tab.context', 'nav.short.context', 'fa-file-lines'],
+    ['rules', 'tab.rules', 'nav.short.rules', 'fa-shield-halved'],
     ['search', 'tab.search', 'nav.short.search', 'fa-magnifying-glass'],
 ];
 const CAPTURE_STATUS_STATES = new Set([
@@ -554,7 +553,7 @@ function explorerSourceGroups(sources = []) {
         {
             key: 'configured',
             sources: configured,
-            open: configured.length > 0,
+            open: false,
             promptManagerOrder: configured.length > 0 && configured.every(
                 (source) => source?.metadata?.promptOrderSource === 'prompt-manager',
             ),
@@ -592,6 +591,22 @@ function sourceReferenceLabel(reference, sourceById) {
 function translatedValue(key, fallback) {
     const translated = t(key);
     return translated === key ? fallback : translated;
+}
+
+function sourceMappingColor(source, index = 0) {
+    const identity = String(
+        source?.metadata?.identifier
+        ?? source?.id
+        ?? source?.name
+        ?? index,
+    );
+    let hash = 2166136261;
+    for (const character of identity) {
+        hash ^= character.codePointAt(0);
+        hash = Math.imul(hash, 16777619);
+    }
+    const hue = Math.round((Math.abs(hash) + (index * 137.508)) % 360);
+    return `hsl(${hue} 72% 52%)`;
 }
 
 function normalizedCount(value, fallback = 0) {
@@ -724,6 +739,7 @@ export class DevToolsWindow {
         this.virtualListCleanups = new Set();
         this.virtualSourceLists = new Map();
         this.openSourceIds = new Set();
+        this.explorerIncludedOnly = false;
         this.analysisCache = analysisCache ?? new AnalysisCache();
         this.analysisRuntime = analysisRuntime ?? new AnalysisRuntime({
             WorkerClass: analysisWorkerClass,
@@ -814,6 +830,13 @@ export class DevToolsWindow {
         this.semanticConnectionProfileStatus = null;
         this.semanticResponseTokenCapInput = null;
         this.semanticInspectorOpen = false;
+        this.ruleViewMode = this.preferences.semanticInspectorEnabled
+            ? 'ai'
+            : 'local';
+        this.rulesSettingsPreviouslyFocused = null;
+        this.rulesSettingsOverlay = null;
+        this.rulesSettingsPanel = null;
+        this.rulesSettingsBody = null;
         this.resetPricingEditor = null;
         this.semanticInspectionState = {
             snapshotId: null,
@@ -1790,6 +1813,30 @@ export class DevToolsWindow {
         }
         themeSelect.value = this.preferences.themeMode;
         themeField.append(themeLabel, themeDescription, themeSelect);
+        const persistThemeSelection = (mode) => {
+            const previousMode = this.preferences.themeMode;
+            try {
+                const preferences = this.saveUiPreferences({
+                    ...this.preferences,
+                    themeMode: mode,
+                });
+                themeSelect.value = preferences.themeMode;
+                this.syncOpaqueTheme();
+                return true;
+            } catch (error) {
+                console.error('[ST DevTools] Failed to save theme setting.', error);
+                themeSelect.value = previousMode;
+                this.syncOpaqueTheme();
+                globalThis.toastr?.error?.(
+                    t('settings.saveFailed'),
+                    'ST DevTools',
+                );
+                return false;
+            }
+        };
+        themeSelect.addEventListener('change', () => {
+            persistThemeSelection(themeSelect.value);
+        });
 
         const retentionField = element('div', { className: 'st-devtools-settings-field' });
         const retentionLabel = element('label');
@@ -1904,94 +1951,6 @@ export class DevToolsWindow {
             }),
         );
 
-        const semanticField = element('div', {
-            className: 'st-devtools-settings-field st-devtools-semantic-settings',
-        });
-        semanticField.appendChild(explainedTitle(
-            t('settings.semanticTitle'),
-            t('settings.semanticDescription'),
-        ));
-        const semanticToggleLabel = element('label', {
-            className: 'st-devtools-semantic-toggle',
-        });
-        const semanticToggle = element('input');
-        semanticToggle.type = 'checkbox';
-        semanticToggle.checked = this.preferences.semanticInspectorEnabled;
-        semanticToggleLabel.append(
-            semanticToggle,
-            element('span', { text: t('settings.semanticEnabled') }),
-        );
-        const semanticProfileLabel = element('label', {
-            className: 'st-devtools-semantic-profile',
-        });
-        semanticProfileLabel.appendChild(explainedTitle(
-            t('settings.semanticConnectionProfile'),
-            t('settings.semanticConnectionProfileDescription'),
-        ));
-        const semanticProfileSelect = element('select');
-        semanticProfileSelect.id = 'st-devtools-settings-semantic-profile';
-        semanticProfileSelect.setAttribute(
-            'aria-label',
-            t('settings.semanticConnectionProfile'),
-        );
-        const semanticProfileStatus = proseElement('small', '', {
-            className: 'st-devtools-semantic-profile-status',
-        });
-        semanticProfileLabel.appendChild(semanticProfileSelect);
-        this.populateSemanticConnectionProfiles(
-            semanticProfileSelect,
-            this.preferences.semanticConnectionProfileId,
-            semanticProfileStatus,
-        );
-        const semanticCapLabel = element('label', {
-            className: 'st-devtools-semantic-cap',
-        });
-        semanticCapLabel.appendChild(element('span', {
-            text: t('settings.semanticResponseCap'),
-        }));
-        const semanticCapInput = element('input');
-        semanticCapInput.type = 'number';
-        semanticCapInput.min = String(MIN_SEMANTIC_RESPONSE_TOKEN_CAP);
-        semanticCapInput.max = String(MAX_SEMANTIC_RESPONSE_TOKEN_CAP);
-        semanticCapInput.step = '1';
-        semanticCapInput.inputMode = 'numeric';
-        semanticCapInput.required = true;
-        semanticCapInput.value = String(
-            this.preferences.semanticResponseTokenCap,
-        );
-        semanticCapLabel.appendChild(semanticCapInput);
-        const semanticCapHint = proseElement('small', t(
-            'settings.semanticResponseCapHint',
-            {
-                min: MIN_SEMANTIC_RESPONSE_TOKEN_CAP,
-                max: MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
-            },
-        ));
-        const syncSemanticSettings = () => {
-            semanticProfileSelect.disabled = !semanticToggle.checked;
-            semanticCapInput.disabled = !semanticToggle.checked;
-            semanticProfileLabel.classList.toggle(
-                'is-disabled',
-                semanticProfileSelect.disabled,
-            );
-            semanticCapLabel.classList.toggle(
-                'is-disabled',
-                semanticCapInput.disabled,
-            );
-        };
-        semanticToggle.addEventListener('change', syncSemanticSettings);
-        syncSemanticSettings();
-        semanticField.append(
-            semanticToggleLabel,
-            semanticProfileLabel,
-            semanticProfileStatus,
-            semanticCapLabel,
-            semanticCapHint,
-            proseElement('small', t('settings.semanticPrivacyWarning'), {
-                className: 'st-devtools-settings-privacy-note',
-            }),
-        );
-
         const readField = element('div', { className: 'st-devtools-settings-field' });
         const readLabel = element('label');
         readLabel.htmlFor = 'st-devtools-settings-timeline-limit';
@@ -2047,6 +2006,7 @@ export class DevToolsWindow {
         });
         reset.addEventListener('click', () => {
             themeSelect.value = DEFAULT_UI_PREFERENCES.themeMode;
+            persistThemeSelection(themeSelect.value);
             retentionInput.value = String(DEFAULT_UI_PREFERENCES.timelineRetentionLimit);
             readInput.value = String(DEFAULT_UI_PREFERENCES.timelineReadLimit);
             ageInput.value = String(DEFAULT_UI_PREFERENCES.retentionMaxAgeDays);
@@ -2054,16 +2014,6 @@ export class DevToolsWindow {
                 DEFAULT_UI_PREFERENCES.retentionMaxBytes / MEBIBYTE,
             );
             captureSelect.value = DEFAULT_UI_PREFERENCES.captureMode;
-            semanticToggle.checked = DEFAULT_UI_PREFERENCES.semanticInspectorEnabled;
-            this.populateSemanticConnectionProfiles(
-                semanticProfileSelect,
-                DEFAULT_UI_PREFERENCES.semanticConnectionProfileId,
-                semanticProfileStatus,
-            );
-            semanticCapInput.value = String(
-                DEFAULT_UI_PREFERENCES.semanticResponseTokenCap,
-            );
-            syncSemanticSettings();
             pricingEditor.resetEntries([]);
             syncReadLimit();
         });
@@ -2114,7 +2064,7 @@ export class DevToolsWindow {
             ),
             settingsGroup(
                 'settings.group.advanced',
-                [ageField, byteField, semanticField, pricingEditor.details],
+                [ageField, byteField, pricingEditor.details],
                 { collapsible: true },
             ),
             actions,
@@ -2128,15 +2078,13 @@ export class DevToolsWindow {
             apply.setAttribute('aria-busy', 'true');
             const previousPreferences = this.preferences;
             const requested = normalizeUiPreferences({
+                ...this.preferences,
                 themeMode: themeSelect.value,
                 timelineRetentionLimit: retentionInput.value,
                 timelineReadLimit: readInput.value,
                 retentionMaxAgeDays: ageInput.value,
                 retentionMaxBytes: Number(byteInput.value) * MEBIBYTE,
                 captureMode: captureSelect.value,
-                semanticInspectorEnabled: semanticToggle.checked,
-                semanticConnectionProfileId: semanticProfileSelect.value || null,
-                semanticResponseTokenCap: semanticCapInput.value,
             });
             const retentionPolicy = {
                 maxSnapshotsPerChat: requested.timelineRetentionLimit,
@@ -2154,14 +2102,6 @@ export class DevToolsWindow {
             const timelineSettingsChanged = (
                 retentionPolicyChanged
                 || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
-            );
-            const semanticSettingsChanged = (
-                requested.semanticInspectorEnabled
-                    !== previousPreferences.semanticInspectorEnabled
-                || requested.semanticConnectionProfileId
-                    !== previousPreferences.semanticConnectionProfileId
-                || requested.semanticResponseTokenCap
-                    !== previousPreferences.semanticResponseTokenCap
             );
             try {
                 let requestedPricingOverrides;
@@ -2274,19 +2214,6 @@ export class DevToolsWindow {
                     preferences.retentionMaxBytes / MEBIBYTE,
                 ));
                 captureSelect.value = preferences.captureMode;
-                semanticToggle.checked = preferences.semanticInspectorEnabled;
-                this.populateSemanticConnectionProfiles(
-                    semanticProfileSelect,
-                    preferences.semanticConnectionProfileId,
-                    semanticProfileStatus,
-                );
-                semanticCapInput.value = String(
-                    preferences.semanticResponseTokenCap,
-                );
-                syncSemanticSettings();
-                if (semanticSettingsChanged) {
-                    this.resetSemanticInspectionForSettingsChange(preferences);
-                }
                 pricingEditor.resetEntries(this.pricingOverrides.entries);
                 syncReadLimit();
                 this.syncOpaqueTheme();
@@ -2312,7 +2239,6 @@ export class DevToolsWindow {
                     'ST DevTools',
                 );
                 if (timelineSettingsChanged) this.scheduleSettingsRefresh();
-                else if (semanticSettingsChanged) this.render();
             } catch (error) {
                 this.pendingPricingOverrides = null;
                 console.error('[ST DevTools] Failed to apply storage settings.', error);
@@ -2330,7 +2256,7 @@ export class DevToolsWindow {
             }
         });
 
-        panel.append(heading, form, this.buildStorageToolsPanel());
+        panel.append(heading, form);
         overlay.appendChild(panel);
         this.settingsOverlay = overlay;
         this.settingsPanel = panel;
@@ -2340,10 +2266,6 @@ export class DevToolsWindow {
         this.retentionMaxAgeDaysInput = ageInput;
         this.retentionMaxBytesMiBInput = byteInput;
         this.captureModeInput = captureSelect;
-        this.semanticInspectorEnabledInput = semanticToggle;
-        this.semanticConnectionProfileInput = semanticProfileSelect;
-        this.semanticConnectionProfileStatus = semanticProfileStatus;
-        this.semanticResponseTokenCapInput = semanticCapInput;
         this.resetPricingEditor = () => {
             pricingEditor.details.open = false;
             pricingEditor.resetEntries(this.pricingOverrides.entries);
@@ -2792,8 +2714,70 @@ export class DevToolsWindow {
             });
         });
 
+        const diagnosticImportInput = element('input', {
+            className: 'st-devtools-file-input',
+        });
+        diagnosticImportInput.type = 'file';
+        diagnosticImportInput.accept = '.json,application/json';
+        diagnosticImportInput.hidden = true;
+        const diagnosticImport = element('button', {
+            className: 'menu_button',
+            text: t('action.importDiagnostics'),
+            type: 'button',
+        });
+        diagnosticImport.addEventListener('click', () => diagnosticImportInput.click());
+        diagnosticImportInput.addEventListener('change', async () => {
+            const file = diagnosticImportInput.files?.[0];
+            diagnosticImportInput.value = '';
+            if (file) await this.importDiagnosticFile(file);
+        });
+
+        const clearCurrent = element('button', {
+            className: 'menu_button',
+            text: t('action.clearTimeline'),
+            type: 'button',
+        });
+        clearCurrent.addEventListener('click', async () => {
+            if (!confirm(t('timeline.deleteConfirm'))) return;
+            await this.clearCurrentTimeline();
+        });
+        const clearAll = element('button', {
+            className: 'menu_button',
+            text: t('action.clearAllData'),
+            type: 'button',
+        });
+        clearAll.addEventListener('click', async () => {
+            if (!confirm(t('storage.clearAllConfirm', {
+                count: this.storageSummary.snapshotCount ?? t('common.unknown'),
+            }))) return;
+            await this.clearAllSnapshots();
+        });
+
+        const diagnosticStatus = this.renderDiagnosticImportStatus();
+
         tools.append(
             heading,
+            tool(
+                'timeline.currentReportTitle',
+                'timeline.diagnosticDescription',
+                [
+                    this.renderTimelineDiagnosticButton('json'),
+                    this.renderTimelineDiagnosticButton('markdown'),
+                ],
+            ),
+            tool(
+                'timeline.allReportTitle',
+                'timeline.allDiagnosticDescription',
+                [
+                    this.renderAllTimelineDiagnosticButton('json'),
+                    this.renderAllTimelineDiagnosticButton('markdown'),
+                ],
+            ),
+            tool(
+                'timeline.importTitle',
+                'timeline.importDescription',
+                [diagnosticImport, diagnosticImportInput],
+            ),
             tool(
                 'storage.integrityTitle',
                 'storage.integrityDescription',
@@ -2824,6 +2808,17 @@ export class DevToolsWindow {
                 'diagnostic.compareDescription',
                 [compareButton, compareInput],
             ),
+            tool(
+                'timeline.clearTitle',
+                'timeline.clearDescription',
+                [clearCurrent],
+            ),
+            tool(
+                'storage.clearAllTitle',
+                'storage.clearAllDescription',
+                [clearAll],
+            ),
+            ...(diagnosticStatus ? [diagnosticStatus] : []),
             status,
         );
         return tools;
@@ -2841,6 +2836,7 @@ export class DevToolsWindow {
 
     openSettings() {
         if (!this.settingsOverlay || !this.settingsPanel) return;
+        this.closeRulesSettings({ restoreFocus: false });
         this.settingsPreviouslyFocused = document.activeElement;
         this.themeModeInput.value = this.preferences.themeMode;
         this.timelineRetentionLimitInput.value = String(
@@ -2855,33 +2851,6 @@ export class DevToolsWindow {
             this.preferences.retentionMaxBytes / MEBIBYTE,
         ));
         this.captureModeInput.value = this.preferences.captureMode;
-        this.semanticInspectorEnabledInput.checked = (
-            this.preferences.semanticInspectorEnabled
-        );
-        this.populateSemanticConnectionProfiles(
-            this.semanticConnectionProfileInput,
-            this.preferences.semanticConnectionProfileId,
-            this.semanticConnectionProfileStatus,
-        );
-        this.semanticConnectionProfileInput.disabled = (
-            !this.preferences.semanticInspectorEnabled
-        );
-        this.semanticConnectionProfileInput.closest('.st-devtools-semantic-profile')
-            ?.classList.toggle(
-                'is-disabled',
-                this.semanticConnectionProfileInput.disabled,
-            );
-        this.semanticResponseTokenCapInput.value = String(
-            this.preferences.semanticResponseTokenCap,
-        );
-        this.semanticResponseTokenCapInput.disabled = (
-            !this.preferences.semanticInspectorEnabled
-        );
-        this.semanticResponseTokenCapInput.closest('.st-devtools-semantic-cap')
-            ?.classList.toggle(
-                'is-disabled',
-                this.semanticResponseTokenCapInput.disabled,
-            );
         this.resetPricingEditor?.();
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
@@ -2913,6 +2882,105 @@ export class DevToolsWindow {
             this.settingsPreviouslyFocused.focus();
         }
         this.settingsPreviouslyFocused = null;
+    }
+
+    buildRulesSettingsPanel() {
+        const overlay = element('div', {
+            className: 'st-devtools-settings-overlay st-devtools-rules-settings-overlay',
+        });
+        overlay.hidden = true;
+        overlay.addEventListener('pointerdown', (event) => {
+            if (event.target === overlay) this.closeRulesSettings();
+        });
+        const panel = element('section', {
+            className: 'st-devtools-settings-panel st-devtools-rules-settings-panel',
+        });
+        panel.id = 'st-devtools-rules-settings-dialog';
+        panel.tabIndex = -1;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'st-devtools-rules-settings-title');
+        const header = element('header', {
+            className: 'st-devtools-settings-header',
+        });
+        const titleGroup = element('div');
+        const title = element('h2', { text: t('rules.configurationTitle') });
+        title.id = 'st-devtools-rules-settings-title';
+        titleGroup.append(
+            title,
+            proseElement('p', t('rules.configurationDescription')),
+        );
+        const close = element('button', {
+            className: 'menu_button st-devtools-icon-button st-devtools-settings-close',
+            title: t('action.close'),
+            type: 'button',
+        });
+        close.setAttribute('aria-label', t('action.close'));
+        close.appendChild(closeIcon());
+        close.addEventListener('click', () => this.closeRulesSettings());
+        const body = element('div', {
+            className: 'st-devtools-rules-settings-body',
+        });
+        header.append(titleGroup, close);
+        panel.append(header, body);
+        overlay.appendChild(panel);
+        this.rulesSettingsOverlay = overlay;
+        this.rulesSettingsPanel = panel;
+        this.rulesSettingsBody = body;
+        return overlay;
+    }
+
+    refreshRulesSettingsPanel() {
+        if (!this.rulesSettingsBody) return;
+        const snapshot = this.selectedSnapshot();
+        if (!snapshot) {
+            this.rulesSettingsBody.replaceChildren(proseElement(
+                'p',
+                t('empty.description'),
+            ));
+            return;
+        }
+        this.rulesSettingsBody.replaceChildren(
+            this.renderRuleSettings(),
+            this.renderComparisonPolicySettings(snapshot),
+        );
+    }
+
+    openRulesSettings() {
+        if (!this.rulesSettingsOverlay || !this.rulesSettingsPanel) return;
+        this.closeSettings({ restoreFocus: false });
+        this.rulesSettingsPreviouslyFocused = document.activeElement;
+        this.refreshRulesSettingsPanel();
+        this.window.setAttribute('aria-modal', 'false');
+        for (const region of this.primaryRegions) {
+            region.inert = true;
+            region.setAttribute('aria-hidden', 'true');
+        }
+        this.rulesSettingsOverlay.hidden = false;
+        this.rulesSettingsPanel.scrollTop = 0;
+        queueMicrotask(() => {
+            if (this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden) {
+                this.rulesSettingsPanel?.focus({ preventScroll: true });
+            }
+        });
+    }
+
+    closeRulesSettings({ restoreFocus = true } = {}) {
+        if (!this.rulesSettingsOverlay || this.rulesSettingsOverlay.hidden) return;
+        this.rulesSettingsOverlay.hidden = true;
+        this.window.setAttribute('aria-modal', 'true');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (
+            restoreFocus
+            && this.rulesSettingsPreviouslyFocused?.isConnected
+            && typeof this.rulesSettingsPreviouslyFocused.focus === 'function'
+        ) {
+            this.rulesSettingsPreviouslyFocused.focus();
+        }
+        this.rulesSettingsPreviouslyFocused = null;
     }
 
     buildSemanticConsentDialog() {
@@ -3243,6 +3311,7 @@ export class DevToolsWindow {
         this.disposeVirtualLists();
         this.closeSemanticConsent(false, { restoreFocus: false });
         this.cancelSemanticInspection();
+        this.closeRulesSettings({ restoreFocus: false });
         this.closeSettings({ restoreFocus: false });
         if (this.root) {
             this.root.hidden = true;
@@ -3344,6 +3413,7 @@ export class DevToolsWindow {
             this.content,
             tabList,
             this.buildSettingsPanel(),
+            this.buildRulesSettingsPanel(),
             this.buildSemanticConsentDialog(),
         );
         this.root.appendChild(this.window);
@@ -3455,6 +3525,36 @@ export class DevToolsWindow {
                 className: 'st-devtools-screen-title',
             },
         ));
+        if (tabId === 'rules') {
+            const actions = element('div', {
+                className: 'st-devtools-screen-actions st-devtools-rule-mode-actions',
+            });
+            const aiMode = element('button', {
+                className: 'menu_button st-devtools-ai-mode-button',
+                text: t('rules.aiMode'),
+                type: 'button',
+            });
+            const aiActive = this.ruleViewMode === 'ai';
+            aiMode.classList.toggle('is-active', aiActive);
+            aiMode.setAttribute('aria-pressed', String(aiActive));
+            aiMode.addEventListener('click', () => {
+                this.setSemanticInspectionMode(!aiActive);
+            });
+            const settings = element('button', {
+                className: 'menu_button st-devtools-icon-button st-devtools-rules-settings-button',
+                title: t('rules.configurationTitle'),
+                type: 'button',
+            });
+            settings.setAttribute('aria-label', t('rules.configurationTitle'));
+            settings.setAttribute('aria-haspopup', 'dialog');
+            settings.setAttribute('aria-controls', 'st-devtools-rules-settings-dialog');
+            const icon = element('i', { className: 'fa-solid fa-sliders' });
+            icon.setAttribute('aria-hidden', 'true');
+            settings.appendChild(icon);
+            settings.addEventListener('click', () => this.openRulesSettings());
+            actions.append(aiMode, settings);
+            header.appendChild(actions);
+        }
         return header;
     }
 
@@ -3934,6 +4034,7 @@ export class DevToolsWindow {
             audit: false,
         };
         this.preferences = normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+        this.ruleViewMode = 'local';
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         if (this.themeModeInput) {
             this.themeModeInput.value = this.preferences.themeMode;
@@ -3995,6 +4096,8 @@ export class DevToolsWindow {
         const scope = this.semanticConsentOverlay
             && !this.semanticConsentOverlay.hidden
             ? this.semanticConsentPanel
+            : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
+                ? this.rulesSettingsPanel
             : this.settingsOverlay && !this.settingsOverlay.hidden
                 ? this.settingsPanel
                 : this.window;
@@ -4019,6 +4122,11 @@ export class DevToolsWindow {
                 && !this.semanticConsentOverlay.hidden
             ) {
                 this.closeSemanticConsent(false);
+            } else if (
+                this.rulesSettingsOverlay
+                && !this.rulesSettingsOverlay.hidden
+            ) {
+                this.closeRulesSettings();
             } else if (this.settingsOverlay && !this.settingsOverlay.hidden) {
                 this.closeSettings();
             } else {
@@ -4040,6 +4148,8 @@ export class DevToolsWindow {
         const focusScope = this.semanticConsentOverlay
             && !this.semanticConsentOverlay.hidden
             ? this.semanticConsentPanel
+            : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
+                ? this.rulesSettingsPanel
             : this.settingsOverlay && !this.settingsOverlay.hidden
                 ? this.settingsPanel
                 : this.window;
@@ -4272,6 +4382,9 @@ export class DevToolsWindow {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.syncOpaqueTheme();
+        if (this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden) {
+            this.refreshRulesSettingsPanel();
+        }
         for (const button of this.window.querySelectorAll('.st-devtools-app-nav-item')) {
             const active = button.dataset.tab === this.activeTab;
             button.classList.toggle('active', active);
@@ -4317,7 +4430,6 @@ export class DevToolsWindow {
             explorer: () => this.renderExplorer(snapshot),
             timeline: () => this.renderTimeline(),
             diff: () => this.renderDiff(),
-            context: () => this.renderContext(snapshot),
             rules: () => this.renderRules(snapshot),
             search: () => this.renderSearch(snapshot),
         };
@@ -4517,6 +4629,23 @@ export class DevToolsWindow {
                     : provenanceAvailabilityLabel(availability),
             }),
         );
+        if (source.ranges?.length) {
+            const jump = element('button', {
+                className: 'menu_button st-devtools-primary-button st-devtools-range-jump',
+                text: t('action.jumpToFinal'),
+                type: 'button',
+            });
+            jump.setAttribute(
+                'aria-label',
+                `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`,
+            );
+            jump.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.jumpToFinalRange(source.id);
+            });
+            summary.appendChild(jump);
+        }
         details.appendChild(summary);
         attachLazyDetailsContent(details, () => {
             const content = element('div', {
@@ -4696,9 +4825,21 @@ export class DevToolsWindow {
 
     renderExplorer(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
-        const sourceGroups = explorerSourceGroups(snapshot.sources);
-        const configuredGroup = sourceGroups.find((group) => group.key === 'configured');
+        const allSourceGroups = explorerSourceGroups(snapshot.sources);
+        const configuredGroup = allSourceGroups.find((group) => group.key === 'configured');
         const promptManagerOrder = configuredGroup?.promptManagerOrder ?? false;
+        const sourceGroups = allSourceGroups.map((group) => (
+            group.key === 'configured' && this.explorerIncludedOnly
+                ? {
+                    ...group,
+                    sources: group.sources.filter((source) => source.included === true),
+                }
+                : group
+        ));
+        const sourceColorById = new Map(snapshot.sources.map((source, index) => [
+            source.id,
+            sourceMappingColor(source, index),
+        ]));
         page.append(this.renderExplorerOverview(snapshot));
         const guide = element('details', {
             className: 'st-devtools-disclosure st-devtools-explorer-guide',
@@ -4721,6 +4862,34 @@ export class DevToolsWindow {
         ));
         guide.append(guideSummary, guideList);
         page.appendChild(guide);
+
+        if (configuredGroup) {
+            const filter = element('section', {
+                className: 'st-devtools-explorer-filter',
+            });
+            const copy = element('span', {
+                className: 'st-devtools-explorer-filter-copy',
+            });
+            copy.append(
+                element('strong', { text: t('explorer.requestFilterTitle') }),
+                element('small', { text: t('explorer.requestFilterDescription') }),
+            );
+            const toggle = element('button', {
+                className: 'menu_button st-devtools-switch-button',
+                text: t(this.explorerIncludedOnly
+                    ? 'explorer.requestFilterIncluded'
+                    : 'explorer.requestFilterAll'),
+                type: 'button',
+            });
+            toggle.setAttribute('role', 'switch');
+            toggle.setAttribute('aria-checked', String(this.explorerIncludedOnly));
+            toggle.addEventListener('click', () => {
+                this.explorerIncludedOnly = !this.explorerIncludedOnly;
+                this.render();
+            });
+            filter.append(copy, toggle);
+            page.appendChild(filter);
+        }
 
         const sourceById = new Map(snapshot.sources.map((source) => [source.id, source]));
         const groups = element('div', { className: 'st-devtools-source-groups' });
@@ -4752,7 +4921,10 @@ export class DevToolsWindow {
                 const details = element('details', { className: 'st-devtools-source' });
                 details.dataset.sourceId = source.id;
                 details.dataset.sourceType = source.type;
-                details.style.setProperty('--source-color', source.color);
+                details.style.setProperty(
+                    '--source-color',
+                    sourceColorById.get(source.id) ?? source.color,
+                );
                 details.open = this.openSourceIds.has(source.id);
                 details.addEventListener('toggle', () => {
                     if (details.open) this.openSourceIds.add(source.id);
@@ -4846,29 +5018,17 @@ export class DevToolsWindow {
                             }));
                         }
                         body.appendChild(metadata);
-                        if (source.ranges?.length) {
-                            const actions = element('div', {
-                                className: 'st-devtools-source-actions',
-                            });
-                            const jump = element('button', {
-                                className: 'menu_button st-devtools-range-jump',
-                                text: t('action.jumpToFinal'),
-                                type: 'button',
-                            });
-                            jump.setAttribute(
-                                'aria-label',
-                                `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`,
-                            );
-                            jump.addEventListener('click', () => this.jumpToFinalRange(source.id));
-                            actions.appendChild(jump);
-                            body.appendChild(actions);
-                        }
                     }
                     if (source.provenance) {
                         body.appendChild(this.renderProvenanceDetails(source));
                     }
                     const pre = source.type === 'final'
-                        ? this.renderMappedFinalPrompt(source.content, snapshot.sources, sourceById)
+                        ? this.renderMappedFinalPrompt(
+                            source.content,
+                            snapshot.sources,
+                            sourceById,
+                            sourceColorById,
+                        )
                         : element('pre', { text: source.content });
                     body.appendChild(pre);
                     return body;
@@ -4915,10 +5075,64 @@ export class DevToolsWindow {
             groups.appendChild(group);
         }
         page.appendChild(groups);
+        page.appendChild(this.renderPromptRequestData(snapshot));
         return page;
     }
 
-    renderMappedFinalPrompt(text, sources, sourceById) {
+    renderPromptRequestData(snapshot) {
+        const details = element('details', {
+            className: 'st-devtools-prompt-request-data st-devtools-disclosure',
+        });
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('explorer.requestDataTitle'),
+            t('explorer.requestDataDescription'),
+        ));
+        const body = element('div', {
+            className: 'st-devtools-prompt-request-data-body',
+        });
+        const dataDetails = (titleKey, descriptionKey, value) => {
+            const item = element('details', {
+                className: 'st-devtools-context-details st-devtools-disclosure',
+            });
+            const itemSummary = element('summary');
+            itemSummary.appendChild(explainedTitle(
+                t(titleKey),
+                t(descriptionKey),
+            ));
+            item.appendChild(itemSummary);
+            attachLazyDetailsContent(item, () => (
+                value == null
+                    ? proseElement('p', t('context.notCaptured'))
+                    : element('pre', {
+                        className: 'st-devtools-context-payload',
+                        text: typeof value === 'string'
+                            ? value
+                            : JSON.stringify(value, null, 2),
+                    })
+            ));
+            return item;
+        };
+        const payload = snapshot.promptType === 'chat-completion'
+            ? snapshot.payload ?? null
+            : snapshot.finalText || null;
+        body.append(
+            dataDetails(
+                'context.requestSettings',
+                'context.requestSettingsDescription',
+                snapshot.request?.settings ?? null,
+            ),
+            dataDetails(
+                'context.promptPayload',
+                'context.promptPayloadDescription',
+                payload,
+            ),
+        );
+        details.append(summary, body);
+        return details;
+    }
+
+    renderMappedFinalPrompt(text, sources, sourceById, sourceColorById = new Map()) {
         const pre = element('pre', { className: 'st-devtools-final-prompt' });
         for (const segment of buildRangeSegments(text, sources)) {
             const classNames = ['st-devtools-final-segment'];
@@ -4943,6 +5157,12 @@ export class DevToolsWindow {
                 text: segment.text,
                 title: t('explorer.mappedSources', { sources: labels.join(', ') }),
             });
+            mapped.style.setProperty(
+                '--mapping-color',
+                sourceColorById.get(segment.sourceIds[0])
+                    ?? sourceById.get(segment.sourceIds[0])?.color
+                    ?? 'var(--st-devtools-primary)',
+            );
             mapped.dataset.sourceIds = JSON.stringify(segment.sourceIds);
             mapped.dataset.start = String(segment.start);
             mapped.dataset.end = String(segment.end);
@@ -4992,9 +5212,25 @@ export class DevToolsWindow {
         }
     }
 
+    ensureSourceCardMounted(sourceId) {
+        let card = [...this.window.querySelectorAll('.st-devtools-source')]
+            .find((node) => node.dataset.sourceId === sourceId);
+        if (card) return card;
+        const virtualTarget = this.virtualSourceLists.get(sourceId);
+        const controller = virtualTarget?.ensureMounted?.();
+        controller?.scrollToIndex?.(virtualTarget.index);
+        card = [...this.window.querySelectorAll('.st-devtools-source')]
+            .find((node) => node.dataset.sourceId === sourceId);
+        return card ?? null;
+    }
+
     jumpToFinalRange(sourceId) {
-        const finalCard = [...this.window.querySelectorAll('.st-devtools-source')]
-            .find((node) => node.dataset.sourceType === 'final');
+        const finalSource = this.selectedSnapshot()?.sources?.find(
+            (source) => source.type === 'final',
+        );
+        const finalCard = finalSource
+            ? this.ensureSourceCardMounted(finalSource.id)
+            : null;
         if (!finalCard) return;
         finalCard.closest('.st-devtools-source-group')?.setAttribute('open', '');
         finalCard.open = true;
@@ -5008,15 +5244,7 @@ export class DevToolsWindow {
     }
 
     jumpToSourceCard(sourceId) {
-        let card = [...this.window.querySelectorAll('.st-devtools-source')]
-            .find((node) => node.dataset.sourceId === sourceId);
-        if (!card) {
-            const virtualTarget = this.virtualSourceLists.get(sourceId);
-            const controller = virtualTarget?.ensureMounted?.();
-            controller?.scrollToIndex?.(virtualTarget.index);
-            card = [...this.window.querySelectorAll('.st-devtools-source')]
-                .find((node) => node.dataset.sourceId === sourceId);
-        }
+        const card = this.ensureSourceCardMounted(sourceId);
         if (!card) return;
         card.closest('.st-devtools-source-group')?.setAttribute('open', '');
         card.open = true;
@@ -5191,104 +5419,6 @@ export class DevToolsWindow {
             );
         }
 
-        const toolbox = element('details', {
-            className: 'st-devtools-toolbox st-devtools-timeline-toolbox',
-        });
-        const toolboxSummary = element('summary');
-        const toolboxHeading = element('span', { className: 'st-devtools-toolbox-heading' });
-        toolboxHeading.append(explainedTitle(
-            t('timeline.toolsTitle'),
-            t('timeline.toolsDescription'),
-        ));
-        toolboxSummary.appendChild(toolboxHeading);
-        const toolboxContent = element('div', { className: 'st-devtools-toolbox-content' });
-        const toolRow = (titleKey, descriptionKey, buttons, className = '') => {
-            const row = element('div', {
-                className: `st-devtools-tool-row ${className}`.trim(),
-            });
-            const description = element('span', { className: 'st-devtools-tool-description' });
-            description.append(explainedTitle(t(titleKey), t(descriptionKey)));
-            const actions = element('span', { className: 'st-devtools-tool-row-actions' });
-            actions.append(...buttons);
-            row.append(description, actions);
-            return row;
-        };
-        toolboxContent.append(
-            toolRow(
-                'timeline.currentReportTitle',
-                'timeline.diagnosticDescription',
-                [
-                    this.renderTimelineDiagnosticButton('json'),
-                    this.renderTimelineDiagnosticButton('markdown'),
-                ],
-            ),
-            toolRow(
-                'timeline.allReportTitle',
-                'timeline.allDiagnosticDescription',
-                [
-                    this.renderAllTimelineDiagnosticButton('json'),
-                    this.renderAllTimelineDiagnosticButton('markdown'),
-                ],
-            ),
-        );
-        const importInput = element('input', { className: 'st-devtools-file-input' });
-        importInput.type = 'file';
-        importInput.accept = '.json,application/json';
-        importInput.hidden = true;
-        importInput.addEventListener('change', async () => {
-            const file = importInput.files?.[0];
-            importInput.value = '';
-            if (file) await this.importDiagnosticFile(file);
-        });
-        const importButton = element('button', {
-            className: 'menu_button',
-            text: t('action.importDiagnostics'),
-            type: 'button',
-        });
-        importButton.addEventListener('click', () => importInput.click());
-        const clear = element('button', { className: 'menu_button', text: t('action.clearTimeline'), type: 'button' });
-        clear.disabled = this.timeline.length === 0;
-        clear.addEventListener('click', async () => {
-            if (!confirm(t('timeline.deleteConfirm'))) return;
-            await this.clearCurrentTimeline();
-        });
-        const clearAll = element('button', {
-            className: 'menu_button',
-            text: t('action.clearAllData'),
-            type: 'button',
-        });
-        clearAll.disabled = (
-            this.storageSummary.snapshotCount != null
-            && this.storageSummary.snapshotCount === 0
-        );
-        clearAll.addEventListener('click', async () => {
-            if (!confirm(t('storage.clearAllConfirm', {
-                count: this.storageSummary.snapshotCount ?? t('common.unknown'),
-            }))) return;
-            await this.clearAllSnapshots();
-        });
-        toolboxContent.append(
-            toolRow(
-                'timeline.importTitle',
-                'timeline.importDescription',
-                [importButton, importInput],
-            ),
-            toolRow(
-                'timeline.clearTitle',
-                'timeline.clearDescription',
-                [clear],
-                'is-danger',
-            ),
-            toolRow(
-                'storage.clearAllTitle',
-                'storage.clearAllDescription',
-                [clearAll],
-                'is-danger',
-            ),
-        );
-        toolbox.append(toolboxSummary, toolboxContent);
-        const diagnosticStatus = this.renderDiagnosticImportStatus();
-
         const storageDetails = element('details', {
             className: 'st-devtools-disclosure st-devtools-timeline-storage-details',
         });
@@ -5298,8 +5428,11 @@ export class DevToolsWindow {
         const storageContent = element('div', {
             className: 'st-devtools-timeline-storage-content',
         });
-        storageContent.append(loadedStatus, storageOverview, toolbox);
-        if (diagnosticStatus) storageContent.appendChild(diagnosticStatus);
+        storageContent.append(
+            loadedStatus,
+            storageOverview,
+            this.buildStorageToolsPanel(),
+        );
         storageDetails.appendChild(storageContent);
 
         if (this.timeline.length === 0) {
@@ -9402,36 +9535,118 @@ export class DevToolsWindow {
         }
     }
 
-    enableSemanticInspectorFromRules() {
+    updateSemanticInspectorPreferences(patch, { render = true } = {}) {
+        const previous = this.preferences;
         try {
             const preferences = this.saveUiPreferences({
                 ...this.preferences,
-                semanticInspectorEnabled: true,
+                ...patch,
             });
-            this.resetSemanticInspectionForSettingsChange(preferences);
-            if (this.semanticInspectorEnabledInput) {
-                this.semanticInspectorEnabledInput.checked = true;
+            const changed = (
+                preferences.semanticInspectorEnabled
+                    !== previous.semanticInspectorEnabled
+                || preferences.semanticConnectionProfileId
+                    !== previous.semanticConnectionProfileId
+                || preferences.semanticResponseTokenCap
+                    !== previous.semanticResponseTokenCap
+            );
+            if (changed) {
+                this.resetSemanticInspectionForSettingsChange(preferences);
             }
-            if (this.semanticConnectionProfileInput) {
-                this.semanticConnectionProfileInput.disabled = false;
-                this.semanticConnectionProfileInput
-                    .closest('.st-devtools-semantic-profile')
-                    ?.classList.remove('is-disabled');
-            }
-            if (this.semanticResponseTokenCapInput) {
-                this.semanticResponseTokenCapInput.disabled = false;
-                this.semanticResponseTokenCapInput
-                    .closest('.st-devtools-semantic-cap')
-                    ?.classList.remove('is-disabled');
-            }
-            globalThis.toastr?.success?.(t('semantic.enabled'), 'ST DevTools');
-            this.render();
-            return true;
+            this.ruleViewMode = preferences.semanticInspectorEnabled
+                ? 'ai'
+                : 'local';
+            if (render) this.render();
+            return preferences;
         } catch (error) {
-            console.error('[ST DevTools] Failed to enable semantic inspection.', error);
-            globalThis.toastr?.error?.(t('semantic.enableFailed'), 'ST DevTools');
-            return false;
+            console.error('[ST DevTools] Failed to save semantic inspection settings.', error);
+            globalThis.toastr?.error?.(t('settings.saveFailed'), 'ST DevTools');
+            return null;
         }
+    }
+
+    setSemanticInspectionMode(enabled) {
+        const preferences = this.updateSemanticInspectorPreferences({
+            semanticInspectorEnabled: Boolean(enabled),
+        });
+        if (!preferences) return false;
+        globalThis.toastr?.info?.(
+            t(enabled ? 'semantic.enabled' : 'semantic.disabled'),
+            'ST DevTools',
+        );
+        return true;
+    }
+
+    enableSemanticInspectorFromRules() {
+        return this.setSemanticInspectionMode(true);
+    }
+
+    renderSemanticInspectorSettings() {
+        const section = element('section', {
+            className: 'st-devtools-semantic-mode-settings',
+        });
+        section.appendChild(explainedTitle(
+            t('semantic.connectionSettingsTitle'),
+            t('settings.semanticDescription'),
+            { tag: 'h3', titleTag: 'span' },
+        ));
+        const profileField = element('label', {
+            className: 'st-devtools-semantic-profile',
+        });
+        profileField.appendChild(explainedTitle(
+            t('settings.semanticConnectionProfile'),
+            t('settings.semanticConnectionProfileDescription'),
+        ));
+        const profile = element('select');
+        profile.setAttribute('aria-label', t('settings.semanticConnectionProfile'));
+        const profileStatus = proseElement('small', '', {
+            className: 'st-devtools-semantic-profile-status',
+        });
+        this.populateSemanticConnectionProfiles(
+            profile,
+            this.preferences.semanticConnectionProfileId,
+            profileStatus,
+        );
+        profile.addEventListener('change', () => {
+            this.updateSemanticInspectorPreferences({
+                semanticConnectionProfileId: profile.value || null,
+            });
+        });
+        profileField.append(profile, profileStatus);
+
+        const capField = element('label', {
+            className: 'st-devtools-semantic-cap',
+        });
+        capField.appendChild(element('span', {
+            text: t('settings.semanticResponseCap'),
+        }));
+        const cap = element('input');
+        cap.type = 'number';
+        cap.min = String(MIN_SEMANTIC_RESPONSE_TOKEN_CAP);
+        cap.max = String(MAX_SEMANTIC_RESPONSE_TOKEN_CAP);
+        cap.step = '1';
+        cap.inputMode = 'numeric';
+        cap.value = String(this.preferences.semanticResponseTokenCap);
+        cap.addEventListener('change', () => {
+            this.updateSemanticInspectorPreferences({
+                semanticResponseTokenCap: cap.value,
+            });
+        });
+        capField.append(
+            cap,
+            proseElement('small', t('settings.semanticResponseCapHint', {
+                min: MIN_SEMANTIC_RESPONSE_TOKEN_CAP,
+                max: MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
+            })),
+        );
+        section.append(
+            profileField,
+            capField,
+            proseElement('small', t('settings.semanticPrivacyWarning'), {
+                className: 'st-devtools-settings-privacy-note',
+            }),
+        );
+        return section;
     }
 
     semanticSnapshotSupportsInspection(snapshot) {
@@ -9760,14 +9975,10 @@ export class DevToolsWindow {
         });
         heading.append(
             explainedTitle(
-                t('semantic.title'),
+                t('semantic.workspaceTitle'),
                 t('semantic.description'),
                 { tag: 'h3', titleTag: 'span' },
             ),
-            element('span', {
-                className: 'st-devtools-semantic-optional',
-                text: t('semantic.optional'),
-            }),
         );
         section.appendChild(heading);
         if (!this.semanticSnapshotSupportsInspection(snapshot)) {
@@ -10113,10 +10324,7 @@ export class DevToolsWindow {
         reviewResult,
     ) {
         host.append(
-            this.renderSemanticInspectorDisclosure(snapshot, analysis, findings),
             this.renderRuleAdvancedAnalysis(snapshot, analysis),
-            this.renderDeferredRuleSettings(),
-            this.renderDeferredComparisonPolicySettings(snapshot),
             this.renderReviewedFindings(snapshot, reviewResult),
             this.renderRuleAuditLog(),
         );
@@ -10219,6 +10427,14 @@ export class DevToolsWindow {
         const findings = reviewResult.visible.filter(
             ({ review }) => review.decision !== 'false-positive',
         );
+        if (this.ruleViewMode === 'ai') {
+            host.classList.add('is-ai-mode');
+            host.append(
+                this.renderSemanticInspectorSettings(),
+                this.renderSemanticInspector(snapshot, analysis, findings),
+            );
+            return page;
+        }
         const counts = findings.reduce((result, item) => {
             if (Object.prototype.hasOwnProperty.call(result, item.severity)) {
                 result[item.severity] += 1;

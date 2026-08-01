@@ -62,7 +62,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.12.1',
+        extensionVersion: '0.12.2',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1409,7 +1409,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.12.1',
+    version: '0.12.2',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1569,7 +1569,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.12.1',
+        extensionVersion: '0.12.2',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1616,7 +1616,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.12.1',
+        version: '0.12.2',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1745,7 +1745,7 @@ globalThis.devToolsSandboxFixtures = {
     renderPrivacyTabs(mode) {
         if (!selectPrivacyFixture(mode)) return [];
         const results = [];
-        for (const tab of ['explorer', 'timeline', 'diff', 'context', 'rules', 'search']) {
+        for (const tab of ['explorer', 'timeline', 'diff', 'rules', 'search']) {
             devTools.selectTab(tab);
             results.push({
                 tab,

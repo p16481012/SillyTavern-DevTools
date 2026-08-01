@@ -88,8 +88,8 @@ test('rules can enable semantic inspection locally without contacting a provider
     };
     const statuses = [];
     globalThis.toastr = {
-        success(message) {
-            statuses.push(['success', message]);
+        info(message) {
+            statuses.push(['info', message]);
         },
         error(message) {
             statuses.push(['error', message]);
@@ -102,21 +102,6 @@ test('rules can enable semantic inspection locally without contacting a provider
             ...DEFAULT_UI_PREFERENCES,
             semanticInspectorEnabled: false,
         });
-        enabledUi.semanticInspectorEnabledInput = { checked: false };
-        const profileClassList = { removed: [], remove(value) { this.removed.push(value); } };
-        enabledUi.semanticConnectionProfileInput = {
-            disabled: true,
-            closest() {
-                return { classList: profileClassList };
-            },
-        };
-        const capClassList = { removed: [], remove(value) { this.removed.push(value); } };
-        enabledUi.semanticResponseTokenCapInput = {
-            disabled: true,
-            closest() {
-                return { classList: capClassList };
-            },
-        };
         let resetCount = 0;
         let renderCount = 0;
         enabledUi.saveUiPreferences = (value) => {
@@ -132,11 +117,7 @@ test('rules can enable semantic inspection locally without contacting a provider
 
         assert.equal(enabledUi.enableSemanticInspectorFromRules(), true);
         assert.equal(enabledUi.preferences.semanticInspectorEnabled, true);
-        assert.equal(enabledUi.semanticInspectorEnabledInput.checked, true);
-        assert.equal(enabledUi.semanticConnectionProfileInput.disabled, false);
-        assert.equal(enabledUi.semanticResponseTokenCapInput.disabled, false);
-        assert.deepEqual(profileClassList.removed, ['is-disabled']);
-        assert.deepEqual(capClassList.removed, ['is-disabled']);
+        assert.equal(enabledUi.ruleViewMode, 'ai');
         assert.equal(resetCount, 1);
         assert.equal(renderCount, 1);
 
@@ -145,9 +126,6 @@ test('rules can enable semantic inspection locally without contacting a provider
             ...DEFAULT_UI_PREFERENCES,
             semanticInspectorEnabled: false,
         });
-        failedUi.semanticInspectorEnabledInput = { checked: false };
-        failedUi.semanticConnectionProfileInput = null;
-        failedUi.semanticResponseTokenCapInput = null;
         let failedRenderCount = 0;
         failedUi.render = () => {
             failedRenderCount += 1;
@@ -160,11 +138,10 @@ test('rules can enable semantic inspection locally without contacting a provider
 
         assert.equal(failedUi.enableSemanticInspectorFromRules(), false);
         assert.equal(failedUi.preferences.semanticInspectorEnabled, false);
-        assert.equal(failedUi.semanticInspectorEnabledInput.checked, false);
         assert.equal(failedRenderCount, 0);
         assert.equal(prepareCount, 0);
         assert.equal(inspectCount, 0);
-        assert.deepEqual(statuses.map(([kind]) => kind), ['success', 'error']);
+        assert.deepEqual(statuses.map(([kind]) => kind), ['info', 'error']);
     } finally {
         globalThis.toastr = previousToastr;
         console.error = previousConsoleError;
@@ -525,7 +502,7 @@ test('v0.11 semantic UI keeps consent, results, and persistence boundaries expli
     assert.match(ui, /semanticSnapshotSupportsInspection\(snapshot\)/);
     assert.match(
         ui,
-        /if \(semanticSettingsChanged\) \{\s*this\.resetSemanticInspectionForSettingsChange\(preferences\);/,
+        /updateSemanticInspectorPreferences\([\s\S]*?if \(changed\) \{\s*this\.resetSemanticInspectionForSettingsChange\(preferences\);/,
     );
     assert.match(
         ui,

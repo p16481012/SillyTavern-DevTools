@@ -159,6 +159,10 @@ test('app navigation stays visually singular and resists host button styles', as
     assert.match(panel, /word-break:\s*keep-all/);
     assert.match(appNav, /display:\s*grid\s*!important/u);
     assert.match(
+        appNav,
+        /grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/u,
+    );
+    assert.match(
         css,
         /\.st-devtools-window button,\s*\.st-devtools-window select\s*\{[\s\S]*?box-sizing:\s*border-box/u,
     );
@@ -223,7 +227,7 @@ test('bottom app navigation stays in a three-row shell without mobile overflow',
     assert.match(appNav, /display:\s*grid\s*!important/u);
     assert.match(
         appNav,
-        /grid-template-columns:\s*repeat\(6, minmax\(0, 1fr\)\)/,
+        /grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/,
     );
     assert.match(appNav, /min-width:\s*0/u);
     assert.doesNotMatch(appNav, /overflow-x:\s*auto/u);
@@ -271,13 +275,11 @@ test('bottom app navigation stays in a three-row shell without mobile overflow',
         'nav.short.rules',
         'nav.short.timeline',
         'nav.short.diff',
-        'nav.short.context',
         'nav.short.search',
         'tab.explorer',
         'tab.rules',
         'tab.timeline',
         'tab.diff',
-        'tab.context',
         'tab.search',
         'snapshot.label',
         'capture.status.label',

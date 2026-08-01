@@ -128,28 +128,48 @@ test('temporary profile-list failure preserves the saved opaque selection withou
     }
 });
 
-test('settings wire the selected semantic profile through reset, save, and reopen', async () => {
+test('rules AI mode persists its profile and response cap outside general settings', async () => {
     const ui = await readFile(UI_SOURCE_URL, 'utf8');
     const i18n = await readFile(I18N_SOURCE_URL, 'utf8');
+    const generalSettings = sourceBlock(
+        ui,
+        '\n    buildSettingsPanel() {',
+        '\n    setStorageToolsStatus(',
+    );
+    const semanticSettings = sourceBlock(
+        ui,
+        '\n    renderSemanticInspectorSettings() {',
+        '\n    semanticSnapshotSupportsInspection(',
+    );
+    const updatePreferences = sourceBlock(
+        ui,
+        '\n    updateSemanticInspectorPreferences(',
+        '\n    setSemanticInspectionMode(',
+    );
 
-    assert.match(ui, /className: 'st-devtools-semantic-profile'/u);
+    assert.doesNotMatch(generalSettings, /st-devtools-semantic-profile/u);
+    assert.doesNotMatch(generalSettings, /settings\.semanticResponseCap/u);
+    assert.match(semanticSettings, /className: 'st-devtools-semantic-profile'/u);
     assert.match(
-        ui,
-        /semanticProfileSelect\.setAttribute\(\s*'aria-label',[\s\S]*?settings\.semanticConnectionProfile/u,
-    );
-    assert.match(ui, /semanticConnectionProfileId: semanticProfileSelect\.value \|\| null/u);
-    assert.match(
-        ui,
-        /requested\.semanticConnectionProfileId[\s\S]*?previousPreferences\.semanticConnectionProfileId/u,
+        semanticSettings,
+        /profile\.setAttribute\('aria-label', t\('settings\.semanticConnectionProfile'\)\)/u,
     );
     assert.match(
-        ui,
+        semanticSettings,
         /populateSemanticConnectionProfiles\([\s\S]*?this\.preferences\.semanticConnectionProfileId/u,
     );
     assert.match(
-        ui,
-        /DEFAULT_UI_PREFERENCES\.semanticConnectionProfileId/u,
+        semanticSettings,
+        /semanticConnectionProfileId: profile\.value \|\| null/u,
     );
+    assert.match(
+        semanticSettings,
+        /cap\.value = String\(this\.preferences\.semanticResponseTokenCap\)/u,
+    );
+    assert.match(semanticSettings, /semanticResponseTokenCap: cap\.value/u);
+    assert.match(updatePreferences, /this\.saveUiPreferences\(/u);
+    assert.match(updatePreferences, /this\.resetSemanticInspectionForSettingsChange\(preferences\)/u);
+    assert.match(updatePreferences, /this\.ruleViewMode = preferences\.semanticInspectorEnabled/u);
     for (const key of [
         'settings.semanticConnectionProfile',
         'settings.semanticConnectionProfileDescription',

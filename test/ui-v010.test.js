@@ -132,14 +132,13 @@ test('metadata and redacted snapshots are gated before unavailable tab renderers
     };
     ui.renderExplorer = forbidden;
     ui.renderDiff = forbidden;
-    ui.renderContext = forbidden;
     ui.renderRules = forbidden;
     ui.renderSearch = forbidden;
 
     const metadata = privateSnapshot('metadata');
     ui.timeline = [metadata];
     ui.selectedId = metadata.id;
-    for (const tab of ['explorer', 'diff', 'context', 'rules', 'search']) {
+    for (const tab of ['explorer', 'diff', 'rules', 'search']) {
         ui.activeTab = tab;
         ui.render();
         assert.deepEqual(
@@ -167,12 +166,12 @@ test('metadata and redacted snapshots are gated before unavailable tab renderers
     }
     assert.deepEqual(
         limitedNotices,
-        Array(7).fill('privacy-notice'),
+        Array(6).fill('privacy-notice'),
     );
 });
 
-test('render keeps exactly one of the six direct app tabs selected', () => {
-    const ids = ['explorer', 'rules', 'timeline', 'diff', 'context', 'search'];
+test('render keeps exactly one of the five direct app tabs selected', () => {
+    const ids = ['explorer', 'timeline', 'diff', 'rules', 'search'];
     const ui = createUi();
     const content = fakeContent();
     const tabs = ids.map(fakeAppTab);
@@ -191,7 +190,6 @@ test('render keeps exactly one of the six direct app tabs selected', () => {
     ui.renderRules = () => ({ kind: 'rules' });
     ui.renderTimeline = () => ({ kind: 'timeline' });
     ui.renderDiff = () => ({ kind: 'diff' });
-    ui.renderContext = () => ({ kind: 'context' });
     ui.renderSearch = () => ({ kind: 'search' });
 
     for (const id of ids) {

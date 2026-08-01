@@ -10,10 +10,9 @@ const I18N_SOURCE_URL = new URL('../src/i18n.js', import.meta.url);
 
 const EXPECTED_TABS = [
     'explorer',
-    'rules',
     'timeline',
     'diff',
-    'context',
+    'rules',
     'search',
 ];
 
@@ -222,7 +221,7 @@ test('privacy pipeline failures are explained as capture errors without a fake r
     }
 });
 
-test('one bottom app tablist exposes all six content functions exactly once', async () => {
+test('one bottom app tablist exposes all five content functions exactly once', async () => {
     const ui = await readFile(UI_SOURCE_URL, 'utf8');
     const navigation = sourceBlock(
         ui,
@@ -238,7 +237,7 @@ test('one bottom app tablist exposes all six content functions exactly once', as
         iconClass: match[4],
     }));
 
-    assert.equal(rows.length, 6);
+    assert.equal(rows.length, 5);
     assert.deepEqual(rows.map(({ id }) => id), EXPECTED_TABS);
     assert.equal(new Set(rows.map(({ id }) => id)).size, rows.length);
     for (const row of rows) {
@@ -296,7 +295,7 @@ test('one bottom app tablist exposes all six content functions exactly once', as
     assert.doesNotMatch(screenHeader, /proseElement\(|element\('p'/u);
 });
 
-test('all six app tabs use one roving keyboard sequence', () => {
+test('all five app tabs use one roving keyboard sequence', () => {
     const ui = Object.create(DevToolsWindow.prototype);
     const calls = [];
     ui.selectTab = (id, options) => calls.push([id, options]);
@@ -474,32 +473,27 @@ test('empty state provides concise quick start and recovery actions', async () =
     assert.match(quickStart, /className: 'st-devtools-empty-diagnostics/u);
 });
 
-test('rule results have an explicit async host before lazily-mounted supporting sections', async () => {
+test('rule results separate AI mode and settings from local supporting sections', async () => {
     const ui = await readFile(UI_SOURCE_URL, 'utf8');
-    const semanticDisclosure = sourceBlock(
+    const settingsPanel = sourceBlock(
         ui,
-        '\n    renderSemanticInspectorDisclosure(',
-        '\n    renderRuleAdvancedAnalysis(',
+        '\n    buildRulesSettingsPanel() {',
+        '\n    refreshRulesSettingsPanel() {',
     );
-    const semanticInspector = sourceBlock(
+    const refreshSettings = sourceBlock(
         ui,
-        '\n    renderSemanticInspector(snapshot, analysis, findings) {',
-        '\n    renderSemanticInspectorDisclosure(',
+        '\n    refreshRulesSettingsPanel() {',
+        '\n    openRulesSettings() {',
+    );
+    const screenHeader = sourceBlock(
+        ui,
+        '\n    renderScreenHeader(',
+        '\n    renderQuickStart(',
     );
     const advancedDisclosure = sourceBlock(
         ui,
         '\n    renderRuleAdvancedAnalysis(',
         '\n    appendRuleSupportingSections(',
-    );
-    const deferredSettings = sourceBlock(
-        ui,
-        '\n    renderDeferredRuleSettings(',
-        '\n    renderDeferredComparisonPolicySettings(',
-    );
-    const deferredPolicy = sourceBlock(
-        ui,
-        '\n    renderDeferredComparisonPolicySettings(',
-        '\n    renderRuleAdvancedAnalysis(',
     );
     const supporting = sourceBlock(
         ui,
@@ -508,33 +502,20 @@ test('rule results have an explicit async host before lazily-mounted supporting 
     );
     const rules = sourceBlock(ui, '\n    renderRules(', '\n    renderSearch(');
 
-    assert.match(semanticDisclosure, /element\('details'/u);
-    assert.match(semanticDisclosure, /attachLazyDetailsContent\(details/u);
-    assert.match(semanticDisclosure, /details\.open = this\.semanticInspectorOpen/u);
+    assert.match(settingsPanel, /setAttribute\('role', 'dialog'\)/u);
+    assert.match(settingsPanel, /setAttribute\('aria-modal', 'true'\)/u);
+    assert.match(settingsPanel, /id = 'st-devtools-rules-settings-dialog'/u);
+    assert.match(refreshSettings, /this\.renderRuleSettings\(\)/u);
     assert.match(
-        semanticDisclosure,
-        /this\.semanticInspectorOpen = details\.open/u,
+        refreshSettings,
+        /this\.renderComparisonPolicySettings\(snapshot\)/u,
     );
-    assert.match(semanticInspector, /className: 'st-devtools-semantic-enable-card'/u);
-    assert.match(semanticInspector, /t\('semantic\.enableHint'\)/u);
-    assert.match(semanticInspector, /text: t\('semantic\.enable'\)/u);
-    assert.match(semanticInspector, /this\.enableSemanticInspectorFromRules\(\)/u);
-    assert.match(
-        semanticInspector,
-        /className: 'st-devtools-semantic-enable-status'/u,
-    );
-    assert.match(semanticInspector, /setAttribute\('role', 'alert'\)/u);
-    assert.match(semanticInspector, /t\('semantic\.enableFailed'\)/u);
+    assert.match(screenHeader, /className: 'menu_button st-devtools-ai-mode-button'/u);
+    assert.match(screenHeader, /this\.setSemanticInspectionMode\(!aiActive\)/u);
+    assert.match(screenHeader, /this\.openRulesSettings\(\)/u);
     assert.match(advancedDisclosure, /element\('details'/u);
     assert.match(advancedDisclosure, /attachLazyDetailsContent\(details/u);
     assert.doesNotMatch(advancedDisclosure, /details\.open\s*=\s*true/u);
-    assert.match(deferredSettings, /attachLazyDetailsContent\(details/u);
-    assert.match(deferredSettings, /this\.renderRuleSettings\(\)/u);
-    assert.match(deferredPolicy, /attachLazyDetailsContent\(details/u);
-    assert.match(
-        deferredPolicy,
-        /this\.renderComparisonPolicySettings\(snapshot\)/u,
-    );
 
     assert.match(rules, /className: 'st-devtools-rule-analysis-host'/u);
     assert.match(rules, /host\.dataset\.tourId = 'rule-results'/u);
@@ -550,8 +531,14 @@ test('rule results have an explicit async host before lazily-mounted supporting 
     );
     assert.match(
         supporting,
-        /renderSemanticInspectorDisclosure[\s\S]*?renderRuleAdvancedAnalysis[\s\S]*?renderDeferredRuleSettings[\s\S]*?renderDeferredComparisonPolicySettings[\s\S]*?renderReviewedFindings[\s\S]*?renderRuleAuditLog/u,
+        /renderRuleAdvancedAnalysis[\s\S]*?renderReviewedFindings[\s\S]*?renderRuleAuditLog/u,
     );
+    assert.doesNotMatch(supporting, /renderSemanticInspectorDisclosure/u);
+    assert.doesNotMatch(supporting, /renderDeferredRuleSettings/u);
+    assert.doesNotMatch(supporting, /renderDeferredComparisonPolicySettings/u);
+    assert.match(rules, /if \(this\.ruleViewMode === 'ai'\)/u);
+    assert.match(rules, /this\.renderSemanticInspectorSettings\(\)/u);
+    assert.match(rules, /this\.renderSemanticInspector\(snapshot, analysis, findings\)/u);
 });
 
 test('search regex and case options stay collapsed behind a native disclosure', async () => {
@@ -639,6 +626,12 @@ test('prompt landing screen starts with one request overview card', async () => 
     assert.match(ui, /className:\s*'st-devtools-overview-card'/);
     assert.match(ui, /progress\.setAttribute\('role', 'progressbar'\)/);
     assert.match(ui, /page\.append\(this\.renderExplorerOverview\(snapshot\)\)/);
+    assert.match(ui, /page\.appendChild\(this\.renderPromptRequestData\(snapshot\)\)/);
+    assert.match(ui, /snapshot\.request\?\.settings \?\? null/u);
+    assert.match(
+        ui,
+        /snapshot\.promptType === 'chat-completion'[\s\S]*?snapshot\.payload \?\? null[\s\S]*?snapshot\.finalText \|\| null/u,
+    );
     assert.match(css, /\.st-devtools-overview-card\s*\{[\s\S]*?linear-gradient/);
     assert.match(i18n, /'explorer\.overviewTitle':\s*'[^']+'/);
 });
