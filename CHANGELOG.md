@@ -1,5 +1,18 @@
 # 변경 기록
 
+## 0.11.4 - 2026-08-01
+
+### 실제 SillyTavern 선택 필드 저장 복구
+
+- 요청 sanitizer의 느슨한 null 비교 때문에 `undefined`가 그대로 남던 결함을 수정. OpenAI·Text Completion 요청의 선택적 생성 필드와 메시지 `name`처럼 SillyTavern이 정상적으로 `undefined`를 넣는 값은 저장 전 `null`로 정규화
+- sparse array hole도 dense한 `null`로 바꾸고, 재정의된 Date 메서드를 실행하지 않은 채 표준 Date 값만 ISO 문자열로 변환해 privacy `invalid-value` 재발 방지
+- 실제 OpenAI·TextGen 형태의 선택 필드, 개인정보 변환, `SnapshotStore` 기록과 저장 직후 재조회까지 연결한 회귀 테스트 추가
+- 개인정보 변환 전에 실패한 오류를 로컬 저장소 오류로 잘못 표시하거나 존재하지 않는 재시도를 안내하지 않고, 캡처 처리 단계와 안정적인 오류 코드를 설명하도록 UI 수정
+
+### 검증
+
+- 명시적 `undefined`, sparse array, OpenAI·TextGen 선택 필드를 포함한 요청이 세 개인정보 모드와 persistent backend 재접속에서 저장되는지 검증
+
 ## 0.11.3 - 2026-07-31
 
 ### 캡처 우선 저장 복구

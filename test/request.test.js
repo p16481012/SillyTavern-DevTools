@@ -9,6 +9,7 @@ import {
     sanitizePromptPayload,
     stripRequestCorrelationIds,
 } from '../src/request.js';
+import { assertBoundedJsonValue } from '../src/snapshot-privacy.js';
 
 test('request records redact credential-like fields without mutating input', () => {
     const input = {
@@ -177,6 +178,9 @@ test('sanitizer handles large non-secret text without changing it', () => {
 });
 
 test('sanitizer produces persistable JSON from browser-only and unsupported values', () => {
+    const dateWithOverriddenMethods = new Date('2026-07-30T00:00:00.000Z');
+    dateWithOverriddenMethods.getTime = () => Number.NaN;
+    dateWithOverriddenMethods.toISOString = () => undefined;
     const input = {
         count: 12n,
         invalidNumber: Number.NaN,
@@ -184,6 +188,7 @@ test('sanitizer produces persistable JSON from browser-only and unsupported valu
         marker: Symbol('not serializable'),
         bytes: new Uint8Array([1, 2, 3]),
         createdAt: new Date('2026-07-31T00:00:00.000Z'),
+        dateWithOverriddenMethods,
     };
     Object.defineProperty(input, 'throwingGetter', {
         enumerable: true,
@@ -200,11 +205,68 @@ test('sanitizer produces persistable JSON from browser-only and unsupported valu
     assert.equal(sanitized.body.bytes, '[미디어 데이터 생략됨]');
     assert.equal(sanitized.body.createdAt, '2026-07-31T00:00:00.000Z');
     assert.equal(
+        sanitized.body.dateWithOverriddenMethods,
+        '2026-07-30T00:00:00.000Z',
+    );
+    assert.equal(
         sanitized.body.throwingGetter,
         '[ST DevTools: unsupported value omitted]',
     );
     assert.doesNotThrow(() => structuredClone(sanitized.body));
     assert.doesNotThrow(() => JSON.stringify(sanitized.body));
+    assert.doesNotThrow(() => assertBoundedJsonValue(sanitized.body));
+});
+
+test('request records normalize SillyTavern optional generation fields before privacy validation', () => {
+    const optionalFields = [
+        'logit_bias',
+        'n',
+        'reasoning_effort',
+        'verbosity',
+        'n_probs',
+        'guided_grammar',
+        'guided_json',
+        'sampler_priority',
+        'grammar_retain_state',
+    ];
+    const requestBody = {
+        messages: [{ role: 'user', content: 'hello', name: undefined }],
+    };
+    for (const key of optionalFields) requestBody[key] = undefined;
+
+    const request = createRequestRecord(requestBody);
+
+    assert.equal(request.body.messages[0].name, null);
+    for (const key of optionalFields) {
+        assert.equal(Object.hasOwn(request.body, key), true);
+        assert.equal(request.body[key], null);
+        assert.equal(request.settings[key], null);
+    }
+    assert.doesNotThrow(() => assertBoundedJsonValue(request));
+});
+
+test('sanitizer converts explicit undefined values and sparse array holes to null', () => {
+    const input = {
+        optional: undefined,
+        messages: [
+            { role: 'user', content: 'hello', name: undefined },
+            ,
+            undefined,
+        ],
+    };
+
+    const sanitized = sanitizeRequestBody(input);
+
+    assert.equal(Object.hasOwn(sanitized.body, 'optional'), true);
+    assert.equal(sanitized.body.optional, null);
+    assert.equal(sanitized.body.messages[0].name, null);
+    assert.equal(Object.hasOwn(sanitized.body.messages, 1), true);
+    assert.deepEqual(sanitized.body.messages, [
+        { role: 'user', content: 'hello', name: null },
+        null,
+        null,
+    ]);
+    assert.equal(JSON.stringify(sanitized.body).includes('undefined'), false);
 });
 
 test('sanitizer fuzz preserves shape and never leaks seeded secret values', () => {

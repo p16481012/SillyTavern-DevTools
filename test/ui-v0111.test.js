@@ -78,7 +78,7 @@ test('capture status producer emits only bounded public metadata', () => {
     const controller = new CaptureController({
         getContext: () => ({}),
         store: {},
-        version: '0.11.3-test',
+        version: '0.11.4-test',
     });
     const emitted = [];
     controller.addEventListener('capture-status', (event) => {
@@ -123,7 +123,7 @@ test('beginner UI consumes only the capture-status whitelist', () => {
             getContext: () => ({ chatId: 'beginner-chat' }),
             store: {},
             capture,
-            version: '0.11.3-test',
+            version: '0.11.4-test',
         });
 
         assert.equal(capture.listeners.has('capture-status'), true);
@@ -178,6 +178,47 @@ test('beginner UI consumes only the capture-status whitelist', () => {
         assert.doesNotMatch(JSON.stringify(ui.captureStatus), /private-/u);
     } finally {
         globalThis.localStorage = previousStorage;
+    }
+});
+
+test('privacy pipeline failures are explained as capture errors without a fake retry', () => {
+    const previousStorage = globalThis.localStorage;
+    const previousToastr = globalThis.toastr;
+    const toasts = [];
+    globalThis.localStorage = memoryLocalStorage();
+    globalThis.toastr = {
+        error(message) {
+            toasts.push(message);
+        },
+    };
+    const capture = new CaptureEventHarness();
+    try {
+        const ui = new DevToolsWindow({
+            getContext: () => ({ chatId: 'capture-error-chat' }),
+            store: {},
+            capture,
+            version: '0.11.4-test',
+        });
+        const error = new Error('invalid-value');
+        error.code = 'invalid-value';
+
+        capture.emit('capture-error', {
+            operation: 'transformPrivacy',
+            snapshot: null,
+            error,
+        });
+
+        assert.equal(ui.storageErrors.length, 1);
+        assert.equal(ui.storageErrors[0].kind, 'capture');
+        assert.equal(ui.storageErrors[0].retry, null);
+        assert.match(ui.storageErrors[0].message, /개인정보 보호 설정/u);
+        assert.match(ui.storageErrors[0].message, /invalid-value/u);
+        assert.deepEqual(toasts, [
+            '이번 요청을 저장하지 못했습니다. 다음 일반 메시지는 자동으로 다시 캡처합니다.',
+        ]);
+    } finally {
+        globalThis.localStorage = previousStorage;
+        globalThis.toastr = previousToastr;
     }
 });
 

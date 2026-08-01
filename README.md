@@ -4,9 +4,9 @@ ST DevTools는 SillyTavern용 읽기 전용 프롬프트 파이프라인 디버�
 
 ## 현재 버전
 
-`v0.11.3`
+`v0.11.4`
 
-v0.11.3은 정확한 요청 payload와 최종 프롬프트를 가진 최소 스냅샷을 먼저 저장하고, 같은 레코드의 상세 소스 귀속과 토큰 계산을 뒤에서 보강합니다. 저장 직후 레코드를 다시 읽어 확인하며 상태 표시에서 정리·개인정보 처리·저장소 기록·재읽기 검증 단계를 구분합니다. 상세 분석이 느리거나 실제 요청 객체에 IndexedDB가 복제할 수 없는 값이 있어도 검토 가능한 기록이 먼저 남도록 캡처 경계를 보강했습니다.
+v0.11.4는 SillyTavern이 실제 요청에 포함하는 `undefined` 선택 필드와 sparse array hole을 저장 가능한 `null`로 정규화해 개인정보 처리 단계의 `invalid-value` 실패를 수정합니다. 최소 스냅샷 선저장·재읽기 검증과 같은 ID 상세 보강은 그대로 유지하며, 저장 전 캡처 처리 실패를 로컬 저장소 문제로 잘못 안내하지 않습니다.
 
 주요 기능:
 
@@ -278,14 +278,14 @@ npm test
 
 UI 접근성을 수동 검토할 때는 `npm run sandbox`를 실행하고 출력된 로컬 주소를 엽니다.
 
-구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.11.3 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요. 버전별 계획은 [`docs/ROADMAP.md`](docs/ROADMAP.md)에 정리했습니다.
+구현 상태와 남은 경계는 [`docs/TECHNICAL-STATUS.md`](docs/TECHNICAL-STATUS.md), v0.11.4 실사용 검토 절차는 [`docs/USER-TEST-CHECKLIST.md`](docs/USER-TEST-CHECKLIST.md)를 참고하세요. 버전별 계획은 [`docs/ROADMAP.md`](docs/ROADMAP.md)에 정리했습니다.
 
 AI 의미 검사는 개인정보 모드가 명시적으로 `전체 원문`인 현재 형식의 스냅샷만 허용합니다. 개인정보 메타데이터가 도입되기 전에 저장되어 v7로 지연 이전된 기록은 로컬에서 계속 열 수 있지만, 과거 원문 보존 상태를 추측하지 않도록 AI 전송에는 실패로 닫힙니다. 이런 기록을 검사하려면 업데이트 뒤 `전체 원문` 모드에서 새 테스트 스냅샷을 만드세요.
 
 ## 다음 예정 방향
 
 - v0.12.0에서 AI 제안 품질을 반복 측정할 익명화 평가 corpus와 회귀 기준 보강
-- provider별 호환성·오류 설명·접근성 품질을 다듬고, 코치마크·워크스루는 v0.11.3의 실제 사용 피드백으로 정보 구조를 다시 확인한 뒤 설계
+- provider별 호환성·오류 설명·접근성 품질을 다듬고, 코치마크·워크스루는 v0.11.4의 실제 사용 피드백으로 정보 구조를 다시 확인한 뒤 설계
 
 ## 라이선스
 

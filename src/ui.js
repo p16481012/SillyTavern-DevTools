@@ -197,11 +197,24 @@ const CAPTURE_PIPELINE_PHASES = new Set([
     'storage',
     'storage-verify',
 ]);
+const CAPTURE_PIPELINE_ERROR_KEYS = new Map([
+    ['finalizeSnapshot', 'capture.error.finalizing'],
+    ['transformPrivacy', 'capture.error.privacy'],
+]);
 let tooltipSequence = 0;
 let fieldSequence = 0;
 
 function navigationGroupForTab(tabId) {
     return NAV_GROUPS.find(([, , tabs]) => tabs.includes(tabId)) ?? NAV_GROUPS[0];
+}
+
+function capturePipelineErrorMessage(detail) {
+    const code = typeof detail?.error?.code === 'string'
+        ? detail.error.code
+        : 'unknown';
+    const key = CAPTURE_PIPELINE_ERROR_KEYS.get(detail?.operation)
+        ?? 'capture.error.pipeline';
+    return t(key, { code });
 }
 
 function element(tag, options = {}) {
@@ -3582,19 +3595,32 @@ export class DevToolsWindow {
         this.addStorageError({
             id: `capture:${snapshotId ?? Date.now()}`,
             snapshotId,
-            error: detail?.error,
+            error: snapshot
+                ? detail?.error
+                : new Error(capturePipelineErrorMessage(detail)),
             retry: snapshot ? () => this.capture.retrySnapshot(snapshot) : null,
+            kind: snapshot ? 'storage' : 'capture',
         });
-        globalThis.toastr?.error?.(t('storage.captureFailed'), 'ST DevTools');
+        globalThis.toastr?.error?.(
+            t(snapshot ? 'storage.captureFailed' : 'capture.pipelineFailed'),
+            'ST DevTools',
+        );
     }
 
-    addStorageError({ id, snapshotId = null, error, retry = null }) {
+    addStorageError({
+        id,
+        snapshotId = null,
+        error,
+        retry = null,
+        kind = 'storage',
+    }) {
         const item = {
             id,
             snapshotId,
             message: error?.message || t('storage.unknownError'),
             retry,
             pending: false,
+            kind,
         };
         this.storageErrors = [
             ...this.storageErrors.filter((existing) => existing.id !== id),
@@ -4364,7 +4390,13 @@ export class DevToolsWindow {
         const region = element('section', { className: 'st-devtools-storage-errors' });
         region.setAttribute('role', 'alert');
         region.setAttribute('aria-live', 'assertive');
-        region.appendChild(element('strong', { text: t('storage.errorTitle') }));
+        const kinds = new Set(this.storageErrors.map(({ kind }) => kind ?? 'storage'));
+        const titleKey = kinds.size > 1
+            ? 'error.generalTitle'
+            : kinds.has('capture')
+                ? 'capture.errorTitle'
+                : 'storage.errorTitle';
+        region.appendChild(element('strong', { text: t(titleKey) }));
         for (const item of this.storageErrors) {
             const row = element('div', { className: 'st-devtools-storage-error' });
             row.appendChild(element('span', {

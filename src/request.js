@@ -120,7 +120,7 @@ export function sanitizeRequestBody(value) {
             if (sanitized.changed) redactedPaths.push(path);
             return sanitized.value;
         }
-        if (current == null || typeof current === 'boolean') {
+        if (current === null || typeof current === 'boolean') {
             return current;
         }
         if (typeof current === 'number') {
@@ -131,7 +131,14 @@ export function sanitizeRequestBody(value) {
             return null;
         }
         if (current instanceof Date) {
-            return Number.isFinite(current.getTime()) ? current.toISOString() : null;
+            try {
+                const time = Date.prototype.getTime.call(current);
+                return Number.isFinite(time)
+                    ? new Date(time).toISOString()
+                    : null;
+            } catch {
+                return null;
+            }
         }
         if (
             current instanceof ArrayBuffer

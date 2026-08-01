@@ -1,4 +1,11 @@
-# v0.11.3 기술 구현 현황
+# v0.11.4 기술 구현 현황
+
+## v0.11.4 실제 요청 `undefined` 정규화 패치
+
+- SillyTavern의 Chat Completion·Text Completion 생성 데이터가 정상적으로 포함하는 선택적 `undefined` 필드를 `null`로 정규화해 privacy `invalid-value` 실패를 제거함
+- 메시지 `name`, OpenAI의 `logit_bias`·`n`·`reasoning_effort`·`verbosity`, TextGen의 `n_probs`·guided 설정·sampler/grammar 선택 필드를 실제 이벤트 형태로 검증함
+- sparse array hole도 dense `null`로 정규화하며 Date는 재정의된 인스턴스 메서드를 실행하지 않고 표준 값만 ISO 문자열로 변환함
+- 저장 전 finalizing/privacy 실패는 캡처 처리 오류로 설명하고, 저장할 snapshot이 없어 실행할 수 없는 재시도 버튼과 로컬 저장소 오류 오분류를 제거함
 
 ## v0.11.3 캡처 우선 저장 패치
 
@@ -231,12 +238,12 @@
 
 - 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
 - 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- v0.11.3의 캡처 우선 저장과 4개 작업 탐색·빈 상태 빠른 시작·필드별 도움말에 대한 실사용 피드백 수집과 접근성 검증
+- v0.11.4의 실제 요청 저장과 4개 작업 탐색·빈 상태 빠른 시작·필드별 도움말에 대한 실사용 피드백 수집과 접근성 검증
 
-세부 기능은 v0.11.3 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.11.4 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.11.3의 캡처 선저장·재읽기 검증·단계별 상태, 연결 프로필 선택, 작업 중심 탐색·필드별 도움말과 테마 방어를 사용자 체크리스트로 확인합니다.
+1. v0.11.4의 실제 OpenAI·TextGen 요청 캡처, 선저장·재읽기 검증·단계별 상태를 사용자 체크리스트로 확인합니다.
 2. v0.12.0에서 AI 평가 corpus·품질 회귀·provider 호환성·접근성을 보강합니다.
 3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

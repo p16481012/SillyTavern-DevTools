@@ -375,6 +375,56 @@ test('production storage saves a minimal snapshot before oversized source analys
     assert.equal(persisted?.finalText.includes('capture before expensive analysis'), true);
 });
 
+test('production capture persists common undefined optional message fields', async () => {
+    const eventSource = new FakeEventSource();
+    const context = createContext(eventSource);
+    const store = new SnapshotStore({
+        namespace: 'capture-undefined-field-test',
+        maxSnapshotsPerChat: 10,
+    });
+    const controller = new CaptureController({
+        getContext: () => context,
+        store,
+        version: 'test',
+        settingsWaitMs: 50,
+    });
+    const snapshots = [];
+    const failures = [];
+    controller.addEventListener('snapshot', (event) => snapshots.push(event.detail));
+    controller.addEventListener('capture-error', (event) => failures.push(event.detail));
+    controller.start();
+
+    const messages = [{
+        role: 'user',
+        content: 'undefined optional fields must not block storage',
+        name: undefined,
+    }];
+    eventSource.emitSynchronously('chat_completion_prompt_ready', {
+        chat: messages,
+        request_id: 'undefined-field-request',
+        dryRun: false,
+    });
+    eventSource.emitSynchronously('chat_completion_settings_ready', {
+        messages,
+        request_id: 'undefined-field-request',
+        logit_bias: undefined,
+        n: undefined,
+        reasoning_effort: undefined,
+        verbosity: undefined,
+    });
+    await waitFor(() => snapshots.length >= 1);
+
+    assert.equal(failures.length, 0);
+    assert.equal(snapshots[0].request.body.messages[0].name, null);
+    assert.equal(snapshots[0].request.body.logit_bias, null);
+    assert.equal(snapshots[0].request.body.n, null);
+    assert.equal(snapshots[0].request.body.reasoning_effort, null);
+    assert.equal(snapshots[0].request.body.verbosity, null);
+    const persisted = await store.getSnapshot('chat', snapshots[0].id);
+    assert.equal(persisted?.id, snapshots[0].id);
+    assert.equal(persisted?.request?.body?.messages?.[0]?.name, null);
+});
+
 test('capture-first storage replaces the same record with detailed sources in the background', async () => {
     const eventSource = new FakeEventSource();
     const context = createContext(eventSource);
@@ -742,6 +792,11 @@ test('text completion prefers settings-ready data and ignores the later duplicat
         prompt: 'Request-ready text prompt',
         temperature: 0.65,
         max_new_tokens: 200,
+        n_probs: undefined,
+        guided_grammar: undefined,
+        guided_json: undefined,
+        sampler_priority: undefined,
+        grammar_retain_state: undefined,
     };
     eventSource.emitSynchronously('text_completion_settings_ready', requestBody);
     eventSource.emitSynchronously('generate_after_data', requestBody, false);
@@ -752,6 +807,11 @@ test('text completion prefers settings-ready data and ignores the later duplicat
     assert.equal(saved[0].capture.eventName, 'TEXT_COMPLETION_SETTINGS_READY');
     assert.equal(saved[0].provider, 'openrouter');
     assert.equal(saved[0].stats.maxOutput, 200);
+    assert.equal(saved[0].request.body.n_probs, null);
+    assert.equal(saved[0].request.body.guided_grammar, null);
+    assert.equal(saved[0].request.body.guided_json, null);
+    assert.equal(saved[0].request.body.sampler_priority, null);
+    assert.equal(saved[0].request.body.grammar_retain_state, null);
 });
 
 test('generic text APIs capture generation-ready request data', async () => {

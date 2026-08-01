@@ -3,7 +3,7 @@ import { CaptureController } from '../src/capture.js';
 import { SnapshotStore } from '../src/storage.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
 import { createProfileContext } from '../src/profile-context.js';
-import { createCaptureBoundary } from '../src/request.js';
+import { createCaptureBoundary, createRequestRecord } from '../src/request.js';
 import { transformSnapshotPrivacy } from '../src/snapshot-privacy.js';
 import {
     createSnapshotArchive,
@@ -62,7 +62,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.11.3',
+        extensionVersion: '0.11.4',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1409,7 +1409,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.11.3',
+    version: '0.11.4',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1546,7 +1546,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.11.3',
+        extensionVersion: '0.11.4',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1593,7 +1593,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.11.3',
+        version: '0.11.4',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1603,6 +1603,17 @@ async function runHungTokenizerCaptureSmokeTest() {
     controller.dispatchCaptureStatus('processing', {
         promptType: 'chat-completion',
         stage: 'backend-request-ready',
+    });
+    const request = createRequestRecord({
+        messages: [{
+            role: 'user',
+            content: 'capture undefined regression',
+            name: undefined,
+        }],
+        logit_bias: undefined,
+        n: undefined,
+        reasoning_effort: undefined,
+        verbosity: undefined,
     });
     const persistedSnapshot = await controller.persistCapture({
         contextState: {
@@ -1616,7 +1627,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             extensionPrompts: {},
             chat: [],
         },
-        payload: [{ role: 'user', content: '캡처 영구 대기 회귀 검사' }],
+        payload: request.body.messages,
         promptType: 'chat-completion',
         generationType: 'normal',
         activatedLore: [],
@@ -1626,7 +1637,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             requestBodyAvailable: false,
             fallback: true,
         }),
-        request: null,
+        request,
     });
     const storedSnapshot = await smokeStore.getSnapshot(
         'sandbox-hung-tokenizer',
@@ -1635,6 +1646,12 @@ async function runHungTokenizerCaptureSmokeTest() {
     const result = {
         saved: Boolean(storedSnapshot),
         verified: storedSnapshot?.id === persistedSnapshot.id,
+        undefinedNormalized:
+            storedSnapshot?.payload?.[0]?.name === null
+            && storedSnapshot?.request?.body?.logit_bias === null
+            && storedSnapshot?.request?.body?.n === null
+            && storedSnapshot?.request?.body?.reasoning_effort === null
+            && storedSnapshot?.request?.body?.verbosity === null,
         states: statuses,
         totalTokens: storedSnapshot?.stats?.totalTokens ?? null,
         sourceAnalysis: storedSnapshot?.stats?.structured?.sourceAnalysis ?? null,
@@ -1649,7 +1666,10 @@ document.getElementById('sandbox-capture-timeout')?.addEventListener('click', as
     button.textContent = '캡처 대기 회귀 검사 중';
     try {
         const result = await runHungTokenizerCaptureSmokeTest();
-        button.textContent = result.saved && result.states.at(-1) === 'saved'
+        button.textContent = result.saved
+            && result.verified
+            && result.undefinedNormalized
+            && result.states.at(-1) === 'saved'
             ? '캡처 대기 회귀 통과'
             : '캡처 대기 회귀 실패';
     } catch {

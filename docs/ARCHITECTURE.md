@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.11.3의 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.11.4의 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록과 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -29,7 +29,7 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 
 ### 개인정보 없는 캡처 상태
 
-v0.11.3의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, phase?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`, phase는 `finalizing`·`privacy`·`storage`·`storage-verify`로 제한합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장 또는 같은 ID로 보강된 스냅샷 전달에, `capture-error`는 저장 실패한 동일 스냅샷 재시도에 계속 사용합니다.
+v0.11.4의 `capture-status`는 캡처 payload와 별개인 UI 진행 신호입니다. detail은 동결된 `{ state, promptType?, stage?, phase?, at }`만 가지며 상태는 `capturing`·`processing`·`saved`·`failed`·`excluded-semantic`·`skipped-safety`, phase는 `finalizing`·`privacy`·`storage`·`storage-verify`로 제한합니다. 프롬프트 원문, snapshot/chat ID, provider/model, request ID와 오류 객체·메시지는 넣지 않습니다. 기존 `snapshot` 이벤트는 저장 또는 같은 ID로 보강된 스냅샷 전달에, `capture-error`는 저장 실패한 동일 스냅샷 재시도에 계속 사용합니다.
 
 ## 캡처 경계
 
@@ -167,7 +167,7 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.11.3의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
+v0.11.4의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
 
 처리 흐름은 다음과 같습니다.
 
