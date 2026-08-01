@@ -145,8 +145,10 @@ test('generate calls only public generateRaw with the bounded v1.13.5 contract',
     assert.equal(captureGate.activeCount, 0);
     assert.deepEqual(Object.keys(calls[0]).sort(), [
         'jsonSchema',
+        'prefill',
         'prompt',
         'responseLength',
+        'systemPrompt',
         'trimNames',
     ]);
     assert.equal(calls[0].responseLength, 512);
@@ -154,6 +156,24 @@ test('generate calls only public generateRaw with the bounded v1.13.5 contract',
     assert.equal(calls[0].jsonSchema, schema);
     assert.match(calls[0].prompt, /^inspect these rules/u);
     assert.match(calls[0].prompt, /ST_DEVTOOLS_SEMANTIC:[0-9a-f]{32}/u);
+});
+
+test('prefill is combined only with a continuation, not a complete JSON response', async () => {
+    const completeContext = chatContext(async () => '{"version":1,"suggestions":[]}');
+    const { adapter: completeAdapter } = adapterFor(completeContext);
+    assert.equal(await completeAdapter.generate({
+        prompt: 'inspect',
+        prefill: '{"version":1,"suggestions":',
+        responseTokenCap: 512,
+    }), '{"version":1,"suggestions":[]}');
+
+    const continuationContext = chatContext(async () => '[]}');
+    const { adapter: continuationAdapter } = adapterFor(continuationContext);
+    assert.equal(await continuationAdapter.generate({
+        prompt: 'inspect',
+        prefill: '{"version":1,"suggestions":',
+        responseTokenCap: 512,
+    }), '{"version":1,"suggestions":[]}');
 });
 
 test('selected Connection Manager profile is listed, identified, and called without changing the current connection', async () => {

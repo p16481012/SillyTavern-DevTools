@@ -276,8 +276,28 @@ function generatedResponseText(response, routeKind) {
     return text;
 }
 
+function isCompleteJsonObject(text) {
+    try {
+        const parsed = JSON.parse(text);
+        return parsed !== null
+            && typeof parsed === 'object'
+            && !Array.isArray(parsed);
+    } catch {
+        return false;
+    }
+}
+
+function completePrefilledResponse(prefill, text) {
+    if (!prefill || text.startsWith(prefill) || isCompleteJsonObject(text)) {
+        return text;
+    }
+    return `${prefill}${text}`;
+}
+
 function validatedRequest({
+    systemPrompt,
     prompt,
+    prefill,
     jsonSchema,
     responseTokenCap,
     timeoutMs,
@@ -287,6 +307,10 @@ function validatedRequest({
         typeof prompt !== 'string'
         || prompt.length === 0
         || prompt.length > MAX_PROMPT_CHARS
+        || typeof systemPrompt !== 'string'
+        || systemPrompt.length > 16_384
+        || typeof prefill !== 'string'
+        || prefill.length > 1_024
         || !Number.isSafeInteger(responseTokenCap)
         || responseTokenCap < MIN_RESPONSE_TOKEN_CAP
         || responseTokenCap > MAX_RESPONSE_TOKEN_CAP
@@ -298,7 +322,9 @@ function validatedRequest({
         throw error(SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT);
     }
     return {
+        systemPrompt,
         prompt,
+        prefill,
         jsonSchema: jsonSchema ?? null,
         responseTokenCap,
         timeoutMs,
@@ -384,7 +410,9 @@ export class SemanticProviderAdapter {
     }
 
     generate({
+        systemPrompt = '',
         prompt,
+        prefill = '',
         jsonSchema = null,
         responseTokenCap = DEFAULT_RESPONSE_TOKEN_CAP,
         signal = null,
@@ -393,7 +421,9 @@ export class SemanticProviderAdapter {
         let request;
         try {
             request = validatedRequest({
+                systemPrompt,
                 prompt,
+                prefill,
                 jsonSchema,
                 responseTokenCap,
                 timeoutMs,
@@ -511,8 +541,20 @@ export class SemanticProviderAdapter {
                         route.profile.completionType === 'text-completion'
                     );
                     const profilePrompt = isTextProfile
-                        ? armed.prompt
-                        : [{ role: 'user', content: armed.prompt }];
+                        ? [
+                            request.systemPrompt,
+                            armed.prompt,
+                            request.prefill,
+                        ].filter(Boolean).join('\n\n')
+                        : [
+                            ...(request.systemPrompt
+                                ? [{ role: 'system', content: request.systemPrompt }]
+                                : []),
+                            { role: 'user', content: armed.prompt },
+                            ...(request.prefill
+                                ? [{ role: 'assistant', content: request.prefill }]
+                                : []),
+                        ];
                     const overridePayload = (
                         route.profile.completionType === 'chat-completion'
                         && request.jsonSchema
@@ -534,7 +576,9 @@ export class SemanticProviderAdapter {
                     ));
                 } else {
                     underlying = Promise.resolve(route.generateRaw.call(context, {
+                        systemPrompt: request.systemPrompt,
                         prompt: armed.prompt,
+                        prefill: request.prefill,
                         responseLength: request.responseTokenCap,
                         trimNames: true,
                         jsonSchema: request.jsonSchema,
@@ -559,7 +603,11 @@ export class SemanticProviderAdapter {
                         reject(error(SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE));
                         return;
                     }
-                    resolve(text);
+                    // Some providers honor an assistant prefill and return only the
+                    // continuation, while others ignore it and return a complete JSON
+                    // object. Never prepend the prefill to an already complete object.
+                    const completed = completePrefilledResponse(request.prefill, text);
+                    resolve(completed);
                 },
                 () => {
                     safeDisarm();

@@ -242,6 +242,8 @@ test('prepare sends only selected active closure and exposes an exact consent pr
         model: 'wrong-snapshot-model',
         responseTokenCap: 512,
         pricingOverrides: pricing(),
+        userPrompt: '말투 충돌을 우선 검사하세요.',
+        assistantPrefill: '{"version":1,',
     });
 
     assert.deepEqual(
@@ -256,6 +258,10 @@ test('prepare sends only selected active closure and exposes an exact consent pr
     assert.equal(prepared.preview.model, 'example/model');
     assert.equal(prepared.preview.inputTokenEstimate, 1_000);
     assert.equal(prepared.preview.responseTokenCap, 512);
+    assert.match(prepared.systemPrompt, /말투 충돌을 우선 검사하세요/u);
+    assert.equal(prepared.preview.userPrompt, '말투 충돌을 우선 검사하세요.');
+    assert.equal(prepared.preview.assistantPrefill, '{"version":1,');
+    assert.equal(prepared.assistantPrefill, '{"version":1,');
     assert.equal(prepared.preview.cost.priceSource, 'user-override');
     assert.equal(prepared.preview.cost.amount, 0.006096);
     assert.equal(
@@ -321,9 +327,11 @@ test('inspect calls the injected adapter contract and keeps AI suggestions separ
     assert.equal(adapter.calls.length, 1);
     assert.deepEqual(Object.keys(adapter.calls[0]).sort(), [
         'jsonSchema',
+        'prefill',
         'prompt',
         'responseTokenCap',
         'signal',
+        'systemPrompt',
     ]);
     assert.equal(result.kind, 'ai-semantic-suggestions');
     assert.equal(result.cached, false);
@@ -405,6 +413,26 @@ test('one unknown, extra, or mismatched response field rejects the whole respons
                 && error.code === 'SEMANTIC_INVALID_RESPONSE',
         );
     }
+});
+
+test('evidence offsets are safely realigned only when the exact quote exists', async () => {
+    const data = fixture();
+    const prepared = await prepareSemanticInspection({
+        snapshot: data.snapshot,
+        analysis: data.analysis,
+        targetIds: [data.ids.finding],
+        provider: 'openrouter',
+        model: 'example/model',
+    });
+    const response = JSON.parse(validResponse(prepared));
+    response.suggestions[0].evidence[0].start = 999;
+    response.suggestions[0].evidence[0].end = 1_005;
+
+    const result = validateSemanticResponse(JSON.stringify(response), prepared);
+
+    assert.equal(result.suggestions[0].evidence[0].start, 0);
+    assert.equal(result.suggestions[0].evidence[0].end, 6);
+    assert.equal(result.suggestions[0].evidence[0].quote, 'Always');
 });
 
 test('selected inactive source and over-limit input fail closed without truncation', async () => {

@@ -40,6 +40,11 @@ function createUi(semanticInspector, requestConsent = async () => false) {
         semanticInspectorEnabled: true,
     });
     ui.pricingOverrides = emptyPricing();
+    ui.semanticPromptSettings = {
+        version: 1,
+        userPrompt: '',
+        assistantPrefill: '',
+    };
     ui.semanticInspectionState = {
         snapshotId: 'semantic-snapshot',
         analysisRevision: 0,
@@ -47,6 +52,7 @@ function createUi(semanticInspector, requestConsent = async () => false) {
         status: 'idle',
         result: null,
         errorCode: null,
+        errorReason: null,
         sequence: 0,
         controller: null,
     };
@@ -305,6 +311,48 @@ test('analysis revision changes invalidate progress and results while preserving
     assert.equal(ui.semanticInspectionState.controller, null);
 });
 
+test('changing the selected snapshot aborts stale AI work exactly once', () => {
+    const ui = createUi(null);
+    const controller = new AbortController();
+    ui.selectedId = 'snapshot-a';
+    ui.semanticInspectionState.status = 'running';
+    ui.semanticInspectionState.controller = controller;
+
+    assert.equal(ui.setSelectedSnapshotId('snapshot-b'), true);
+    assert.equal(ui.selectedId, 'snapshot-b');
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(ui.semanticInspectionState.status, 'idle');
+    assert.equal(ui.analysisRevision, 1);
+
+    assert.equal(ui.setSelectedSnapshotId('snapshot-b'), false);
+    assert.equal(ui.analysisRevision, 1);
+});
+
+test('switching tabs does not cancel an in-flight semantic inspection', () => {
+    const previousStorage = globalThis.localStorage;
+    globalThis.localStorage = {
+        setItem() {},
+    };
+    try {
+        const ui = createUi(null);
+        const controller = new AbortController();
+        ui.activeTab = 'rules';
+        ui.content = { scrollTop: 10 };
+        ui.root = { hidden: true };
+        ui.semanticInspectionState.status = 'running';
+        ui.semanticInspectionState.controller = controller;
+        ui.render = () => {};
+
+        ui.selectTab('explorer');
+
+        assert.equal(controller.signal.aborted, false);
+        assert.equal(ui.analysisRevision, 0);
+        assert.equal(ui.semanticInspectionState.status, 'running');
+    } finally {
+        globalThis.localStorage = previousStorage;
+    }
+});
+
 test('semantic settings changes always reset state and OFF also clears memory cache', () => {
     let clearCount = 0;
     const ui = createUi({
@@ -335,6 +383,50 @@ test('semantic settings changes always reset state and OFF also clears memory ca
         semanticInspectorEnabled: false,
     });
     assert.equal(clearCount, 1);
+});
+
+test('saving semantic prompt settings immediately refreshes an interrupted inspection', () => {
+    const previousStorage = globalThis.localStorage;
+    const previousToastr = globalThis.toastr;
+    const memory = new Map();
+    globalThis.localStorage = {
+        getItem(key) {
+            return memory.get(key) ?? null;
+        },
+        setItem(key, value) {
+            memory.set(key, value);
+        },
+    };
+    globalThis.toastr = { success() {} };
+    try {
+        let clearCount = 0;
+        let refreshCount = 0;
+        const controller = new AbortController();
+        const ui = createUi({
+            clearCache() {
+                clearCount += 1;
+                return true;
+            },
+        });
+        ui.semanticInspectionState.status = 'running';
+        ui.semanticInspectionState.controller = controller;
+        ui.refreshSemanticInspectorHost = () => {
+            refreshCount += 1;
+        };
+
+        assert.equal(ui.saveSemanticPromptCustomization({
+            userPrompt: '충돌 검사를 더 엄격하게 수행하세요.',
+            assistantPrefill: '{',
+        }), true);
+        assert.equal(controller.signal.aborted, true);
+        assert.equal(ui.semanticInspectionState.status, 'idle');
+        assert.equal(ui.semanticInspectionState.controller, null);
+        assert.equal(clearCount, 1);
+        assert.equal(refreshCount, 1);
+    } finally {
+        globalThis.localStorage = previousStorage;
+        globalThis.toastr = previousToastr;
+    }
 });
 
 test('local data clearing purges semantic memory first even when storage is blocked', () => {

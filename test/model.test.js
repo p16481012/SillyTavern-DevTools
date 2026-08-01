@@ -516,6 +516,12 @@ test('snapshot finalization counts identical text only once', async () => {
             maxContext: 4096,
         },
         payload,
+        request: {
+            settings: {
+                openai_max_context: 8_192,
+                max_tokens: 1_024,
+            },
+        },
         promptType: 'chat-completion',
         generationType: 'normal',
         activatedLore: [],
@@ -531,6 +537,9 @@ test('snapshot finalization counts identical text only once', async () => {
         1,
     );
     assert.equal(result.stats.totalTokens, result.finalText.length);
+    assert.equal(result.stats.maxContext, 8_192);
+    assert.equal(result.stats.usableContext, 7_168);
+    assert.equal(result.stats.remainingContext, 7_168 - result.stats.totalTokens);
     assert.deepEqual(result.usage, {
         status: 'local-estimate',
         inputTokens: result.finalText.length,

@@ -1,4 +1,13 @@
-# v0.12.2 기술 구현 현황
+# v0.12.3 기술 구현 현황
+
+## v0.12.3 안정화 패치
+
+- 탭 이동과 데이터 변경의 분석 revision 수명주기를 분리해 AI 실행은 화면 전환에 유지하고 스냅샷·정책·설정 변경에서만 취소합니다.
+- AI 추가 프롬프트와 응답 프리필은 별도 bounded 로컬 설정으로 저장하며, 고정 JSON·근거 계약 뒤에만 추가되고 요청 digest·캐시·호출별 동의 미리보기에 포함됩니다.
+- 근거 검증은 AI offset이 틀린 경우에도 정확한 인용문이 선택 원문에 존재할 때만 bounded 검색으로 위치를 재정렬합니다. 원문에 없는 인용과 알 수 없는 ID·필드·스키마는 계속 전체 응답을 폐기합니다.
+- Chat Completion `openai_max_context`와 공개 Text Completion 별칭을 캡처하며 요청 설정에 명시된 한도가 있으면 스냅샷 통계에서 우선합니다.
+- 사용자 가격표 편집과 UI 재계산은 제거했습니다. 과거 키는 롤백 호환을 위해 자동 삭제하지 않지만 읽어 적용하지 않습니다.
+- 성장 그래프는 최근 구간의 상대 편차가 18% 미만일 때만 확대 눈금을 사용하고 그 이상에서는 0 기준으로 복귀합니다.
 
 ## v0.12.2 프롬프트·검사 흐름 정리
 
@@ -84,7 +93,7 @@
 - 새 스냅샷의 로컬 prompt tokenizer 입력 추정과 유효한 `MESSAGE_RECEIVED`의 단일 활성 generation 출력 추정
 - response usage는 같은 공개 ID로만 연결하고 ID가 없거나 모호하면 별도 미연결 상태로 남기며 response FIFO 금지
 - 공식 SillyTavern 공개 이벤트에는 provider response usage와 대응 provider request ID가 없다는 기본 capability matrix
-- provider 직접 보고 비용 또는 사용자의 provider·model·currency 정확 일치 가격 override만 허용하고 내장 가격표 없음
+- provider 직접 보고 비용과 과거 비용 출처를 스키마에서 구분하며, v0.12.3 이후에는 사용자 가격표를 읽어 새 비용을 계산하지 않음
 - lifecycle·usage 후속 쓰기의 snapshot ID·partition 불변 원자적 `updateSnapshot()` 경로
 - v7 이전에서 raw `capture/request.correlationId`와 요청 correlation key를 제거하고 `hadCorrelationId`만 보존
 
@@ -149,7 +158,7 @@
 - full snapshot만 허용하며 redacted·metadata v7 입력은 UI와 core 모두 준비 전에 거부
 - 개인정보 메타데이터 없이 v7로 지연 이전된 과거 기록도 원문 보존 상태를 추측하지 않고 AI 준비 전에 거부하며, AI 검사는 새 full snapshot 재캡처 필요
 - target에서 실제 active source·atom·relation closure를 계산하고 closure 밖 source는 label·제외 이유만 preview에 표시
-- closure에 필요한 source의 정확한 전체 content, 제외 목록, provider/model identity, 입력 토큰 추정, 응답 상한과 exact user override 비용 preview
+- closure에 필요한 source의 정확한 전체 content, 제외 목록, provider/model identity, 입력 토큰 추정, 응답 상한, 고정 지시·사용자 추가 지시·프리필 preview
 - 필수 source에 민감 토큰이 있으면 offset을 바꾸는 부분 redaction 대신 요청 전체를 거부
 - 미리보기마다 선택 해제되는 호출별 1회 동의, 취소 시 provider call 0회와 retry의 새 prepare/preview/consent
 - 공개 Connection Manager profile `sendRequest()` 또는 현재 연결 `getContext().generateRaw()` 중 하나만 사용하는 provider adapter와 준비·inspect 사이 identity 변경 fail-closed
@@ -178,7 +187,7 @@
 - 5,000개 가상 목록 window와 진단 비교의 ID 미노출·출력 상한
 - 캡처 모드별 UI 기능 차단, 설정 preview-first 순서와 origin quota/확장 추정치 구분
 - ledger의 동시 generation·ID 충돌·FIFO 경계·unlinked usage와 atomic snapshot update
-- usage·pricing 상한·정규형·정확 일치와 v1~v6→v7 개인정보 이전
+- usage·provider 보고 비용 정규형·과거 비용 출처 읽기 호환과 v1~v6→v7 개인정보 이전
 - AI 기본 OFF·V1~V4→V5 설정 이전, full-only와 secret-bearing required source의 fail-closed
 - target closure·정확한 preview·현재 identity 재확인, strict JSON/known-ID/evidence offset 검증과 memory-only cache
 - 동의 취소 no-send, retry 새 동의, logical timeout·abort와 늦은 결과 폐기
@@ -195,7 +204,7 @@
 - 보관 정책·privacy mode·저장 도구가 있는 설정/도구 패널의 모바일·데스크톱 배치
 - 저장 실패·임시 메모리·요약 재계산·테마 전환 fixture와 진단 가져오기 성공/거부 상태
 - mixed privacy fixture를 사용하는 archive·safe share·진단 비교 조작 경로
-- usage 상태·비용 출처·capability matrix, 가격 override 추가·삭제·재로드와 모바일 배치
+- usage 상태·provider 보고 비용 출처·capability matrix와 과거 비용 출처 읽기 호환, 모바일 배치
 - 실제 `SemanticInspector`·strict validator·memory cache에 결정적 fake adapter를 주입한 AI preview·동의·성공·오류·취소
 - `semanticCore=true`, validated result count와 provider/network call 0회 dataset으로 샌드박스 경계 확인
 - 헤더 새로고침·설정·닫기 세 버튼, 좌측 정렬 disclosure와 여러 SillyTavern 테마·430px에서 패널 control 폭·writing-mode 방어
@@ -211,7 +220,7 @@
 - 전체 backup을 별도 테스트 데이터로 merge·충돌 유지·replace했을 때 새로고침 뒤에도 결과가 유지되는지
 - 실제 provider/model별 구조 provenance, 선택 소스, assistant prefill과 캡처 lifecycle 정확성
 - 단일·동시 generation에서 `MESSAGE_RECEIVED` 출력 추정이 다른 스냅샷에 섞이지 않는지
-- 가격 override의 provider·model·currency 정확 일치, 불일치와 복수 통화 산정 불가 상태
+- provider가 직접 보고한 비용의 표시와 비용이 없는 스냅샷의 `계산 불가`, 과거 비용 출처의 읽기 호환
 - AI 설정의 기본 OFF, full snapshot 선택, 선택한 프로필 또는 현재 연결의 실제 provider/model preview와 매 호출 선택 해제 동의
 - 동의 취소 시 요청이 발생하지 않고 성공 결과가 정적 finding·review·policy를 바꾸지 않는지
 - 실제 provider별 JSON schema 지원·오류 code·응답 상한과 취소 뒤 provider 계산/청구의 실제 동작
@@ -257,7 +266,7 @@
 - AI 검사는 full snapshot의 선택된 closure 원문을 선택한 Connection Manager 프로필 또는 현재 provider에 전송하는 기능입니다. redacted·metadata에서 사용할 수 없고 일반 개인정보 익명화 도구가 아닙니다.
 - 선택 가능한 프로필 목록은 SillyTavern 공개 서비스가 제공하는 범위뿐이며 ST DevTools는 opaque ID 외 credential·URL·연결 비밀값을 저장하지 않습니다. 프로필 API가 없거나 선택한 ID가 요청 전에 사라지면 현재 연결을 사용합니다.
 - partial identity는 provider만 표시하고 model·비용을 추측하지 않습니다. identity unavailable 또는 준비 뒤 identity 변경은 fail-closed입니다. 선택한 프로필 요청이 시작된 뒤 실패해도 현재 연결로 재시도하지 않습니다.
-- 입력 토큰은 로컬 추정이고 응답 상한은 비용 상한과 같지 않습니다. 사용자 가격 override 비용도 실제 provider 청구를 보증하지 않습니다.
+- 입력 토큰은 로컬 추정이고 응답 상한은 비용 상한과 같지 않습니다. ST DevTools는 AI 검사 비용을 추정하지 않으며 provider의 실제 계산·청구를 보증하지 않습니다.
 - AbortSignal과 timeout은 호출자에게 논리적으로 취소를 제공하고 늦은 결과를 버리지만, 공개 `generateRaw()`가 이미 시작한 provider 계산·전송·과금을 물리적으로 중단한다고 보장하지 않습니다.
 - self-capture nonce gate는 호출별 ticket의 AI prompt·prompt type exact match와 그 semantic 호출의 exact duplicate만 제외합니다. 모호한 id-less 동시 요청은 fail-closed이므로 일부 capture가 미연결 상태로 남을 수 있지만 다른 pending 요청을 추측 소비하지 않습니다.
 - v0.11.1 gate는 최대 2MiB·8,192개 노드·4,096개 문자열을 검사합니다. 기존 256개 문자열 경계를 넘는 일반 장문 채팅은 정상 캡처하고, 새 상한도 넘어 exact nonce를 확인할 수 없으면 AI 원문 저장을 피하기 위해 prompt 단계에서 `skipped-safety`로 닫습니다.
@@ -270,12 +279,12 @@
 
 - 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
 - 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- v0.12.2의 다섯 기능 하단 탐색·모바일 앱 셸·프롬프트 필터·검사 모드·모바일 비교 표에 대한 실사용 피드백 수집과 UI/UX 보완
+- v0.12.3의 다섯 기능 하단 탐색·위치 이동·AI 연속성·모바일 앱 셸·성장 그래프에 대한 실사용 피드백 수집과 UI/UX 보완
 
-세부 기능은 v0.12.2 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.12.3 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.12.2의 다섯 기능 정보 구조와 실제 OpenAI·TextGen 요청 캡처·선저장·재읽기 검증을 사용자 체크리스트로 확인합니다.
+1. v0.12.3의 위치 이동·AI 검사 연속성·컨텍스트 한도·성장 그래프와 실제 OpenAI·TextGen 요청 캡처·선저장·재읽기를 사용자 체크리스트로 확인합니다.
 2. v0.13.0에서 AI 평가 corpus·품질 회귀·provider 호환성과 실사용 UI/UX를 보강합니다.
 3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

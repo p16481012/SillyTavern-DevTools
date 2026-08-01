@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CaptureController, getConfiguredPrompts } from '../src/capture.js';
+import { CaptureController, getConfiguredPrompts, getMaxContext } from '../src/capture.js';
 import { GenerationLedger } from '../src/generation-ledger.js';
 import { SnapshotStore } from '../src/storage.js';
 
@@ -19,6 +19,23 @@ class FakeEventSource {
         return (this.handlers.get(name) ?? []).map((handler) => handler(...data));
     }
 }
+
+test('context limit prefers the active SillyTavern connection setting', () => {
+    assert.equal(getMaxContext({
+        mainApi: 'openai',
+        maxContext: 4_096,
+        chatCompletionSettings: { openai_max_context: 32_768 },
+    }), 32_768);
+    assert.equal(getMaxContext({
+        mainApi: 'textgenerationwebui',
+        textCompletionSettings: { truncation_length: 16_384 },
+    }), 16_384);
+    assert.equal(getMaxContext({
+        mainApi: 'openai',
+        maxContext: 0,
+        chatCompletionSettings: { openai_max_context: 'invalid' },
+    }), null);
+});
 
 function createContext(eventSource) {
     return {

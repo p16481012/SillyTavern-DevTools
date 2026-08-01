@@ -227,6 +227,32 @@ function getCharacterFields(context, character) {
     };
 }
 
+function positiveFinite(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+export function getMaxContext(context = {}) {
+    const candidates = context.mainApi === 'openai'
+        ? [
+            context.chatCompletionSettings?.openai_max_context,
+            context.maxContext,
+            context.maxContextTokens,
+        ]
+        : [
+            context.maxContext,
+            context.textCompletionSettings?.max_context_length,
+            context.textCompletionSettings?.truncation_length,
+            context.textCompletionSettings?.num_ctx,
+            context.maxContextTokens,
+        ];
+    for (const candidate of candidates) {
+        const normalized = positiveFinite(candidate);
+        if (normalized != null) return normalized;
+    }
+    return null;
+}
+
 function selectedGroupContext(context) {
     const rawDirectGroup = context.group ?? context.selectedGroup ?? null;
     const directGroup = rawDirectGroup && typeof rawDirectGroup === 'object'
@@ -288,7 +314,7 @@ function snapshotContext(context) {
             group,
             groupId,
         }),
-        maxContext: context.maxContext,
+        maxContext: getMaxContext(context),
         maxOutput: getMaxOutput(context),
         character,
         characterFields: getCharacterFields(context, character),

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.12.2 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.12.3 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.12.2 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.12\.2'/);
+    assert.match(harness, /extensionVersion:\s*'0\.12\.3'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.12\.2'/);
+    assert.match(harness, /version:\s*'0\.12\.3'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -49,8 +49,8 @@ test('v0.12.2 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /verified:\s*storedSnapshot\?\.id === persistedSnapshot\.id/);
     assert.match(harness, /undefinedNormalized:/);
     assert.match(harness, /usage-local-estimate/);
-    assert.match(harness, /pricing-user-override/);
-    assert.match(harness, /pricing-overrides:v1/);
+    assert.doesNotMatch(harness, /pricing-user-override/);
+    assert.doesNotMatch(harness, /pricing-overrides:v1/);
     assert.match(harness, /new SemanticInspectorMemoryCache\(\)/);
     assert.match(harness, /class SandboxSemanticInspector extends SemanticInspector/);
     assert.match(harness, /super\.prepare\(options\)/);
@@ -60,6 +60,8 @@ test('v0.12.2 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /name:\s*'빠른 검사 프로필'/);
     assert.match(harness, /async generate\(\{\s*prompt,\s*signal\s*\}\)/);
     assert.match(harness, /semanticRequestFromPrompt\(prompt\)/);
+    assert.match(harness, /const marker = 'INPUT_JSON:\\n'/);
+    assert.match(harness, /dataset\.semanticErrorReason/);
     assert.match(harness, /document\.body\.dataset\.semanticCore/);
     assert.match(harness, /document\.body\.dataset\.semanticNetworkCallCount = '0'/);
     assert.match(harness, /semanticValidatedResultCount/);
@@ -70,6 +72,8 @@ test('v0.12.2 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /semantic-consent-preview/);
     assert.match(harness, /semantic-no-provider-call/);
     assert.match(harness, /setSemanticFixtureMode/);
+    assert.match(harness, /setFocusedGrowthFixture/);
+    assert.match(harness, /growthFixture = 'focused'/);
     assert.match(harness, /new CustomEvent\('capture-status'/);
     assert.match(
         harness,
@@ -77,12 +81,13 @@ test('v0.12.2 sandbox exposes every browser review fixture deterministically', a
     );
     assert.doesNotMatch(harness, /for \(const tab of \[[^\]]*'context'/u);
 
-    assert.match(html, /ST DevTools v0\.12\.2 UI Sandbox/);
+    assert.match(html, /ST DevTools v0\.12\.3 UI Sandbox/);
     assert.match(html, /실제 제공자·네트워크 호출은 없습니다/);
     assert.match(html, /sandbox-archive-import-valid/);
     assert.match(html, /sandbox-semantic-success/);
     assert.match(html, /sandbox-semantic-error/);
     assert.match(html, /sandbox-semantic-slow/);
+    assert.match(html, /sandbox-growth-focused/);
     assert.match(server, /requestPath === '\/' \? 'sandbox\/index\.html'/);
     assert.match(server, /127\.0\.0\.1:8766\/sandbox\/index\.html/);
 });

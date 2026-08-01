@@ -1,16 +1,16 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.12.2 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.12.3 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.12.2는 캡처한 요청을 읽기 전용으로 탐색·비교하고, 실제 SillyTavern 요청의 `undefined` 선택 필드를 정규화한 최소 스냅샷을 먼저 저장·재읽기 검증한 뒤 상세 소스 귀속을 같은 ID로 보강합니다. 명시적인 지시를 원자 구조로 보존한 뒤 실제 충돌 쌍과 클러스터를 검사하고, 전체·프리셋·캐릭터·채팅 정책 프로필, 재사용 그룹 동작, 이름 규칙과 수동 지정으로 비교군을 구조화합니다. UI는 `전송 프롬프트`·`기록`·`변경 비교`·`규칙 검사`·`검색` 다섯 기능을 고정 하단 내비게이션에서 한 번에 직접 선택하며 생성 설정과 프롬프트 payload는 전송 프롬프트 안에서 확인합니다.
+v0.12.3은 캡처한 요청을 읽기 전용으로 탐색·비교하고, 실제 SillyTavern 요청의 `undefined` 선택 필드를 정규화한 최소 스냅샷을 먼저 저장·재읽기 검증한 뒤 상세 소스 귀속을 같은 ID로 보강합니다. 명시적인 지시를 원자 구조로 보존한 뒤 실제 충돌 쌍과 클러스터를 검사하고, 전체·프리셋·캐릭터·채팅 정책 프로필, 재사용 그룹 동작, 이름 규칙과 수동 지정으로 비교군을 구조화합니다. UI는 `전송 프롬프트`·`기록`·`변경 비교`·`규칙 검사`·`검색` 다섯 기능을 고정 하단 내비게이션에서 한 번에 직접 선택하며 생성 설정과 프롬프트 payload는 전송 프롬프트 안에서 확인합니다.
 
 스키마 v7은 v6의 구조 provenance에 정규화된 usage·비용 출처와 correlation 개인정보 경계를 추가합니다. generation별 불투명 bounded ledger가 prompt·request·lore·lifecycle·usage를 격리하고, 같은 공개 ID가 양쪽에 있을 때만 정확히 연결합니다. 요청 호환용 FIFO는 response usage에 재사용하지 않습니다. 이전 레코드는 읽을 때 한 번만 v7으로 다시 저장하며, raw correlation ID를 제거하고 `hadCorrelationId`만 남긴 채 손상 레코드는 원본을 보존합니다.
 
 저장은 기간·채팅별 개수·전체 대략적 용량 정책과 무결성 진단을 지원합니다. 대형 목록은 가상 렌더링하고 검색·diff·규칙 분석은 Worker와 메모리 cache를 사용합니다. 새 캡처는 전체 원문·원문 제거본·메타데이터 모드를 선택할 수 있으며, 안전 공유·혼합 privacy archive 병합/교체·진단 보고서 비교가 추가되었습니다.
 
-선택적 AI Semantic Inspector는 사용자가 직접 고른 정적 finding·cluster의 로컬 근거만 매 호출 동의 후 선택한 SillyTavern Connection Manager 프로필 또는 현재 provider에 보냅니다. 설정에는 불투명 profile ID만 남기며 API 키·URL·연결 비밀값을 저장하지 않습니다. 엄격한 JSON·근거 offset 검증을 통과한 제안도 정적 결과와 분리하며 자동 수정·판정·정책 변경에는 사용하지 않습니다. 규칙 검사 화면의 AI 모드는 사용 여부·연결 프로필·응답 상한을 한곳에서 다루지만 켜는 것만으로 전송하지 않습니다. 따라서 v0.12.2도 자연어 의미 전체나 프롬프트 품질을 보증하지 않습니다.
+선택적 AI Semantic Inspector는 사용자가 직접 고른 정적 finding·cluster의 로컬 근거만 매 호출 동의 후 선택한 SillyTavern Connection Manager 프로필 또는 현재 provider에 보냅니다. 설정에는 불투명 profile ID만 남기며 API 키·URL·연결 비밀값을 저장하지 않습니다. v0.12.3의 추가 프롬프트와 프리필은 로컬 일반 텍스트로 저장되고 고정 안전 계약과 분리됩니다. 엄격한 JSON·근거 검증을 통과한 제안도 정적 결과와 분리하며 자동 수정·판정·정책 변경에는 사용하지 않습니다. 규칙 검사 화면의 AI 모드는 사용 여부·연결 프로필·응답 상한을 한곳에서 다루지만 켜는 것만으로 전송하지 않습니다. 따라서 v0.12.3도 자연어 의미 전체나 프롬프트 품질을 보증하지 않습니다.
 
 ## v0.8.7 — 안정성·보안 하드닝 · 완료
 
@@ -160,7 +160,7 @@ v0.10.0에 예정했던 저장 레코드 분리와 렌더 지연·계산 재사�
 - 공식 SillyTavern 공개 이벤트에는 provider response usage와 대응 provider request ID가 없음을 capability matrix에서 `unsupported`로 선언
 - 새 스냅샷의 로컬 입력 추정과 안전하게 하나의 generation을 고를 수 있는 `MESSAGE_RECEIVED` 출력 추정, provider 보고·미연결·산정 불가 상태 분리
 - OpenAI·Anthropic·Google·호환 usage parser와 별도 공개 integration용 exact-ID response adapter 제공. 기본 이벤트에는 미연결
-- provider 직접 보고 비용 또는 provider·model·currency 정확 일치 사용자 override만 계산하고 내장 가격표·통화 자동 선택 금지
+- 당시 provider 직접 보고 비용과 exact 사용자 override 경계를 분리했으며, v0.12.3에서 사용자 가격표 UI와 신규 재계산 경로를 제거
 - 스키마 v7에서 raw correlation ID 제거, `hadCorrelationId` 보존과 구버전 토큰의 입력 전용 로컬 추정 이전
 - lifecycle·usage 후속 반영의 snapshot identity 보존 원자적 update와 provider capability matrix UI
 
@@ -170,7 +170,7 @@ provider 서버가 후처리한 최종 HTTP packet과 내부 upstream은 공개 
 
 - 신규·기존 사용자 모두 기본 OFF이며 설정에서 직접 켜고 finding·cluster를 수동 선택해야만 준비
 - `full` 스냅샷만 허용하고 redacted·metadata는 UI와 코어 양쪽에서 fail-closed
-- 선택 대상의 source·atom·relation closure만 구성하고 정확한 전체 원문·제외 소스/이유·현재 provider/model·예상 입력·응답 상한·정확 일치 사용자 가격표 비용을 사전 표시
+- 선택 대상의 source·atom·relation closure만 구성하고 정확한 전체 원문·제외 소스/이유·현재 provider/model·예상 입력·응답 상한을 사전 표시
 - 미리보기마다 선택 해제되는 호출별 1회 동의, 취소 no-send와 retry의 새 준비·미리보기·동의
 - 공개 `getContext().generateRaw()` 전용 adapter와 준비·전송 사이 provider/model identity 변경 거부
 - strict JSON field/size/depth/ID 검증과 모든 evidence offset·quote의 실제 source substring 일치 확인
@@ -245,13 +245,21 @@ v0.12.0의 4개 그룹과 조건부 하위 탭은 실제 기능을 다시 숨기
 - 테마 즉시 저장, 일반 설정에서 AI 항목 제거, 규칙 검사 안의 로컬/AI 모드와 연결 설정 통합
 - 규칙 설정·비교 정책을 제목의 설정 dialog로 이동하고 기존 캡처·개인정보·호출별 AI 동의 경계 유지
 
+## v0.12.3 — 위치 이동·AI 연속성·표시 안정화 · 완료
+
+- 툴팁 중앙 정렬, 구조 위치의 28px 조준 아이콘, 최종 프롬프트 중복 이동 버튼 제거와 접힌 최종 근거 자동 펼침
+- AI 검사 중 탭 이동에도 요청·결과 유지, 사용자 추가 검사 프롬프트·응답 프리필의 bounded 로컬 저장과 호출별 동의 미리보기
+- 정확한 인용문이 원문에 있을 때만 근거 offset을 bounded 재정렬하고, 완성 JSON 응답에는 프리필을 중복 결합하지 않음
+- 사용자 가격표 UI·죽은 편집 코드·신규 비용 재계산을 제거하고 provider 보고 비용과 과거 스냅샷 읽기 호환만 유지
+- Chat Completion 컨텍스트 한도 탐지, provider/model 줄바꿈, 새로고침 완료 상태, 작은 토큰 편차 확대 그래프와 native 체크박스 격리
+
 ## v0.13.0 — AI 품질 평가·호환성·실사용 보강 · 예정
 
 - 익명화 평가 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 회귀 기준
 - 실제 provider별 연결 호환성·안정된 오류 분류·설명 품질 검증
-- v0.12.2 실사용에서 발견되는 성능·접근성·모바일 UI/UX 불편 보완
+- v0.12.3 실사용에서 발견되는 성능·접근성·모바일 UI/UX 불편 보완
 
-세부 범위는 v0.12.2 대규모 사용자 검토 결과로 확정합니다. 코치마크·워크스루는 평가 기준과 접근성 계약이 정리된 뒤 별도 버전으로 계획합니다.
+세부 범위는 v0.12.3 대규모 사용자 검토 결과로 확정합니다. 코치마크·워크스루는 평가 기준과 접근성 계약이 정리된 뒤 별도 버전으로 계획합니다.
 
 ## 장기 후보 · 버전 미정
 

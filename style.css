@@ -225,6 +225,10 @@
 }
 
 .st-devtools-window :where(input[type='checkbox'], input[type='radio']) {
+    position: static !important;
+    inset: auto !important;
+    translate: none !important;
+    transform: none !important;
     flex: 0 0 1.1rem !important;
     width: 1.1rem !important;
     min-width: 1.1rem !important;
@@ -237,14 +241,22 @@
     -webkit-appearance: auto !important;
     border-radius: 0 !important;
     background: transparent !important;
+    background-image: none !important;
     box-shadow: none !important;
     filter: none !important;
     accent-color: var(--st-devtools-primary-strong);
 }
 
-.st-devtools-window :where(input[type='checkbox'], input[type='radio'])::before {
+.st-devtools-window :where(input[type='checkbox'], input[type='radio'])::before,
+.st-devtools-window :where(input[type='checkbox'], input[type='radio'])::after {
+    position: static !important;
+    inset: auto !important;
     display: none !important;
     content: none !important;
+    background: none !important;
+    background-image: none !important;
+    translate: none !important;
+    transform: none !important;
 }
 
 .st-devtools-overlay .st-devtools-window
@@ -252,14 +264,19 @@
     appearance: auto !important;
     -webkit-appearance: auto !important;
     background: transparent !important;
+    background-image: none !important;
     box-shadow: none !important;
     filter: none !important;
 }
 
 .st-devtools-overlay .st-devtools-window
-:where(input[type='checkbox'], input[type='radio'])::before {
+:where(input[type='checkbox'], input[type='radio'])::before,
+.st-devtools-overlay .st-devtools-window
+:where(input[type='checkbox'], input[type='radio'])::after {
     display: none !important;
     content: none !important;
+    background: none !important;
+    background-image: none !important;
 }
 
 .st-devtools-window :where(button, input, select, textarea):disabled {
@@ -582,87 +599,6 @@
 .st-devtools-semantic-profile.is-disabled,
 .st-devtools-semantic-cap.is-disabled {
     color: var(--st-devtools-text-muted);
-}
-
-.st-devtools-pricing-editor {
-    min-width: 0;
-    border-top: 1px solid var(--st-devtools-border);
-}
-
-.st-devtools-pricing-editor > summary {
-    padding-top: 1rem;
-    cursor: pointer;
-}
-
-.st-devtools-pricing-content,
-.st-devtools-pricing-rows {
-    display: grid;
-    gap: 0.75rem;
-    min-width: 0;
-}
-
-.st-devtools-pricing-content > p {
-    margin: 0;
-}
-
-.st-devtools-pricing-row {
-    display: grid;
-    gap: 0.65rem;
-    min-width: 0;
-    padding: 0.75rem;
-    border: 1px solid var(--st-devtools-border);
-    border-radius: 7px;
-    background: var(--st-devtools-surface);
-}
-
-.st-devtools-pricing-row-heading {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.55rem;
-}
-
-.st-devtools-pricing-fields {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.6rem;
-    min-width: 0;
-}
-
-.st-devtools-pricing-field {
-    display: grid;
-    gap: 0.3rem;
-    min-width: 0;
-}
-
-.st-devtools-pricing-field > span {
-    opacity: 0.78;
-    font-size: 0.8rem;
-}
-
-.st-devtools-pricing-field > input {
-    box-sizing: border-box;
-    width: 100%;
-    min-width: 0;
-}
-
-.st-devtools-pricing-add {
-    justify-self: start;
-}
-
-.st-devtools-pricing-status {
-    min-width: 0;
-    margin: 0;
-    overflow-wrap: break-word;
-}
-
-.st-devtools-pricing-status:empty {
-    display: none;
-}
-
-.st-devtools-pricing-status.is-error {
-    color: var(--st-devtools-status-critical);
 }
 
 .st-devtools-settings-tools {
@@ -1072,11 +1008,15 @@
     position: static;
     display: inline-flex;
     flex: none;
+    align-self: center;
+    line-height: 0;
+    vertical-align: middle;
 }
 
 .st-devtools-window .st-devtools-help-trigger {
     display: inline-grid;
-    position: relative;
+    position: relative !important;
+    inset: auto !important;
     width: 1.5rem;
     min-width: 1.5rem;
     height: 1.5rem;
@@ -1090,9 +1030,15 @@
     cursor: help;
     font: inherit;
     font-size: 0;
+    line-height: 1;
+    translate: none !important;
+    transform: none !important;
+    vertical-align: middle;
 }
 
 .st-devtools-window .st-devtools-help-trigger::before {
+    position: static !important;
+    inset: auto !important;
     display: grid;
     width: 0.9rem;
     height: 0.9rem;
@@ -1105,6 +1051,8 @@
     font-size: 0.58rem;
     font-weight: 800;
     line-height: 1;
+    translate: none !important;
+    transform: none !important;
 }
 
 .st-devtools-window .st-devtools-help-trigger:hover,
@@ -1661,11 +1609,24 @@
 }
 
 .st-devtools-overview-model {
+    display: grid;
     min-width: 0;
     max-width: 55%;
     padding-top: 0.15rem;
+    gap: 0.18rem;
     overflow-wrap: break-word;
     text-align: right;
+}
+
+.st-devtools-overview-provider,
+.st-devtools-overview-model-name {
+    display: block;
+    min-width: 0;
+}
+
+.st-devtools-overview-model-name {
+    color: #ffffff;
+    font-weight: 700;
 }
 
 .st-devtools-overview-progress-group {
@@ -2133,10 +2094,26 @@
     background: var(--st-devtools-panel-bg);
 }
 
-.st-devtools-provenance-details .st-devtools-range-jump {
+.st-devtools-overlay .st-devtools-window button.st-devtools-range-jump {
+    display: inline-grid !important;
     margin-inline-start: auto !important;
-    padding: 0.4rem 0.65rem !important;
-    font-size: 0.78rem !important;
+    flex: 0 0 28px !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+    padding: 0 !important;
+    place-items: center !important;
+    border: 1px solid var(--st-devtools-border) !important;
+    border-radius: 0.55rem !important;
+    background: var(--st-devtools-surface-muted) !important;
+    color: var(--st-devtools-text) !important;
+    box-shadow: none !important;
+    font-size: 0.76rem !important;
+    line-height: 1 !important;
+    cursor: pointer;
 }
 
 .st-devtools-provenance-content > p {
@@ -2615,6 +2592,52 @@
     gap: 0.15rem;
     font-size: 0.8rem;
     text-align: right;
+}
+
+.st-devtools-growth-focused {
+    padding: 0.12rem 0.38rem;
+    border-radius: 999px;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary-strong);
+    font-size: 0.7rem;
+    font-weight: 800;
+}
+
+.st-devtools-semantic-prompt-settings-body {
+    display: grid;
+    gap: 0.85rem;
+    padding: 0.85rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-semantic-prompt-settings-body > label {
+    display: grid;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.st-devtools-semantic-prompt-settings textarea {
+    width: 100%;
+    min-width: 0;
+    resize: vertical;
+}
+
+.st-devtools-semantic-prompt-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.55rem;
+}
+
+.st-devtools-semantic-preview-prompts {
+    display: grid;
+    gap: 0.55rem;
+}
+
+.st-devtools-semantic-preview-prompts article {
+    display: grid;
+    gap: 0.35rem;
+    min-width: 0;
 }
 
 .st-devtools-growth svg {
@@ -4782,7 +4805,6 @@
         width: 100% !important;
     }
 
-    .st-devtools-pricing-row-heading,
     .st-devtools-usage-heading,
     .st-devtools-semantic-heading,
     .st-devtools-semantic-controls {
@@ -4801,7 +4823,6 @@
         width: 100%;
     }
 
-    .st-devtools-pricing-fields,
     .st-devtools-usage-token-grid,
     .st-devtools-usage-metadata,
     .st-devtools-usage-capability-list,
@@ -4817,7 +4838,6 @@
         width: 100% !important;
     }
 
-    .st-devtools-pricing-row,
     .st-devtools-usage-card,
     .st-devtools-semantic-inspector,
     .st-devtools-semantic-consent-panel {
@@ -4836,8 +4856,6 @@
         width: 100%;
     }
 
-    .st-devtools-pricing-add,
-    .st-devtools-pricing-remove,
     .st-devtools-semantic-controls > .menu_button,
     .st-devtools-semantic-state > .menu_button,
     .st-devtools-semantic-consent-actions > .menu_button {
@@ -4860,9 +4878,7 @@
     .st-devtools-overlay .st-devtools-window
     .st-devtools-semantic-consent-actions > .menu_button,
     .st-devtools-overlay .st-devtools-window
-    .st-devtools-semantic-enable-card > .menu_button,
-    .st-devtools-overlay .st-devtools-window .st-devtools-pricing-add,
-    .st-devtools-overlay .st-devtools-window .st-devtools-pricing-remove {
+    .st-devtools-semantic-enable-card > .menu_button {
         flex: 0 0 auto !important;
         width: 100% !important;
         min-width: 0 !important;

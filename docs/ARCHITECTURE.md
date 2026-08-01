@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.12.2의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.12.3의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -49,7 +49,7 @@ Prompt와 request의 상관관계는 양쪽에서 같은 공개 ID를 확인한 
 
 Usage 정규형은 `provider-reported`·`local-estimate`·`unlinked`·`unavailable`, 입력·출력·캐시 입력·합계 토큰, 근거 이벤트·연결 시각과 비용을 정확한 허용 키로만 보존합니다. 로컬 prompt tokenizer 값은 입력 추정치이고 `MESSAGE_RECEIVED`의 `message.extra.token_count`는 출력 추정치입니다. 하나의 활성 generation을 고를 수 없으면 출력값을 임의 session에 붙이지 않습니다. Provider 값은 로컬 값보다 우선할 수 있지만, 기본 공식 이벤트에는 그 값을 제공하는 source가 없습니다.
 
-비용은 provider 응답이 금액과 통화를 직접 보고했거나 사용자가 provider·model·currency별 백만 토큰 단가와 기준일을 저장한 경우에만 계산합니다. 사용자 override는 정확 일치만 허용하고 일부 단가만 있으면 `lower-bound`, 통화가 여러 개로 모호하거나 일치 항목이 없으면 `unavailable`입니다. 내장 가격 catalog는 없습니다.
+비용은 provider 응답이 금액과 통화를 직접 보고해 스냅샷에 저장된 경우에만 표시합니다. 새 로컬 비용 계산과 내장·사용자 가격표는 없습니다. 과거 스냅샷에 이미 저장된 `user-override`·`catalog-estimate`·`lower-bound` 출처는 스키마 읽기 호환을 위해 보존하지만 새로 만들거나 재계산하지 않습니다.
 
 ## 스냅샷 스키마
 
@@ -66,7 +66,7 @@ Usage 정규형은 `provider-reported`·`local-estimate`·`unlinked`·`unavailab
 - 멀티모달: 제공자, 입력 유형, 로컬 토큰 추정치, `estimate`·`lower-bound`·`upper-bound`·`unavailable`, 산정 방식
 - 로어북: 활성화된 항목 객체
 - 통계: 토큰, 컨텍스트 한도, 출력 예약량, 사용률, 남은 토큰
-- `usage`: 상태, 입력·출력·캐시·합계 토큰, 근거 이벤트·연결 시각, provider 보고 또는 사용자 override 비용 출처
+- `usage`: 상태, 입력·출력·캐시·합계 토큰, 근거 이벤트·연결 시각, provider 보고 비용과 과거 스냅샷 읽기 호환용 비용 출처
 - 개인정보: privacy schema, `full`·`redacted`·`metadata` 모드, 원문·채팅 ID·요청 ID 포함 여부와 제한된 요약
 
 스토리지를 읽을 때 스키마 v1~v4는 먼저 v5로, v5는 고정된 v6 단계로, v6은 v7로 지연 변환합니다. v6→v7은 구버전 `stats.totalTokens`가 유효할 때 입력 전용 `legacy-snapshot-token-count` 로컬 추정치로 옮기고 출력·캐시·provider 비용은 추측하지 않습니다. `capture.correlationId`·`request.correlationId`와 요청 root·알려진 metadata container의 correlation key 값을 제거하고 `hadCorrelationId` boolean만 보존합니다. 일반 도메인 `id`와 다른 객체 안의 동명 필드는 보존합니다. 변환은 기존 payload·최종 텍스트·snapshot ID를 변경하지 않는 새 객체를 만들며, 성공한 개별 레코드만 한 번 다시 저장합니다. 경량 인덱스의 `approximateBytes`와 이미 완료된 저장 요약은 변환 전후 바이트 차이만큼 함께 보정합니다. 정상 v7 레코드는 다시 직렬화하거나 쓰지 않습니다.
@@ -167,7 +167,7 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.12.2의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 AI 모드가 opt-in·연결 프로필·응답 상한을 함께 다루지만, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
+v0.12.3의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 AI 모드가 opt-in·연결 프로필·응답 상한을 함께 다루지만, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID와 사용자가 직접 입력한 bounded 추가 프롬프트·프리필만 저장하며 프로필 객체나 credential은 기록하지 않습니다. 추가 프롬프트·프리필은 일반 텍스트 저장임을 UI에서 경고합니다.
 
 처리 흐름은 다음과 같습니다.
 
@@ -176,9 +176,9 @@ v0.12.2의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
    Text Completion 프로필에는 consent에서 검토한 semantic prompt를 문자열로 그대로 전달하고 `includeInstruct: false`로 별도 instruct template 재구성을 막습니다. `includePreset: true`는 sampler·stop 설정에만 사용하며 prompt·model·응답 상한은 명시적 요청값을 유지합니다.
 3. `semantic-inspector.js`가 target을 실제 로컬 finding/cluster에 연결하고 source·atom·relation closure를 계산합니다. 활성 상태·실제 요청 포함·대안 제외·분석 capability·금지된 final/chat-history 유형을 검사하며, closure 밖 소스는 정확한 label과 제외 이유만 미리보기에 남깁니다.
 4. closure에 필요한 source는 일부를 조용히 생략하거나 자르지 않습니다. source별·선택 전체·요청 전체 상한을 넘거나 필수 source에서 민감 토큰을 발견하면 준비 전체를 `SEMANTIC_INVALID_INPUT`으로 실패시켜 quote offset을 바꾸는 부분 정제를 금지합니다.
-5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한과 정확히 일치한 사용자 가격 override 비용을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
+5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한, 고정 지시·추가 지시·프리필을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
 6. 전송 직전에 adapter identity를 다시 읽어 provider·model·현재 연결/프로필 경로·opaque profile ID 중 하나라도 준비 시점과 달라졌으면 실패로 닫습니다. 이 identity 전체가 요청 digest에 포함되므로 같은 provider/model을 쓰는 다른 프로필의 cache도 재사용하지 않습니다. 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출하며, 선택한 프로필의 `sendRequest()`가 시작된 뒤 실패하면 현재 연결 `generateRaw()`로 자동 재시도하지 않습니다.
-7. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. 모든 evidence의 `start`·`end`와 `quote`가 해당 source content의 정확한 slice여야 하며 하나라도 실패하면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
+7. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. evidence의 모델 제공 offset이 틀렸더라도 `quote`가 해당 source content에 정확히 존재할 때만 bounded 검색으로 위치를 재정렬합니다. 원문에 없는 quote나 다른 검증 실패가 하나라도 있으면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
 8. 통과한 결과는 `origin: ai`와 요청 digest를 가진 별도 `AI 제안`으로만 반환합니다. UI에는 정적 finding 카드와 다른 영역으로 렌더링하며 정적 finding, 판정·무시, 비교 정책, 원본 프롬프트를 갱신하는 컨트롤을 두지 않습니다.
 
 관련 모듈의 경계는 다음과 같습니다.

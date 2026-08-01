@@ -109,15 +109,7 @@ import {
     normalizeUiPreferences,
     readUiPreferencesFromStorage,
 } from './preferences.js';
-import {
-    MAX_PRICE_PER_MILLION,
-    MAX_PRICING_OVERRIDES,
-    PRICING_OVERRIDE_SCHEMA_VERSION,
-    calculateUsageCost,
-    normalizeModelId,
-    normalizePricingOverrides,
-    unavailableCost,
-} from './pricing-overrides.js';
+import { unavailableCost } from './pricing-overrides.js';
 import {
     getProviderCapabilities,
     normalizeProviderId,
@@ -127,6 +119,14 @@ import {
     normalizeUsageRecord,
 } from './provider-usage.js';
 import { normalizeSemanticConnectionProfileId } from './semantic-connection-profiles.js';
+import {
+    DEFAULT_SEMANTIC_PROMPT_SETTINGS,
+    MAX_SEMANTIC_PREFILL_LENGTH,
+    MAX_SEMANTIC_USER_PROMPT_LENGTH,
+    SEMANTIC_PROMPT_SETTINGS_KEY,
+    readSemanticPromptSettings,
+    saveSemanticPromptSettings,
+} from './semantic-prompt-settings.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -134,7 +134,7 @@ const LEGACY_COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-polic
 const COMPARISON_POLICY_SETTINGS_KEY = `${STORAGE_PREFIX}comparison-policy:v2`;
 const FINDING_REVIEW_SETTINGS_KEY = `${STORAGE_PREFIX}finding-reviews:v1`;
 const RULE_AUDIT_LOG_KEY = `${STORAGE_PREFIX}rule-audit:v1`;
-const PRICING_OVERRIDES_KEY = `${STORAGE_PREFIX}pricing-overrides:v1`;
+const LEGACY_PRICING_OVERRIDES_KEY = `${STORAGE_PREFIX}pricing-overrides:v1`;
 const LAST_TAB_KEY = `${STORAGE_PREFIX}last-tab`;
 const GEOMETRY_KEY = `${STORAGE_PREFIX}geometry`;
 const KNOWN_LOCAL_DATA_KEYS = [
@@ -143,7 +143,8 @@ const KNOWN_LOCAL_DATA_KEYS = [
     COMPARISON_POLICY_SETTINGS_KEY,
     FINDING_REVIEW_SETTINGS_KEY,
     RULE_AUDIT_LOG_KEY,
-    PRICING_OVERRIDES_KEY,
+    LEGACY_PRICING_OVERRIDES_KEY,
+    SEMANTIC_PROMPT_SETTINGS_KEY,
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
@@ -163,11 +164,6 @@ const STORAGE_TOOL_METADATA_LIMIT = 25;
 const VIRTUAL_LIST_THRESHOLD = 100;
 const VIRTUAL_LIST_OVERSCAN = 6;
 const VIRTUAL_LIST_FALLBACK_VIEWPORT = 640;
-const PRICING_RATE_FIELDS = Object.freeze([
-    'inputPerMillion',
-    'outputPerMillion',
-    'cachedInputPerMillion',
-]);
 const TABS = [
     ['explorer', 'tab.explorer', 'nav.short.explorer', 'fa-layer-group'],
     ['timeline', 'tab.timeline', 'nav.short.timeline', 'fa-clock-rotate-left'],
@@ -196,6 +192,31 @@ const CAPTURE_PIPELINE_ERROR_KEYS = new Map([
 ]);
 let tooltipSequence = 0;
 let fieldSequence = 0;
+
+export function growthChartDomain(values = []) {
+    const normalized = values
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value >= 0);
+    const rawMaximum = Math.max(1, ...normalized);
+    const rawMinimum = Math.min(...normalized, rawMaximum);
+    const spread = rawMaximum - rawMinimum;
+    const relativeSpread = spread / rawMaximum;
+    if (normalized.length < 2 || spread <= 0 || rawMinimum <= 0 || relativeSpread >= 0.18) {
+        return Object.freeze({
+            minimum: 0,
+            maximum: rawMaximum,
+            rawMaximum,
+            focused: false,
+        });
+    }
+    const padding = Math.max(1, spread * 0.2, rawMaximum * 0.005);
+    return Object.freeze({
+        minimum: Math.max(0, rawMinimum - padding),
+        maximum: rawMaximum + padding,
+        rawMaximum,
+        focused: true,
+    });
+}
 
 function capturePipelineErrorMessage(detail) {
     const code = typeof detail?.error?.code === 'string'
@@ -445,13 +466,6 @@ function formatBytes(value) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 ** 2)).toFixed(1)} MB`;
-}
-
-function emptyPricingOverrides() {
-    return normalizePricingOverrides({
-        version: PRICING_OVERRIDE_SCHEMA_VERSION,
-        entries: [],
-    });
 }
 
 function restoreStorageValue(storage, key, value) {
@@ -773,8 +787,7 @@ export class DevToolsWindow {
             rebuilding: false,
         };
         this.preferences = this.loadUiPreferences();
-        this.pricingOverrides = this.loadPricingOverrides();
-        this.pendingPricingOverrides = null;
+        this.semanticPromptSettings = readSemanticPromptSettings();
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
         this.captureStatus = {
@@ -837,7 +850,6 @@ export class DevToolsWindow {
         this.rulesSettingsOverlay = null;
         this.rulesSettingsPanel = null;
         this.rulesSettingsBody = null;
-        this.resetPricingEditor = null;
         this.semanticInspectionState = {
             snapshotId: null,
             analysisRevision: this.analysisRevision,
@@ -845,9 +857,13 @@ export class DevToolsWindow {
             status: 'idle',
             result: null,
             errorCode: null,
+            errorReason: null,
             sequence: 0,
             controller: null,
         };
+        this.refreshButton = null;
+        this.refreshIcon = null;
+        this.manualRefreshSequence = 0;
         this.semanticInspectorHost = null;
         this.semanticConsentOverlay = null;
         this.semanticConsentPanel = null;
@@ -903,6 +919,16 @@ export class DevToolsWindow {
             controller.abort();
         }
         this.analysisControllers.clear();
+    }
+
+    setSelectedSnapshotId(snapshotId) {
+        const nextId = typeof snapshotId === 'string' && snapshotId.length > 0
+            ? snapshotId
+            : null;
+        if (this.selectedId === nextId) return false;
+        this.invalidateAnalysisState();
+        this.selectedId = nextId;
+        return true;
     }
 
     disposeVirtualLists() {
@@ -1425,26 +1451,9 @@ export class DevToolsWindow {
         return preferences;
     }
 
-    loadPricingOverrides(storage = null) {
-        try {
-            const target = storage ?? globalThis.localStorage;
-            const raw = target?.getItem(PRICING_OVERRIDES_KEY);
-            if (raw == null) return emptyPricingOverrides();
-            return normalizePricingOverrides(JSON.parse(raw));
-        } catch {
-            return emptyPricingOverrides();
-        }
-    }
-
     saveUiPreferences(value) {
         const previousPreferences = this.preferences;
-        const previousPricingOverrides = this.pricingOverrides;
         const preferences = normalizeUiPreferences(value);
-        const pricingOverrides = normalizePricingOverrides(
-            this.pendingPricingOverrides
-            ?? this.pricingOverrides
-            ?? emptyPricingOverrides(),
-        );
         let storage = null;
         let backup = null;
         try {
@@ -1455,16 +1464,10 @@ export class DevToolsWindow {
                 [V3_UI_PREFERENCES_KEY, storage.getItem(V3_UI_PREFERENCES_KEY)],
                 [V2_UI_PREFERENCES_KEY, storage.getItem(V2_UI_PREFERENCES_KEY)],
                 [V1_UI_PREFERENCES_KEY, storage.getItem(V1_UI_PREFERENCES_KEY)],
-                [PRICING_OVERRIDES_KEY, storage.getItem(PRICING_OVERRIDES_KEY)],
             ]);
             const preferencesRaw = JSON.stringify(preferences);
-            const pricingOverridesRaw = JSON.stringify(pricingOverrides);
             storage.setItem(UI_PREFERENCES_KEY, preferencesRaw);
-            storage.setItem(PRICING_OVERRIDES_KEY, pricingOverridesRaw);
-            if (
-                storage.getItem(UI_PREFERENCES_KEY) !== preferencesRaw
-                || storage.getItem(PRICING_OVERRIDES_KEY) !== pricingOverridesRaw
-            ) {
+            if (storage.getItem(UI_PREFERENCES_KEY) !== preferencesRaw) {
                 throw new Error('settings-storage-write-not-observed');
             }
             storage.removeItem(V4_UI_PREFERENCES_KEY);
@@ -1480,7 +1483,6 @@ export class DevToolsWindow {
                 throw new Error('settings-storage-remove-not-observed');
             }
             this.preferences = preferences;
-            this.pricingOverrides = pricingOverrides;
             return this.preferences;
         } catch (cause) {
             if (storage && backup) {
@@ -1493,7 +1495,6 @@ export class DevToolsWindow {
                 }
             }
             this.preferences = previousPreferences;
-            this.pricingOverrides = previousPricingOverrides;
             const error = new Error('settings-storage-write-failed', { cause });
             error.code = 'settings-storage-write-failed';
             throw error;
@@ -1565,196 +1566,6 @@ export class DevToolsWindow {
                     : t('settings.semanticConnectionProfile.privacy');
         }
         return select.value || null;
-    }
-
-    buildPricingSettingsEditor() {
-        const details = element('details', {
-            className: 'st-devtools-pricing-editor st-devtools-settings-field',
-        });
-        const summary = element('summary');
-        summary.appendChild(explainedTitle(
-            t('settings.pricingTitle'),
-            t('settings.pricingDescription'),
-        ));
-        const content = element('div', {
-            className: 'st-devtools-pricing-content',
-        });
-        const rows = element('div', { className: 'st-devtools-pricing-rows' });
-        const status = element('p', {
-            className: 'st-devtools-pricing-status',
-        });
-        status.setAttribute('aria-live', 'polite');
-        const add = element('button', {
-            className: 'menu_button st-devtools-pricing-add',
-            text: t('settings.pricingAdd'),
-            type: 'button',
-        });
-
-        const updateRowLabels = () => {
-            [...rows.querySelectorAll('.st-devtools-pricing-row')]
-                .forEach((row, index) => {
-                    const title = row.querySelector('.st-devtools-pricing-row-title');
-                    if (title) {
-                        title.textContent = t('settings.pricingEntry', {
-                            number: index + 1,
-                        });
-                    }
-                });
-            add.disabled = rows.children.length >= MAX_PRICING_OVERRIDES;
-        };
-        const clearStatus = () => {
-            status.textContent = '';
-            status.classList.remove('is-error');
-            status.removeAttribute('role');
-        };
-        const setError = (message) => {
-            status.textContent = message;
-            status.classList.add('is-error');
-            status.setAttribute('role', 'alert');
-        };
-        const pricingField = (labelKey, field, value = '') => {
-            const wrapper = element('label', {
-                className: 'st-devtools-pricing-field',
-            });
-            const label = element('span', { text: t(labelKey) });
-            const input = element('input');
-            input.dataset.pricingField = field;
-            input.value = value == null ? '' : String(value);
-            if (PRICING_RATE_FIELDS.includes(field)) {
-                input.type = 'number';
-                input.min = '0';
-                input.max = String(MAX_PRICE_PER_MILLION);
-                input.step = 'any';
-                input.inputMode = 'decimal';
-            } else if (field === 'priceAsOf') {
-                input.type = 'date';
-            } else {
-                input.type = 'text';
-                input.maxLength = field === 'model'
-                    ? 128
-                    : field === 'currency'
-                        ? 3
-                        : 64;
-                input.autocomplete = 'off';
-                input.spellcheck = false;
-            }
-            wrapper.append(label, input);
-            return wrapper;
-        };
-        const appendRow = (entry = {}) => {
-            if (rows.children.length >= MAX_PRICING_OVERRIDES) {
-                setError(t('settings.pricingLimit', {
-                    count: MAX_PRICING_OVERRIDES,
-                }));
-                return null;
-            }
-            const row = element('section', {
-                className: 'st-devtools-pricing-row',
-            });
-            const heading = element('div', {
-                className: 'st-devtools-pricing-row-heading',
-            });
-            const rowTitle = element('strong', {
-                className: 'st-devtools-pricing-row-title',
-            });
-            const remove = element('button', {
-                className: 'menu_button st-devtools-pricing-remove',
-                text: t('settings.pricingDelete'),
-                type: 'button',
-            });
-            remove.addEventListener('click', () => {
-                row.remove();
-                clearStatus();
-                updateRowLabels();
-            });
-            heading.append(rowTitle, remove);
-            const fields = element('div', {
-                className: 'st-devtools-pricing-fields',
-            });
-            fields.append(
-                pricingField('settings.pricingProvider', 'provider', entry.provider),
-                pricingField('settings.pricingModel', 'model', entry.model),
-                pricingField('settings.pricingCurrency', 'currency', entry.currency),
-                pricingField(
-                    'settings.pricingInputRate',
-                    'inputPerMillion',
-                    entry.inputPerMillion,
-                ),
-                pricingField(
-                    'settings.pricingOutputRate',
-                    'outputPerMillion',
-                    entry.outputPerMillion,
-                ),
-                pricingField(
-                    'settings.pricingCacheRate',
-                    'cachedInputPerMillion',
-                    entry.cachedInputPerMillion,
-                ),
-                pricingField(
-                    'settings.pricingAsOf',
-                    'priceAsOf',
-                    entry.priceAsOf,
-                ),
-            );
-            row.append(heading, fields);
-            rows.appendChild(row);
-            updateRowLabels();
-            return row;
-        };
-        const resetEntries = (entries = []) => {
-            rows.replaceChildren();
-            clearStatus();
-            for (const entry of entries) appendRow(entry);
-            updateRowLabels();
-        };
-        const readEntries = () => {
-            const entries = [];
-            for (const row of rows.querySelectorAll('.st-devtools-pricing-row')) {
-                const values = Object.fromEntries(
-                    [...row.querySelectorAll('[data-pricing-field]')]
-                        .map((input) => [
-                            input.dataset.pricingField,
-                            String(input.value ?? '').trim(),
-                        ]),
-                );
-                if (Object.values(values).every((value) => value === '')) continue;
-                const entry = {
-                    provider: values.provider,
-                    model: values.model,
-                    currency: values.currency,
-                    priceAsOf: values.priceAsOf,
-                };
-                for (const field of PRICING_RATE_FIELDS) {
-                    if (values[field] !== '') entry[field] = Number(values[field]);
-                }
-                entries.push(entry);
-            }
-            return normalizePricingOverrides({
-                version: PRICING_OVERRIDE_SCHEMA_VERSION,
-                entries,
-            });
-        };
-
-        add.addEventListener('click', () => {
-            clearStatus();
-            const row = appendRow();
-            row?.querySelector('[data-pricing-field="provider"]')?.focus();
-        });
-        content.addEventListener('input', clearStatus);
-        content.append(
-            proseElement('p', t('settings.pricingHint')),
-            rows,
-            add,
-            status,
-        );
-        details.append(summary, content);
-        resetEntries(this.pricingOverrides.entries);
-        return {
-            details,
-            readEntries,
-            resetEntries,
-            setError,
-        };
     }
 
     buildSettingsPanel() {
@@ -1997,7 +1808,6 @@ export class DevToolsWindow {
         readInput.addEventListener('input', syncReadLimit);
         syncReadLimit();
 
-        const pricingEditor = this.buildPricingSettingsEditor();
         const actions = element('div', { className: 'st-devtools-settings-actions' });
         const reset = element('button', {
             className: 'menu_button',
@@ -2014,7 +1824,6 @@ export class DevToolsWindow {
                 DEFAULT_UI_PREFERENCES.retentionMaxBytes / MEBIBYTE,
             );
             captureSelect.value = DEFAULT_UI_PREFERENCES.captureMode;
-            pricingEditor.resetEntries([]);
             syncReadLimit();
         });
         const cancel = element('button', {
@@ -2064,7 +1873,7 @@ export class DevToolsWindow {
             ),
             settingsGroup(
                 'settings.group.advanced',
-                [ageField, byteField, pricingEditor.details],
+                [ageField, byteField],
                 { collapsible: true },
             ),
             actions,
@@ -2104,13 +1913,6 @@ export class DevToolsWindow {
                 || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
             );
             try {
-                let requestedPricingOverrides;
-                try {
-                    requestedPricingOverrides = pricingEditor.readEntries();
-                } catch (error) {
-                    pricingEditor.setError(t('settings.pricingInvalid'));
-                    throw error;
-                }
                 let pruneResult = {
                     snapshotCount: 0,
                     affectedChatCount: 0,
@@ -2203,9 +2005,7 @@ export class DevToolsWindow {
                     this.storageSummaryRebuildScheduled = false;
                     this.storageSummaryRefreshPromise = null;
                 }
-                this.pendingPricingOverrides = requestedPricingOverrides;
                 const preferences = this.saveUiPreferences(requested);
-                this.pendingPricingOverrides = null;
                 themeSelect.value = preferences.themeMode;
                 retentionInput.value = String(preferences.timelineRetentionLimit);
                 readInput.value = String(preferences.timelineReadLimit);
@@ -2214,7 +2014,6 @@ export class DevToolsWindow {
                     preferences.retentionMaxBytes / MEBIBYTE,
                 ));
                 captureSelect.value = preferences.captureMode;
-                pricingEditor.resetEntries(this.pricingOverrides.entries);
                 syncReadLimit();
                 this.syncOpaqueTheme();
                 this.closeSettings();
@@ -2240,11 +2039,7 @@ export class DevToolsWindow {
                 );
                 if (timelineSettingsChanged) this.scheduleSettingsRefresh();
             } catch (error) {
-                this.pendingPricingOverrides = null;
                 console.error('[ST DevTools] Failed to apply storage settings.', error);
-                if (error?.code === 'settings-storage-write-failed') {
-                    pricingEditor.setError(t('settings.pricingSaveFailed'));
-                }
                 globalThis.toastr?.error?.(
                     t('settings.saveFailed'),
                     'ST DevTools',
@@ -2266,10 +2061,6 @@ export class DevToolsWindow {
         this.retentionMaxAgeDaysInput = ageInput;
         this.retentionMaxBytesMiBInput = byteInput;
         this.captureModeInput = captureSelect;
-        this.resetPricingEditor = () => {
-            pricingEditor.details.open = false;
-            pricingEditor.resetEntries(this.pricingOverrides.entries);
-        };
         return overlay;
     }
 
@@ -2851,7 +2642,6 @@ export class DevToolsWindow {
             this.preferences.retentionMaxBytes / MEBIBYTE,
         ));
         this.captureModeInput.value = this.preferences.captureMode;
-        this.resetPricingEditor?.();
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
             region.inert = true;
@@ -3071,25 +2861,6 @@ export class DevToolsWindow {
         return overlay;
     }
 
-    semanticPreviewCostText(cost) {
-        if (
-            !cost
-            || cost.priceSource !== 'user-override'
-            || !['catalog-estimate', 'lower-bound'].includes(cost.status)
-            || !Number.isFinite(cost.amount)
-            || typeof cost.currency !== 'string'
-        ) {
-            return t('semantic.costUnavailable');
-        }
-        return t('semantic.costValue', {
-            amount: Number(cost.amount).toLocaleString('ko-KR', {
-                maximumFractionDigits: 12,
-            }),
-            currency: cost.currency,
-            status: t(`context.costStatus.${cost.status}`),
-        });
-    }
-
     renderSemanticConsentPreview(preview = {}) {
         const content = element('div', {
             className: 'st-devtools-semantic-preview',
@@ -3134,11 +2905,28 @@ export class DevToolsWindow {
                     .toLocaleString('ko-KR'),
             }),
         );
-        appendMetadata(
-            'semantic.previewCost',
-            this.semanticPreviewCostText(preview.cost),
-        );
         content.appendChild(metadata);
+
+        const promptPreview = element('section', {
+            className: 'st-devtools-semantic-preview-prompts',
+        });
+        promptPreview.appendChild(element('h3', {
+            text: t('semantic.previewInstructions'),
+        }));
+        const previewPrompt = (labelKey, value) => {
+            const card = element('article');
+            card.append(
+                element('strong', { text: t(labelKey) }),
+                element('pre', { text: value || t('common.none') }),
+            );
+            return card;
+        };
+        promptPreview.append(
+            previewPrompt('semantic.previewSystemPrompt', preview.systemPrompt),
+            previewPrompt('semantic.previewUserPrompt', preview.userPrompt),
+            previewPrompt('semantic.previewPrefill', preview.assistantPrefill),
+        );
+        content.appendChild(promptPreview);
 
         const included = Array.isArray(preview.includedSources)
             ? preview.includedSources
@@ -3307,6 +3095,12 @@ export class DevToolsWindow {
     }
 
     close() {
+        this.manualRefreshSequence += 1;
+        if (this.refreshButton) {
+            this.refreshButton.disabled = false;
+            this.refreshButton.removeAttribute('aria-busy');
+        }
+        this.refreshIcon?.classList.remove('fa-spin');
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.closeSemanticConsent(false, { restoreFocus: false });
@@ -3363,7 +3157,9 @@ export class DevToolsWindow {
         const refreshIcon = element('i', { className: 'fa-solid fa-rotate' });
         refreshIcon.setAttribute('aria-hidden', 'true');
         refresh.appendChild(refreshIcon);
-        refresh.addEventListener('click', () => this.refresh());
+        this.refreshButton = refresh;
+        this.refreshIcon = refreshIcon;
+        refresh.addEventListener('click', () => void this.runManualRefresh());
         const close = element('button', { className: 'menu_button st-devtools-icon-button', title: t('action.close'), type: 'button' });
         close.setAttribute('aria-label', t('action.close'));
         close.appendChild(closeIcon());
@@ -3780,6 +3576,62 @@ export class DevToolsWindow {
         this.render();
     }
 
+    async runManualRefresh() {
+        if (this.refreshButton?.disabled) return false;
+        const sequence = ++this.manualRefreshSequence;
+        if (this.refreshButton) {
+            this.refreshButton.disabled = true;
+            this.refreshButton.setAttribute('aria-busy', 'true');
+            this.refreshButton.title = t('action.refreshing');
+        }
+        this.refreshIcon?.classList.add('fa-spin');
+        try {
+            const refreshed = await this.refresh();
+            if (sequence === this.manualRefreshSequence) {
+                globalThis.toastr?.[refreshed ? 'success' : 'error']?.(
+                    t(refreshed ? 'action.refreshed' : 'action.refreshFailed'),
+                    'ST DevTools',
+                );
+                const feedbackKey = refreshed
+                    ? 'action.refreshed'
+                    : 'action.refreshFailed';
+                if (this.refreshButton) {
+                    this.refreshButton.disabled = true;
+                    this.refreshButton.setAttribute('aria-busy', 'false');
+                    this.refreshButton.setAttribute('aria-label', t(feedbackKey));
+                    this.refreshButton.title = t(feedbackKey);
+                }
+                if (this.refreshIcon) {
+                    this.refreshIcon.classList.remove('fa-rotate', 'fa-spin');
+                    this.refreshIcon.classList.add(
+                        refreshed ? 'fa-check' : 'fa-triangle-exclamation',
+                    );
+                }
+                // Keep a visible completion state even when local storage reads
+                // finish too quickly for the rotating icon to be perceived.
+                await new Promise((resolve) => setTimeout(resolve, 2_000));
+            }
+            return refreshed;
+        } finally {
+            if (sequence === this.manualRefreshSequence) {
+                if (this.refreshButton) {
+                    this.refreshButton.disabled = false;
+                    this.refreshButton.removeAttribute('aria-busy');
+                    this.refreshButton.setAttribute('aria-label', t('action.refresh'));
+                    this.refreshButton.title = t('action.refresh');
+                }
+                if (this.refreshIcon) {
+                    this.refreshIcon.classList.remove(
+                        'fa-spin',
+                        'fa-check',
+                        'fa-triangle-exclamation',
+                    );
+                    this.refreshIcon.classList.add('fa-rotate');
+                }
+            }
+        }
+    }
+
     async refresh({
         throwOnError = false,
         chatId = this.currentChatId(),
@@ -3790,6 +3642,7 @@ export class DevToolsWindow {
             if (requestId !== this.refreshRequestId || chatId !== this.currentChatId()) {
                 return false;
             }
+            this.invalidateAnalysisState();
             this.timeline = page.snapshots;
             this.timelineTotalCount = page.totalCount;
             this.timelineCorruptCount = page.corruptCount;
@@ -4034,6 +3887,7 @@ export class DevToolsWindow {
             audit: false,
         };
         this.preferences = normalizeUiPreferences(DEFAULT_UI_PREFERENCES);
+        this.semanticPromptSettings = { ...DEFAULT_SEMANTIC_PROMPT_SETTINGS };
         this.ruleViewMode = 'local';
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         if (this.themeModeInput) {
@@ -4379,7 +4233,6 @@ export class DevToolsWindow {
 
     render() {
         if (!this.content) return;
-        this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.syncOpaqueTheme();
         if (this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden) {
@@ -4587,7 +4440,7 @@ export class DevToolsWindow {
             select.appendChild(option);
         }
         select.addEventListener('change', () => {
-            this.selectedId = select.value;
+            this.setSelectedSnapshotId(select.value);
             this.render();
         });
         wrapper.appendChild(select);
@@ -4629,16 +4482,21 @@ export class DevToolsWindow {
                     : provenanceAvailabilityLabel(availability),
             }),
         );
-        if (source.ranges?.length) {
+        if (source.type !== 'final' && source.ranges?.length) {
             const jump = element('button', {
-                className: 'menu_button st-devtools-primary-button st-devtools-range-jump',
-                text: t('action.jumpToFinal'),
+                className: 'st-devtools-range-jump',
+                title: t('action.jumpToFinal'),
                 type: 'button',
             });
             jump.setAttribute(
                 'aria-label',
                 `${sourceDisplayLabel(source)}: ${t('action.jumpToFinal')}`,
             );
+            const jumpIcon = element('i', {
+                className: 'fa-solid fa-crosshairs',
+            });
+            jumpIcon.setAttribute('aria-hidden', 'true');
+            jump.appendChild(jumpIcon);
             jump.addEventListener('click', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -4763,13 +4621,25 @@ export class DevToolsWindow {
                 text: t('stat.promptTokens'),
             }),
         );
+        const providerName = snapshotProviderDisplay(snapshot);
+        const modelName = snapshot.model ?? t('common.unknown');
         const model = element('span', {
             className: 'st-devtools-overview-model',
-            text: t('explorer.overviewModel', {
-                provider: snapshotProviderDisplay(snapshot),
-                model: snapshot.model ?? t('common.unknown'),
-            }),
         });
+        model.setAttribute('aria-label', t('explorer.overviewModel', {
+            provider: providerName,
+            model: modelName,
+        }));
+        model.append(
+            element('span', {
+                className: 'st-devtools-overview-provider',
+                text: providerName,
+            }),
+            element('span', {
+                className: 'st-devtools-overview-model-name',
+                text: modelName,
+            }),
+        );
         headline.append(summary, model);
 
         const usage = Number.isFinite(snapshot.stats?.contextUsage)
@@ -4803,6 +4673,13 @@ export class DevToolsWindow {
         progressValue.style.width = `${usage == null ? 0 : usage * 100}%`;
         progress.appendChild(progressValue);
         progressGroup.append(progressLabels, progress);
+        if (usage == null && snapshot.stats?.maxContext == null) {
+            progressGroup.appendChild(proseElement(
+                'small',
+                t('explorer.contextLimitUnavailable'),
+                { className: 'st-devtools-context-limit-note' },
+            ));
+        }
 
         const remaining = element('div', {
             className: 'st-devtools-overview-remaining',
@@ -5274,7 +5151,7 @@ export class DevToolsWindow {
     }
 
     openExplorerForFinding(snapshot, finding, target) {
-        this.selectedId = snapshot.id;
+        this.setSelectedSnapshotId(snapshot.id);
         this.activeTab = 'explorer';
         localStorage.setItem(LAST_TAB_KEY, this.activeTab);
         this.render();
@@ -5371,8 +5248,12 @@ export class DevToolsWindow {
     focusRuleEvidence(finalRanges, sourceIds = []) {
         this.clearRuleFocus();
         this.highlightSourceMapping(sourceIds);
-        const finalCard = [...this.window.querySelectorAll('.st-devtools-source')]
-            .find((node) => node.dataset.sourceType === 'final');
+        const finalSource = this.selectedSnapshot()?.sources?.find(
+            (source) => source.type === 'final',
+        );
+        const finalCard = finalSource
+            ? this.ensureSourceCardMounted(finalSource.id)
+            : null;
         if (finalCard) {
             finalCard.closest('.st-devtools-source-group')?.setAttribute('open', '');
             finalCard.open = true;
@@ -5519,7 +5400,7 @@ export class DevToolsWindow {
             }
             button.append(heading, metadata, loreMetadata, changes);
             button.addEventListener('click', () => {
-                this.selectedId = snapshot.id;
+                this.setSelectedSnapshotId(snapshot.id);
                 this.selectTab('explorer');
             });
 
@@ -5991,7 +5872,7 @@ export class DevToolsWindow {
                 this.timeline = [];
                 this.timelineTotalCount = 0;
                 this.timelineCorruptCount = 0;
-                this.selectedId = null;
+                this.setSelectedSnapshotId(null);
                 this.selectedTimelineIds.clear();
             }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== 'clear-timeline');
@@ -6084,7 +5965,7 @@ export class DevToolsWindow {
                     [...this.selectedTimelineIds].filter((id) => !idSet.has(id)),
                 );
                 if (this.selectedId && idSet.has(this.selectedId)) {
-                    this.selectedId = this.timeline.at(-1)?.id ?? null;
+                    this.setSelectedSnapshotId(this.timeline.at(-1)?.id ?? null);
                 }
             }
             this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
@@ -6116,7 +5997,9 @@ export class DevToolsWindow {
         const values = visibleAnalyses.map(
             ({ snapshot }) => Number(snapshot.stats?.totalTokens) || 0,
         );
-        const maximum = Math.max(1, ...values);
+        const domain = growthChartDomain(values);
+        const maximum = domain.rawMaximum;
+        const domainSpan = Math.max(1, domain.maximum - domain.minimum);
         const width = 600;
         const height = 150;
         const paddingX = 26;
@@ -6127,7 +6010,8 @@ export class DevToolsWindow {
             x: values.length === 1
                 ? width / 2
                 : paddingX + (index * (width - (paddingX * 2))) / (values.length - 1),
-            y: paddingTop + chartHeight - ((value / maximum) * chartHeight),
+            y: paddingTop + chartHeight
+                - (((value - domain.minimum) / domainSpan) * chartHeight),
         });
         const points = values.map(pointFor);
         const chartDescription = t('timeline.growthDescription', {
@@ -6154,6 +6038,13 @@ export class DevToolsWindow {
                 text: t('timeline.maximumTokens', { count: maximum }),
             }),
         );
+        if (domain.focused) {
+            captionMeta.appendChild(element('span', {
+                className: 'st-devtools-growth-focused',
+                text: t('timeline.growthFocusedScale'),
+                title: t('timeline.growthFocusedScaleDescription'),
+            }));
+        }
         caption.append(
             captionText,
             captionMeta,
@@ -6216,7 +6107,7 @@ export class DevToolsWindow {
         openSelected.addEventListener('click', () => {
             const snapshot = visibleAnalyses[pinnedIndex]?.snapshot;
             if (!snapshot) return;
-            this.selectedId = snapshot.id;
+            this.setSelectedSnapshotId(snapshot.id);
             this.selectTab('explorer');
         });
         points.forEach(({ x, y }, index) => {
@@ -6810,34 +6701,7 @@ export class DevToolsWindow {
             });
         }
 
-        let cost = usage.cost ?? unavailableCost();
-        if (cost.status !== 'provider-reported') {
-            const provider = normalizeProviderId(snapshotProvider(snapshot));
-            const model = normalizeModelId(snapshot?.model);
-            const matchingEntries = provider && model
-                ? this.pricingOverrides.entries.filter((entry) => (
-                    entry.provider === provider
-                    && entry.model === model
-                ))
-                : [];
-            const currencies = new Set(
-                matchingEntries.map((entry) => entry.currency),
-            );
-            if (currencies.size === 1) {
-                try {
-                    cost = calculateUsageCost(usage, {
-                        overrides: this.pricingOverrides,
-                        provider,
-                        model,
-                        currency: [...currencies][0],
-                    });
-                } catch {
-                    cost = unavailableCost();
-                }
-            } else {
-                cost = unavailableCost();
-            }
-        }
+        const cost = usage.cost ?? unavailableCost();
         return { usage, cost };
     }
 
@@ -9501,6 +9365,7 @@ export class DevToolsWindow {
             status: 'idle',
             result: null,
             errorCode: null,
+            errorReason: null,
             sequence: (previous?.sequence ?? 0) + 1,
             controller: null,
         };
@@ -9516,6 +9381,7 @@ export class DevToolsWindow {
         state.status = 'idle';
         state.result = null;
         state.errorCode = null;
+        state.errorReason = null;
         this.closeSemanticConsent(false);
     }
 
@@ -9581,6 +9447,27 @@ export class DevToolsWindow {
         return this.setSemanticInspectionMode(true);
     }
 
+    saveSemanticPromptCustomization(value) {
+        try {
+            this.semanticPromptSettings = saveSemanticPromptSettings(value);
+            this.invalidateSemanticInspectionOutcome();
+            this.clearSemanticInspectorCache();
+            this.refreshSemanticInspectorHost();
+            globalThis.toastr?.success?.(
+                t('semantic.promptSettingsSaved'),
+                'ST DevTools',
+            );
+            return true;
+        } catch (error) {
+            console.error('[ST DevTools] Failed to save semantic prompt settings.', error);
+            globalThis.toastr?.error?.(
+                t('semantic.promptSettingsSaveFailed'),
+                'ST DevTools',
+            );
+            return false;
+        }
+    }
+
     renderSemanticInspectorSettings() {
         const section = element('section', {
             className: 'st-devtools-semantic-mode-settings',
@@ -9639,9 +9526,88 @@ export class DevToolsWindow {
                 max: MAX_SEMANTIC_RESPONSE_TOKEN_CAP,
             })),
         );
+
+        const promptDetails = element('details', {
+            className: 'st-devtools-semantic-prompt-settings st-devtools-disclosure',
+        });
+        const promptSummary = element('summary');
+        promptSummary.appendChild(explainedTitle(
+            t('semantic.promptSettingsTitle'),
+            t('semantic.promptSettingsDescription'),
+        ));
+        const promptBody = element('div', {
+            className: 'st-devtools-semantic-prompt-settings-body',
+        });
+        const userPromptField = element('label');
+        userPromptField.appendChild(element('strong', {
+            text: t('semantic.userPromptLabel'),
+        }));
+        const userPrompt = element('textarea');
+        userPrompt.rows = 6;
+        userPrompt.maxLength = MAX_SEMANTIC_USER_PROMPT_LENGTH;
+        userPrompt.value = this.semanticPromptSettings.userPrompt;
+        userPrompt.placeholder = t('semantic.userPromptPlaceholder');
+        userPromptField.append(
+            userPrompt,
+            proseElement('small', t('semantic.userPromptHint', {
+                count: MAX_SEMANTIC_USER_PROMPT_LENGTH,
+            })),
+        );
+        const prefillField = element('label');
+        prefillField.appendChild(element('strong', {
+            text: t('semantic.prefillLabel'),
+        }));
+        const prefill = element('textarea');
+        prefill.rows = 3;
+        prefill.maxLength = MAX_SEMANTIC_PREFILL_LENGTH;
+        prefill.value = this.semanticPromptSettings.assistantPrefill;
+        prefill.placeholder = t('semantic.prefillPlaceholder');
+        prefillField.append(
+            prefill,
+            proseElement('small', t('semantic.prefillHint', {
+                count: MAX_SEMANTIC_PREFILL_LENGTH,
+            })),
+        );
+        const promptActions = element('div', {
+            className: 'st-devtools-semantic-prompt-actions',
+        });
+        const resetPrompt = element('button', {
+            className: 'menu_button',
+            text: t('action.resetSettings'),
+            type: 'button',
+        });
+        resetPrompt.addEventListener('click', () => {
+            userPrompt.value = DEFAULT_SEMANTIC_PROMPT_SETTINGS.userPrompt;
+            prefill.value = DEFAULT_SEMANTIC_PROMPT_SETTINGS.assistantPrefill;
+        });
+        const savePrompt = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: t('semantic.savePromptSettings'),
+            type: 'button',
+        });
+        savePrompt.addEventListener('click', () => {
+            if (this.saveSemanticPromptCustomization({
+                userPrompt: userPrompt.value,
+                assistantPrefill: prefill.value,
+            })) {
+                userPrompt.value = this.semanticPromptSettings.userPrompt;
+                prefill.value = this.semanticPromptSettings.assistantPrefill;
+            }
+        });
+        promptActions.append(resetPrompt, savePrompt);
+        promptBody.append(
+            userPromptField,
+            prefillField,
+            proseElement('small', t('semantic.promptStorageWarning'), {
+                className: 'st-devtools-settings-privacy-note',
+            }),
+            promptActions,
+        );
+        promptDetails.append(promptSummary, promptBody);
         section.append(
             profileField,
             capField,
+            promptDetails,
             proseElement('small', t('settings.semanticPrivacyWarning'), {
                 className: 'st-devtools-settings-privacy-note',
             }),
@@ -9720,6 +9686,7 @@ export class DevToolsWindow {
         state.status = 'cancelled';
         state.result = null;
         state.errorCode = null;
+        state.errorReason = null;
         this.closeSemanticConsent(false);
         this.refreshSemanticInspectorHost();
     }
@@ -9741,6 +9708,7 @@ export class DevToolsWindow {
         state.status = 'preparing';
         state.result = null;
         state.errorCode = null;
+        state.errorReason = null;
         state.controller = null;
         state.analysisRevision = this.analysisRevision;
         const analysisRevision = state.analysisRevision;
@@ -9753,7 +9721,8 @@ export class DevToolsWindow {
                 provider: snapshotProvider(snapshot),
                 model: snapshot?.model ?? null,
                 responseTokenCap: this.preferences.semanticResponseTokenCap,
-                pricingOverrides: this.pricingOverrides,
+                userPrompt: this.semanticPromptSettings.userPrompt,
+                assistantPrefill: this.semanticPromptSettings.assistantPrefill,
             });
             if (
                 sequence !== state.sequence
@@ -9798,6 +9767,7 @@ export class DevToolsWindow {
             state.status = 'complete';
             state.result = result;
             state.errorCode = null;
+            state.errorReason = null;
             this.refreshSemanticInspectorHost();
             return result;
         } catch (error) {
@@ -9810,11 +9780,15 @@ export class DevToolsWindow {
             ) {
                 state.status = 'cancelled';
                 state.errorCode = null;
+                state.errorReason = null;
             } else {
                 state.status = 'error';
                 state.errorCode = /^[A-Z0-9_]{1,64}$/u.test(errorCode)
                     ? errorCode
                     : 'SEMANTIC_PROVIDER_ERROR';
+                state.errorReason = /^[a-z0-9-]{1,80}$/u.test(String(error?.reason ?? ''))
+                    ? String(error.reason)
+                    : null;
             }
             state.result = null;
             this.refreshSemanticInspectorHost();
@@ -10186,6 +10160,16 @@ export class DevToolsWindow {
                     className: 'is-error',
                 });
                 error.setAttribute('role', 'alert');
+                const errorReason = state.errorReason
+                    ? proseElement('small', translatedValue(
+                        `semantic.errorReason.${state.errorReason}`,
+                        t('semantic.errorReason.technical', {
+                            reason: state.errorReason,
+                        }),
+                    ), {
+                        className: 'st-devtools-semantic-error-reason',
+                    })
+                    : null;
                 const retry = element('button', {
                     className: 'menu_button',
                     text: t('semantic.retry'),
@@ -10194,7 +10178,9 @@ export class DevToolsWindow {
                 retry.addEventListener('click', () => {
                     void this.startSemanticInspection(snapshot, analysis);
                 });
-                dynamic.append(error, retry);
+                dynamic.append(error);
+                if (errorReason) dynamic.appendChild(errorReason);
+                dynamic.appendChild(retry);
             } else if (state.status === 'complete') {
                 dynamic.appendChild(
                     this.renderSemanticSuggestions(state.result),

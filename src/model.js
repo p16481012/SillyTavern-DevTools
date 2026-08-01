@@ -1507,13 +1507,31 @@ export async function finalizeSnapshot({
         source.tokenCount = tokenCounts[index];
     });
     const totalTokens = await count(finalText);
-    const maxContext = Number(contextState.maxContext) || null;
+    const requestMaxContext = normalizedRequest.settings?.openai_max_context
+        ?? normalizedRequest.settings?.max_context_length
+        ?? normalizedRequest.settings?.truncation_length
+        ?? normalizedRequest.settings?.num_ctx
+        ?? normalizedRequest.settings?.context_length
+        ?? normalizedRequest.settings?.max_context_tokens;
+    const normalizedRequestMaxContext = Number(requestMaxContext);
+    const normalizedStateMaxContext = Number(contextState.maxContext);
+    const maxContext = Number.isFinite(normalizedRequestMaxContext)
+        && normalizedRequestMaxContext > 0
+        ? normalizedRequestMaxContext
+        : Number.isFinite(normalizedStateMaxContext) && normalizedStateMaxContext > 0
+            ? normalizedStateMaxContext
+            : null;
     const requestMaxOutput = normalizedRequest.settings?.max_tokens
         ?? normalizedRequest.settings?.max_completion_tokens
         ?? normalizedRequest.settings?.max_new_tokens
         ?? normalizedRequest.settings?.max_length;
-    const maxOutput = Number(requestMaxOutput ?? contextState.maxOutput) || null;
-    const usableContext = maxContext && maxOutput ? Math.max(0, maxContext - maxOutput) : maxContext;
+    const normalizedMaxOutput = Number(requestMaxOutput ?? contextState.maxOutput);
+    const maxOutput = Number.isFinite(normalizedMaxOutput) && normalizedMaxOutput > 0
+        ? normalizedMaxOutput
+        : null;
+    const usableContext = maxContext != null && maxOutput != null
+        ? Math.max(0, maxContext - maxOutput)
+        : maxContext;
     const multimodalEstimates = sources
         .filter((source) => source.type === 'multimodal')
         .map((source) => source.metadata?.tokenEstimate)
@@ -1566,8 +1584,12 @@ export async function finalizeSnapshot({
             maxContext,
             maxOutput,
             usableContext,
-            contextUsage: usableContext ? totalTokens / usableContext : null,
-            remainingContext: usableContext ? Math.max(0, usableContext - totalTokens) : null,
+            contextUsage: usableContext != null && usableContext > 0
+                ? totalTokens / usableContext
+                : null,
+            remainingContext: usableContext != null
+                ? Math.max(0, usableContext - totalTokens)
+                : null,
             structured: {
                 sourceAnalysis: sourceMode === 'minimal' ? 'deferred' : 'complete',
                 toolSchemas: sources.filter((source) => source.type === 'tool_schema').length,

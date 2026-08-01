@@ -62,7 +62,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.12.2',
+        extensionVersion: '0.12.3',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1263,7 +1263,7 @@ function semanticFixtureDelay(milliseconds, signal) {
     });
 }
 function semanticRequestFromPrompt(prompt) {
-    const marker = '\nINPUT_JSON:\n';
+    const marker = 'INPUT_JSON:\n';
     const markerIndex = prompt.indexOf(marker);
     if (markerIndex < 0) {
         throw Object.assign(new Error('sandbox semantic prompt marker missing'), {
@@ -1366,6 +1366,8 @@ class SandboxSemanticInspector extends SemanticInspector {
             const result = await super.inspect(prepared, { signal });
             semanticFixtureStats.validatedResultCount += 1;
             document.body.dataset.semanticState = 'complete';
+            delete document.body.dataset.semanticErrorCode;
+            delete document.body.dataset.semanticErrorReason;
             document.body.dataset.semanticValidatedResultCount = String(
                 semanticFixtureStats.validatedResultCount,
             );
@@ -1374,6 +1376,8 @@ class SandboxSemanticInspector extends SemanticInspector {
             document.body.dataset.semanticState = error?.code === 'SEMANTIC_ABORTED'
                 ? 'cancelled'
                 : 'error';
+            document.body.dataset.semanticErrorCode = String(error?.code ?? '');
+            document.body.dataset.semanticErrorReason = String(error?.reason ?? '');
             throw error;
         }
     }
@@ -1382,21 +1386,6 @@ const sandboxSemanticInspector = new SandboxSemanticInspector({
     adapter: sandboxSemanticAdapter,
     cache: sandboxSemanticCache,
 });
-const sandboxPricingKey = 'st-devtools:pricing-overrides:v1';
-if (localStorage.getItem(sandboxPricingKey) == null) {
-    localStorage.setItem(sandboxPricingKey, JSON.stringify({
-        version: 1,
-        entries: [{
-            provider: 'claude',
-            model: 'claude-sonnet-4',
-            currency: 'USD',
-            inputPerMillion: 3,
-            outputPerMillion: 15,
-            cachedInputPerMillion: 1.5,
-            priceAsOf: '2026-07-31',
-        }],
-    }));
-}
 localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
     ...DEFAULT_UI_PREFERENCES,
     semanticInspectorEnabled: true,
@@ -1409,7 +1398,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.12.2',
+    version: '0.12.3',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1436,13 +1425,13 @@ document.body.dataset.fixtureFeatures = [
     'lore-changed',
     'corrupt-warning',
     'usage-local-estimate',
-    'pricing-user-override',
     'semantic-consent-preview',
     'semantic-result',
     'semantic-error',
     'semantic-cancel',
     'semantic-no-provider-call',
     'semantic-profile-selection',
+    'growth-focused',
     'privacy-redacted',
     'privacy-metadata',
     'retention-policy',
@@ -1512,11 +1501,35 @@ document.getElementById('sandbox-theme').addEventListener('click', () => {
     document.body.style.color = darkTheme ? '#eef2f7' : '#172033';
     devTools.syncOpaqueTheme();
 });
+async function setFocusedGrowthFixture() {
+    const focusedTokens = [
+        1_600, 1_604, 1_598, 1_609, 1_605,
+        1_612, 1_608, 1_615, 1_611, 1_618,
+    ];
+    const baseTimestamp = Date.UTC(2026, 6, 31, 13, 0, 0);
+    timeline = focusedTokens.map((totalTokens, index) => createSnapshot(
+        `growth-focused-${index + 1}`,
+        baseTimestamp + index * 60_000,
+        totalTokens,
+        { model: 'growth-focused-model' },
+    ));
+    corruptRecordCount = 0;
+    storageRevision += 1;
+    document.body.dataset.growthFixture = 'focused';
+    await devTools.open();
+    devTools.selectTab('timeline');
+}
+document.getElementById('sandbox-growth-focused')?.addEventListener(
+    'click',
+    () => void setFocusedGrowthFixture(),
+);
 async function setSemanticFixtureMode(mode) {
     semanticFixtureMode = mode;
     sandboxSemanticCache.clear();
     document.body.dataset.semanticFixtureMode = mode;
     document.body.dataset.semanticState = 'idle';
+    delete document.body.dataset.semanticErrorCode;
+    delete document.body.dataset.semanticErrorReason;
     selectPrivacyFixture('full');
     devTools.resetSemanticInspectionState(devTools.selectedSnapshot()?.id);
     await devTools.open();
@@ -1569,7 +1582,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.12.2',
+        extensionVersion: '0.12.3',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1616,7 +1629,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.12.2',
+        version: '0.12.3',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
