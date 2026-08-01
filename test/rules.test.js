@@ -101,6 +101,16 @@ test('unmatched source notice lists only active sources and explains its scope',
                 metadata: { enabled: false, configuredEnabled: false },
             },
             {
+                id: 'character-greeting',
+                type: 'character',
+                label: '캐릭터 첫 메시지',
+                content: '안녕, 만나서 반가워.',
+                tokenCount: 10,
+                attribution: 'unmatched',
+                included: false,
+                metadata: { field: 'first_mes' },
+            },
+            {
                 id: 'connected',
                 type: 'system',
                 label: '연결됨',
@@ -114,6 +124,7 @@ test('unmatched source notice lists only active sources and explains its scope',
 
     const unmatched = findings.find((item) => item.id === 'unmatched-sources');
     assert.deepEqual(unmatched?.sourceIds, ['active-omitted']);
+    assert.equal(unmatched?.evidence.includes('캐릭터 첫 메시지'), false);
     assert.match(unmatched?.title ?? '', /활성 소스 1개/u);
     assert.match(unmatched?.message ?? '', /비교 정책의 그룹 결과가 아닙니다/u);
     assert.match(unmatched?.message ?? '', /설정 비활성이라 제외/u);

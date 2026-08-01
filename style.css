@@ -443,20 +443,20 @@
 
 .st-devtools-settings-form {
     display: grid;
-    gap: 0.35rem;
-    padding: 0.85rem 1.1rem 1.1rem;
+    gap: 0.25rem;
+    padding: 0.65rem 1rem 1rem;
 }
 
 .st-devtools-settings-section {
     display: grid;
     gap: 0;
-    padding: 0.35rem 0 1rem;
+    padding: 0.2rem 0 0.75rem;
     border-bottom: 1px solid var(--st-devtools-border);
 }
 
 .st-devtools-settings-section > h3 {
     margin: 0;
-    padding: 0.75rem 0;
+    padding: 0.6rem 0 0.35rem;
     font-size: 0.95rem;
     letter-spacing: -0.01em;
 }
@@ -501,19 +501,19 @@
     display: grid;
     gap: 0;
     min-width: 0;
-    padding: 1rem;
+    padding: 0.55rem 0.75rem 0.7rem;
     background: transparent;
 }
 
 .st-devtools-settings-field {
     display: grid;
-    gap: 0.45rem;
+    gap: 0.4rem;
     min-width: 0;
-    padding: 0.75rem 0;
+    padding: 0.55rem 0;
 }
 
 .st-devtools-settings-field + .st-devtools-settings-field {
-    padding-top: 0.9rem;
+    padding-top: 0.7rem;
     border-top: 1px solid var(--st-devtools-border);
 }
 
@@ -532,7 +532,7 @@
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 0.55rem;
-    padding-top: 0.75rem;
+    padding-top: 0.55rem;
 }
 
 .st-devtools-settings-privacy-note {
@@ -4816,6 +4816,37 @@
     .st-devtools-semantic-consent-header {
         align-items: center;
         flex-direction: row;
+    }
+
+    .st-devtools-settings-form {
+        gap: 0.15rem;
+        padding: 0.45rem 0.75rem 0.75rem;
+    }
+
+    .st-devtools-settings-section {
+        padding: 0.1rem 0 0.55rem;
+    }
+
+    .st-devtools-settings-section > h3 {
+        padding: 0.45rem 0 0.25rem;
+    }
+
+    .st-devtools-settings-group-content {
+        padding: 0.25rem 0.35rem 0.45rem;
+    }
+
+    .st-devtools-settings-field {
+        gap: 0.35rem;
+        padding: 0.4rem 0;
+    }
+
+    .st-devtools-settings-field + .st-devtools-settings-field {
+        padding-top: 0.55rem;
+    }
+
+    .st-devtools-settings-group.st-devtools-disclosure > summary {
+        min-height: 44px;
+        padding: 0.6rem 0.35rem;
     }
 
     .st-devtools-settings-group-content > .st-devtools-settings-field

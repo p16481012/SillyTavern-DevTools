@@ -283,6 +283,13 @@ function sortFindings(findings) {
     ));
 }
 
+function isExplicitlyEnabledSource(source) {
+    return source?.enabled === true
+        || source?.configuredEnabled === true
+        || source?.metadata?.enabled === true
+        || source?.metadata?.configuredEnabled === true;
+}
+
 function instructionFindingSeverity(relation) {
     if (relation.status === 'insufficient-evidence') return 'info';
     if (relation.category === 'language' && relation.status === 'confirmed') {
@@ -589,6 +596,7 @@ export function analyzeSnapshotDetailed(
             source.attribution === 'unmatched'
             && source.type !== 'final'
             && source.type !== 'chat_history'
+            && isExplicitlyEnabledSource(source)
             && source.enabled !== false
             && source.configuredEnabled !== false
             && source.metadata?.configuredEnabled !== false
