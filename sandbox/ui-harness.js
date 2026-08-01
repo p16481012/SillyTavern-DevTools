@@ -62,7 +62,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.11.4',
+        extensionVersion: '0.12.0',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1409,7 +1409,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.11.4',
+    version: '0.12.0',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1451,7 +1451,30 @@ document.body.dataset.fixtureFeatures = [
     'archive-transfer',
     'diagnostic-compare',
     'performance-stress',
+    'retro-theme-conflict-toggle',
 ].join(',');
+
+function setRetroThemeConflict(enabled) {
+    const active = Boolean(enabled);
+    const toggle = document.getElementById('sandbox-retro-theme-toggle');
+    document.body.classList?.toggle?.('sandbox-retro-theme', active);
+    if (document.body.dataset) {
+        document.body.dataset.retroThemeConflict = active ? 'on' : 'off';
+    }
+    toggle?.setAttribute?.('aria-pressed', String(active));
+    if (toggle) {
+        toggle.textContent = `레트로 테마 충돌: ${active ? '켜짐' : '꺼짐'}`;
+    }
+    return active;
+}
+
+const retroThemeToggle = document.getElementById('sandbox-retro-theme-toggle');
+setRetroThemeConflict(Boolean(
+    document.body.classList?.contains?.('sandbox-retro-theme'),
+));
+retroThemeToggle?.addEventListener?.('click', () => {
+    setRetroThemeConflict(!document.body.classList?.contains?.('sandbox-retro-theme'));
+});
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
 document.getElementById('sandbox-storage-error').addEventListener('click', () => {
@@ -1546,7 +1569,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.11.4',
+        extensionVersion: '0.12.0',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1593,7 +1616,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.11.4',
+        version: '0.12.0',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1703,6 +1726,7 @@ document.getElementById('sandbox-select-metadata')?.addEventListener('click', ()
 });
 globalThis.devToolsSandboxFixtures = {
     selectPrivacyFixture,
+    setRetroThemeConflict,
     setSemanticFixtureMode,
     semantic: {
         inspector: sandboxSemanticInspector,

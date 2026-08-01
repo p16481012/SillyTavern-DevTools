@@ -73,6 +73,104 @@ test('semantic inspection preferences are off by default and response cap is bou
     }).semanticResponseTokenCap, MAX_SEMANTIC_RESPONSE_TOKEN_CAP);
 });
 
+test('rules can enable semantic inspection locally without contacting a provider', () => {
+    const previousToastr = globalThis.toastr;
+    const previousConsoleError = console.error;
+    let prepareCount = 0;
+    let inspectCount = 0;
+    const inspector = {
+        prepare() {
+            prepareCount += 1;
+        },
+        inspect() {
+            inspectCount += 1;
+        },
+    };
+    const statuses = [];
+    globalThis.toastr = {
+        success(message) {
+            statuses.push(['success', message]);
+        },
+        error(message) {
+            statuses.push(['error', message]);
+        },
+    };
+    console.error = () => {};
+    try {
+        const enabledUi = createUi(inspector);
+        enabledUi.preferences = normalizeUiPreferences({
+            ...DEFAULT_UI_PREFERENCES,
+            semanticInspectorEnabled: false,
+        });
+        enabledUi.semanticInspectorEnabledInput = { checked: false };
+        const profileClassList = { removed: [], remove(value) { this.removed.push(value); } };
+        enabledUi.semanticConnectionProfileInput = {
+            disabled: true,
+            closest() {
+                return { classList: profileClassList };
+            },
+        };
+        const capClassList = { removed: [], remove(value) { this.removed.push(value); } };
+        enabledUi.semanticResponseTokenCapInput = {
+            disabled: true,
+            closest() {
+                return { classList: capClassList };
+            },
+        };
+        let resetCount = 0;
+        let renderCount = 0;
+        enabledUi.saveUiPreferences = (value) => {
+            enabledUi.preferences = normalizeUiPreferences(value);
+            return enabledUi.preferences;
+        };
+        enabledUi.resetSemanticInspectionForSettingsChange = () => {
+            resetCount += 1;
+        };
+        enabledUi.render = () => {
+            renderCount += 1;
+        };
+
+        assert.equal(enabledUi.enableSemanticInspectorFromRules(), true);
+        assert.equal(enabledUi.preferences.semanticInspectorEnabled, true);
+        assert.equal(enabledUi.semanticInspectorEnabledInput.checked, true);
+        assert.equal(enabledUi.semanticConnectionProfileInput.disabled, false);
+        assert.equal(enabledUi.semanticResponseTokenCapInput.disabled, false);
+        assert.deepEqual(profileClassList.removed, ['is-disabled']);
+        assert.deepEqual(capClassList.removed, ['is-disabled']);
+        assert.equal(resetCount, 1);
+        assert.equal(renderCount, 1);
+
+        const failedUi = createUi(inspector);
+        failedUi.preferences = normalizeUiPreferences({
+            ...DEFAULT_UI_PREFERENCES,
+            semanticInspectorEnabled: false,
+        });
+        failedUi.semanticInspectorEnabledInput = { checked: false };
+        failedUi.semanticConnectionProfileInput = null;
+        failedUi.semanticResponseTokenCapInput = null;
+        let failedRenderCount = 0;
+        failedUi.render = () => {
+            failedRenderCount += 1;
+        };
+        failedUi.saveUiPreferences = () => {
+            throw Object.assign(new Error('blocked'), {
+                code: 'settings-storage-write-failed',
+            });
+        };
+
+        assert.equal(failedUi.enableSemanticInspectorFromRules(), false);
+        assert.equal(failedUi.preferences.semanticInspectorEnabled, false);
+        assert.equal(failedUi.semanticInspectorEnabledInput.checked, false);
+        assert.equal(failedRenderCount, 0);
+        assert.equal(prepareCount, 0);
+        assert.equal(inspectCount, 0);
+        assert.deepEqual(statuses.map(([kind]) => kind), ['success', 'error']);
+    } finally {
+        globalThis.toastr = previousToastr;
+        console.error = previousConsoleError;
+    }
+});
+
 test('cancelling the consent preview never calls the semantic provider', async () => {
     let prepareCount = 0;
     let inspectCount = 0;
@@ -435,6 +533,14 @@ test('v0.11 semantic UI keeps consent, results, and persistence boundaries expli
     );
     assert.match(ui, /if \(!availableTargetIds\.has\(targetId\)\)/);
     assert.match(ui, /this\.semanticTargetHasClosure\(finding, 'finding'\)/);
+    assert.match(ui, /className: 'st-devtools-semantic-enable-card'/);
+    assert.match(ui, /className: 'st-devtools-semantic-enable-status'/);
+    assert.match(ui, /text: t\('semantic\.enable'\)/);
+    assert.match(ui, /t\('semantic\.enableHint'\)/);
+    assert.match(ui, /setAttribute\('role', 'alert'\)/);
+    assert.match(ui, /t\('semantic\.enableFailed'\)/);
+    assert.match(ui, /details\.open = this\.semanticInspectorOpen/);
+    assert.match(ui, /this\.semanticInspectorOpen = details\.open/);
     assert.match(ui, /typeof source\?\.content === 'string'/);
     assert.doesNotMatch(ui, /source\?\.contentPreview/);
     assert.doesNotMatch(semanticMethods, /localStorage|saveFinding|setFinding|saveComparison/);
@@ -446,4 +552,13 @@ test('v0.11 semantic UI keeps consent, results, and persistence boundaries expli
     assert.match(i18n, /이번 1회 전송에 동의합니다/);
     assert.match(css, /@media \(max-width: 430px\)[\s\S]*?st-devtools-semantic-consent-panel/);
     assert.match(css, /\.st-devtools-semantic-results/);
+    assert.match(css, /\.st-devtools-semantic-enable-card/);
+    for (const key of [
+        'semantic.enable',
+        'semantic.enableHint',
+        'semantic.enabled',
+        'semantic.enableFailed',
+    ]) {
+        assert.equal(i18n.includes(`'${key}':`), true, `missing i18n key: ${key}`);
+    }
 });

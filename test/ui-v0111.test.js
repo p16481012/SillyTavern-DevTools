@@ -247,6 +247,18 @@ test('four task-oriented navigation groups cover every legacy tab exactly once',
         assert.equal(row.tabs.includes(row.defaultTab), true);
         assert.match(row.labelKey, /^nav\./u);
     }
+
+    const icons = sourceBlock(
+        ui,
+        'const NAV_GROUP_ICONS = Object.freeze({',
+        'const CAPTURE_STATUS_STATES',
+    );
+    const iconGroups = [...icons.matchAll(/^\s*([a-z]+):\s*'fa-[^']+'/gmu)]
+        .map((match) => match[1])
+        .sort();
+    assert.deepEqual(iconGroups, rows.map(({ id }) => id).sort());
+    assert.match(ui, /icon\.setAttribute\('aria-hidden', 'true'\)/u);
+    assert.match(ui, /element\('span', \{ text: t\(labelKey\) \}\)/u);
 });
 
 test('header actions and capture status expose explicit accessible names', async () => {
@@ -265,6 +277,22 @@ test('header actions and capture status expose explicit accessible names', async
     assert.doesNotMatch(build, /action\.help|openHelp|st-devtools-help-overlay/u);
     assert.match(build, /primaryTabs\.setAttribute\('aria-label',\s*t\('nav\.label'\)\)/u);
     assert.match(build, /tabList\.setAttribute\('aria-label',\s*t\('nav\.secondaryLabel'\)\)/u);
+    assert.match(
+        build,
+        /this\.captureStatusRegion = this\.buildCaptureStatus\(\);[\s\S]*?title\.append\([\s\S]*?this\.captureStatusRegion/u,
+    );
+    const primaryRegions = sourceBlock(
+        build,
+        'this.primaryRegions = [',
+        '];',
+    );
+    const windowChildren = sourceBlock(
+        build,
+        'this.window.append(',
+        ');',
+    );
+    assert.doesNotMatch(primaryRegions, /this\.captureStatusRegion/u);
+    assert.doesNotMatch(windowChildren, /this\.captureStatusRegion/u);
 
     const captureStatus = sourceBlock(
         ui,
@@ -275,6 +303,17 @@ test('header actions and capture status expose explicit accessible names', async
     assert.match(captureStatus, /setAttribute\('role', 'status'\)/u);
     assert.match(captureStatus, /setAttribute\('aria-live', 'polite'\)/u);
     assert.match(captureStatus, /setAttribute\('aria-atomic', 'true'\)/u);
+    assert.match(captureStatus, /setAttribute\('aria-hidden', 'true'\)/u);
+
+    const updateStatus = sourceBlock(
+        ui,
+        '\n    updateCaptureStatus() {',
+        '\n    renderQuickStart(',
+    );
+    assert.match(updateStatus, /capture\.status\.short\.\$\{keySuffix\}/u);
+    assert.match(updateStatus, /t\('capture\.status\.accessible'/u);
+    assert.match(updateStatus, /setAttribute\('aria-label', accessibleStatus\)/u);
+    assert.match(updateStatus, /\.title = accessibleStatus/u);
 });
 
 test('empty state provides concise quick start and recovery actions', async () => {
@@ -296,9 +335,14 @@ test('empty state provides concise quick start and recovery actions', async () =
         '\n    renderQuickStart(',
         '\n    syncOpaqueTheme() {',
     );
-    assert.match(quickStart, /for \(const index of \[1, 2, 3\]\)/u);
-    assert.match(quickStart, /className: 'st-devtools-quick-start-step'/u);
-    assert.match(quickStart, /help\.semanticNote/u);
+    assert.doesNotMatch(quickStart, /for \(const index of \[1, 2, 3\]\)/u);
+    assert.doesNotMatch(quickStart, /className: 'st-devtools-quick-start-step'/u);
+    assert.doesNotMatch(quickStart, /help\.semanticNote/u);
+    assert.match(quickStart, /className: 'st-devtools-quick-start-next'/u);
+    assert.match(quickStart, /className: 'st-devtools-quick-start-icon'/u);
+    assert.match(quickStart, /nextStepIcon\.setAttribute\('aria-hidden', 'true'\)/u);
+    assert.match(quickStart, /help\.step1Title/u);
+    assert.match(quickStart, /help\.step1Description/u);
     assert.match(quickStart, /className: 'st-devtools-empty-diagnostics/u);
 });
 
@@ -308,6 +352,11 @@ test('rule results have an explicit async host before lazily-mounted supporting 
         ui,
         '\n    renderSemanticInspectorDisclosure(',
         '\n    renderRuleAdvancedAnalysis(',
+    );
+    const semanticInspector = sourceBlock(
+        ui,
+        '\n    renderSemanticInspector(snapshot, analysis, findings) {',
+        '\n    renderSemanticInspectorDisclosure(',
     );
     const advancedDisclosure = sourceBlock(
         ui,
@@ -333,7 +382,21 @@ test('rule results have an explicit async host before lazily-mounted supporting 
 
     assert.match(semanticDisclosure, /element\('details'/u);
     assert.match(semanticDisclosure, /attachLazyDetailsContent\(details/u);
-    assert.doesNotMatch(semanticDisclosure, /details\.open\s*=\s*true/u);
+    assert.match(semanticDisclosure, /details\.open = this\.semanticInspectorOpen/u);
+    assert.match(
+        semanticDisclosure,
+        /this\.semanticInspectorOpen = details\.open/u,
+    );
+    assert.match(semanticInspector, /className: 'st-devtools-semantic-enable-card'/u);
+    assert.match(semanticInspector, /t\('semantic\.enableHint'\)/u);
+    assert.match(semanticInspector, /text: t\('semantic\.enable'\)/u);
+    assert.match(semanticInspector, /this\.enableSemanticInspectorFromRules\(\)/u);
+    assert.match(
+        semanticInspector,
+        /className: 'st-devtools-semantic-enable-status'/u,
+    );
+    assert.match(semanticInspector, /setAttribute\('role', 'alert'\)/u);
+    assert.match(semanticInspector, /t\('semantic\.enableFailed'\)/u);
     assert.match(advancedDisclosure, /element\('details'/u);
     assert.match(advancedDisclosure, /attachLazyDetailsContent\(details/u);
     assert.doesNotMatch(advancedDisclosure, /details\.open\s*=\s*true/u);
@@ -390,11 +453,6 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
         'empty.quickStartTitle',
         'help.step1Title',
         'help.step1Description',
-        'help.step2Title',
-        'help.step2Description',
-        'help.step3Title',
-        'help.step3Description',
-        'help.semanticNote',
         'help.troubleshootTitle',
         'help.troubleshootDescription',
         'capture.status.waiting',
@@ -412,6 +470,14 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
         'capture.status.failed.storage-verify',
         'capture.status.excludedSemantic',
         'capture.status.skippedSafety',
+        'capture.status.accessible',
+        'capture.status.short.waiting',
+        'capture.status.short.capturing',
+        'capture.status.short.processing',
+        'capture.status.short.saved',
+        'capture.status.short.failed',
+        'capture.status.short.excludedSemantic',
+        'capture.status.short.skippedSafety',
     ];
     for (const key of keys) {
         assert.equal(i18n.includes(`'${key}':`), true, `missing i18n key: ${key}`);

@@ -1,4 +1,13 @@
-# v0.11.4 기술 구현 현황
+# v0.12.0 기술 구현 현황
+
+## v0.12.0 초보자 중심 UI/UX 개편
+
+- 각 화면의 우선 행동을 먼저 보이는 토스식 `한 화면·한 우선 행동` 정보 구조와 아이콘이 있는 `프롬프트`·`검사`·`기록`·`도구` 네 작업 탭을 적용함
+- 헤더 이름 옆에 캡처 상태 점을 배치하고 상태 문구·접근 가능한 이름을 함께 유지함. 카드와 disclosure 요약 제목은 좌측 정렬하고 도움말 아이콘의 시각 크기를 줄임
+- 패널 자체의 고대비 밝은/어두운 색 토큰을 사용하고 SillyTavern 호스트 테마의 광범위한 control·table·상태색 규칙으로부터 내부 UI를 격리함
+- 설정 모달의 입력칸 자동 포커스를 제거하고 상단 닫기를 유지함. 자주 쓰는 설정은 펼치고 고급 설정만 접으며 백업·가져오기·저장소 관리는 단일 `데이터 도구` 진입점으로 정리함
+- 검사 탭에 선택적 AI 의미 검사 opt-in을 인라인 배치함. 활성화는 설정 저장만 수행하며 provider 호출은 대상 선택·미리보기·호출별 동의 뒤에만 가능함
+- 좁은 화면의 프롬프트 비교를 간결한 표 배치로 보강함. 빠른 시작과 tooltip은 유지하지만 코치마크·워크스루 온보딩은 아직 구현하지 않음
 
 ## v0.11.4 실제 요청 `undefined` 정규화 패치
 
@@ -157,6 +166,8 @@
 - nonce gate identity-exact consume·TTL·capacity·exact duplicate 억제, explicit-ID 정상 요청 보존과 모호한 id-less 동시성 fail-closed
 - tokenizer 미종료 1회 probe·로컬 추정 저장, privacy/storage 미종료 timeout과 모든 캡처 terminal 상태
 - Connection Manager 프로필 표시 필드·opaque ID 저장, Chat/Text 프로필 라우팅, 미지원·소실 시 현재 연결과 profile 요청 실패의 무재시도
+- 네 작업 탭 아이콘·헤더 상태 점·좌측 정렬 제목·작은 tooltip과 검사 탭 inline AI opt-in의 접근성 계약
+- 내부 밝은/어두운 색 토큰과 공격적인 호스트 테마 격리, 430px 프롬프트 비교 표와 설정 포커스·데이터 도구 정보 구조
 
 ### 릴리스 전 결정적 UI 샌드박스 검토 대상
 
@@ -168,6 +179,7 @@
 - 실제 `SemanticInspector`·strict validator·memory cache에 결정적 fake adapter를 주입한 AI preview·동의·성공·오류·취소
 - `semanticCore=true`, validated result count와 provider/network call 0회 dataset으로 샌드박스 경계 확인
 - 헤더 새로고침·설정·닫기 세 버튼, 좌측 정렬 disclosure와 여러 SillyTavern 테마·430px에서 패널 control 폭·writing-mode 방어
+- 네 작업 탭 아이콘과 상태 점, 설정의 상단 닫기·펼쳐진 자주 쓰는 항목·단일 데이터 도구 진입점, 모바일 간결 비교 표
 
 샌드박스는 가짜 저장 backend와 결정적 semantic adapter를 사용합니다. Semantic Inspector 코어의 closure·preview·strict response/evidence 검증·memory cache는 실제 구현을 통과하지만 SillyTavern의 실제 `generateRaw`, 사용자의 IndexedDB, 브라우저 비공개 모드와 provider 응답 품질·과금은 대신 검증하지 않습니다.
 
@@ -234,16 +246,16 @@
 
 ## 아직 미구현
 
-### v0.12.0 방향
+### v0.13.0 방향
 
 - 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
 - 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- v0.11.4의 실제 요청 저장과 4개 작업 탐색·빈 상태 빠른 시작·필드별 도움말에 대한 실사용 피드백 수집과 접근성 검증
+- v0.12.0의 네 작업 탐색·상태 점·설정 단순화·모바일 비교 표에 대한 실사용 피드백 수집과 UI/UX 보완
 
-세부 기능은 v0.11.4 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.12.0 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.11.4의 실제 OpenAI·TextGen 요청 캡처, 선저장·재읽기 검증·단계별 상태를 사용자 체크리스트로 확인합니다.
-2. v0.12.0에서 AI 평가 corpus·품질 회귀·provider 호환성·접근성을 보강합니다.
+1. v0.12.0의 UI 정보 구조와 실제 OpenAI·TextGen 요청 캡처·선저장·재읽기 검증을 사용자 체크리스트로 확인합니다.
+2. v0.13.0에서 AI 평가 corpus·품질 회귀·provider 호환성과 실사용 UI/UX를 보강합니다.
 3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

@@ -19,6 +19,19 @@ function customProperty(block, name) {
     return match[1];
 }
 
+function remProperty(block, name) {
+    const match = block.match(new RegExp(`${name}:\\s*([0-9.]+)rem`, 'i'));
+    assert.ok(match, `${name} must use a rem value`);
+    return Number(match[1]);
+}
+
+function mediaSection(css, query) {
+    const start = css.indexOf(`@media (${query})`);
+    assert.notEqual(start, -1, `@media (${query}) must exist`);
+    const end = css.indexOf('\n@media ', start + 1);
+    return css.slice(start, end === -1 ? css.length : end);
+}
+
 function relativeLuminance(hex) {
     const channels = hex.slice(1).match(/../g).map((value) => {
         const channel = Number.parseInt(value, 16) / 255;
@@ -84,6 +97,41 @@ test('status text colors keep WCAG AA contrast on muted badge surfaces', async (
     }
 });
 
+test('panel accents are self-owned and readable in both color schemes', async () => {
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    const themes = [
+        cssBlock(css, '.st-devtools-overlay'),
+        cssBlock(css, '.st-devtools-overlay.st-devtools-theme-light'),
+    ];
+
+    assert.doesNotMatch(css, /--SmartThemeQuoteColor/u);
+    for (const theme of themes) {
+        const panel = customProperty(theme, '--st-devtools-panel-bg');
+        const surface = customProperty(theme, '--st-devtools-surface');
+        const primary = customProperty(theme, '--st-devtools-primary');
+        const focus = customProperty(theme, '--st-devtools-focus');
+        const mutedText = customProperty(theme, '--st-devtools-text-muted');
+        const primaryStrong = customProperty(theme, '--st-devtools-primary-strong');
+
+        assert.ok(
+            contrastRatio(primary, panel) >= 4.5,
+            `${primary} must remain readable against ${panel}`,
+        );
+        assert.ok(
+            contrastRatio(focus, panel) >= 3,
+            `${focus} must remain visible against ${panel}`,
+        );
+        assert.ok(
+            contrastRatio(mutedText, surface) >= 4.5,
+            `${mutedText} must remain readable against ${surface}`,
+        );
+        assert.ok(
+            contrastRatio(primaryStrong, '#ffffff') >= 4.5,
+            `${primaryStrong} must retain AA contrast with primary-button text`,
+        );
+    }
+});
+
 test('tabs stay distinct while Korean action text wraps only at safe boundaries', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
@@ -100,7 +148,9 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
     assert.match(panel, /overflow-wrap:\s*normal/);
     assert.match(panel, /text-wrap:\s*pretty/);
     assert.match(panel, /word-break:\s*keep-all/);
-    assert.match(activeTab, /border-bottom-color:/);
+    assert.doesNotMatch(activeTab, /border(?:-bottom)?(?:-color)?:/u);
+    assert.match(activeTab, /background:\s*var\(--st-devtools-surface-raised\)/u);
+    assert.match(activeTab, /color:\s*var\(--st-devtools-primary\)/u);
     assert.doesNotMatch(focusTab, /background:/);
     assert.match(searchOptionsBody, /display:\s*flex/);
     assert.match(
@@ -109,7 +159,7 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
     );
 });
 
-test('beginner navigation, capture status, and quick start stay compact and accessible', async () => {
+test('beginner navigation and header capture status stay compact and accessible', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
     const panel = cssBlock(css, '.st-devtools-window');
@@ -119,7 +169,6 @@ test('beginner navigation, capture status, and quick start stay compact and acce
     const secondaryButton = cssBlock(css, '.st-devtools-secondary-tabs > button');
     const headerAction = cssBlock(css, '.st-devtools-header-actions .menu_button');
     const captureStatus = cssBlock(css, '.st-devtools-capture-status');
-    const quickStartStep = cssBlock(css, '.st-devtools-quick-start-step');
     const settingsGroupSummary = cssBlock(
         css,
         '.st-devtools-settings-group > summary',
@@ -131,7 +180,7 @@ test('beginner navigation, capture status, and quick start stay compact and acce
 
     assert.match(
         panel,
-        /grid-template-rows:\s*auto auto auto auto minmax\(0, 1fr\)/,
+        /grid-template-rows:\s*auto auto auto minmax\(0, 1fr\)/,
     );
     assert.match(primaryTabs, /display:\s*grid/);
     assert.match(
@@ -145,14 +194,17 @@ test('beginner navigation, capture status, and quick start stay compact and acce
     assert.match(secondaryTabs, /overflow-x:\s*hidden/);
     assert.match(secondaryButton, /min-height:\s*44px/);
     assert.match(headerAction, /display:\s*inline-grid/);
-    assert.match(headerAction, /width:\s*2\.1rem/);
-    assert.match(headerAction, /height:\s*2\.1rem/);
+    assert.match(headerAction, /width:\s*2\.5rem/);
+    assert.match(headerAction, /min-width:\s*2\.5rem/);
+    assert.match(headerAction, /height:\s*2\.5rem/);
+    assert.match(headerAction, /min-height:\s*2\.5rem/);
     assert.match(headerAction, /place-items:\s*center/);
-    assert.match(captureStatus, /border-left:\s*3px solid var\(--st-devtools-capture-color\)/);
+    assert.match(captureStatus, /display:\s*inline-flex/);
+    assert.match(captureStatus, /margin:\s*0/);
+    assert.match(captureStatus, /border-radius:\s*999px/);
     assert.match(css, /\.st-devtools-capture-status\.is-saved[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-success\)/);
     assert.match(css, /\.st-devtools-capture-status\.is-failed[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-danger\)/);
     assert.doesNotMatch(css, /\.st-devtools-help-(?:overlay|panel|header|body)/);
-    assert.match(quickStartStep, /grid-template-columns:\s*1\.75rem minmax\(0, 1fr\)/);
     assert.match(settingsGroupSummary, /min-height:\s*44px/);
     assert.match(settingsGroupContent, /display:\s*grid/);
     assert.match(
@@ -184,9 +236,9 @@ test('beginner navigation, capture status, and quick start stay compact and acce
         ['rules.semanticDisclosureTitle', 'AI로 더 자세히 보기'],
         ['rules.advancedAnalysisTitle', '분석 상세'],
         ['timeline.storageDetailsTitle', '저장 상태와 관리'],
-        ['settings.group.basic', '기본'],
-        ['settings.group.snapshots', '스냅샷'],
-        ['settings.group.advanced', '고급 기능'],
+        ['settings.group.basic', '화면'],
+        ['settings.group.snapshots', '스냅샷 저장'],
+        ['settings.group.advanced', '고급 설정'],
     ]);
     for (const [key, value] of expectedKorean) {
         assert.match(
@@ -204,11 +256,6 @@ test('beginner navigation, capture status, and quick start stay compact and acce
         'capture.status.skippedSafety',
         'help.step1Title',
         'help.step1Description',
-        'help.step2Title',
-        'help.step2Description',
-        'help.step3Title',
-        'help.step3Description',
-        'help.semanticNote',
         'help.troubleshootTitle',
         'help.troubleshootDescription',
     ]) {
@@ -227,10 +274,19 @@ test('panel controls and disclosure headings resist host theme layout rules', as
         '.st-devtools-window :where(details > summary > *)',
     );
     const customSummary = cssBlock(css, '.st-devtools-settings-group > summary');
+    const settingsPanel = cssBlock(css, '.st-devtools-settings-panel');
 
     assert.match(menuButton, /box-sizing:\s*border-box/);
     assert.match(menuButton, /flex:\s*0 0 auto/);
     assert.match(menuButton, /width:\s*auto/);
+    assert.match(
+        css,
+        /\.st-devtools-overlay \.st-devtools-window \.menu_button\s*\{[\s\S]*?flex:\s*0 0 auto\s*!important[\s\S]*?width:\s*auto\s*!important[\s\S]*?min-width:\s*0\s*!important/,
+    );
+    assert.match(
+        css,
+        /\.st-devtools-overlay \.st-devtools-window \.st-devtools-icon-button\s*\{[\s\S]*?flex:\s*0 0 2\.5rem\s*!important/,
+    );
     assert.match(button, /flex-grow:\s*0/);
     assert.match(button, /flex-shrink:\s*0/);
     assert.match(
@@ -241,11 +297,13 @@ test('panel controls and disclosure headings resist host theme layout rules', as
         css,
         /\.st-devtools-window button,\s*\.st-devtools-window select\s*\{[\s\S]*?box-sizing:\s*border-box[\s\S]*?writing-mode:\s*horizontal-tb/,
     );
-    assert.match(summary, /display:\s*list-item/);
+    assert.match(summary, /display:\s*flex/);
     assert.match(summary, /width:\s*100%/);
-    assert.match(summary, /text-align:\s*left/);
+    assert.match(summary, /justify-content:\s*flex-start\s*!important/);
+    assert.match(summary, /text-align:\s*left\s*!important/);
     assert.match(summaryChildren, /text-align:\s*left/);
     assert.match(customSummary, /display:\s*flex/);
+    assert.match(settingsPanel, /overflow-x:\s*hidden/);
 });
 
 test('help tooltips and nested disclosures keep responsive interaction contracts', async () => {
@@ -260,8 +318,17 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
     );
     assert.match(css, /\.st-devtools-help-tooltip\.is-open\s+\.st-devtools-help-bubble/);
     assert.match(cssBlock(css, '.st-devtools-help-bubble'), /box-sizing:\s*border-box/);
-    assert.match(cssBlock(css, '.st-devtools-window .st-devtools-help-trigger'), /width:\s*1\.5rem/);
-    assert.match(cssBlock(css, '.st-devtools-window .st-devtools-help-trigger::before'), /width:\s*1\.1rem/);
+    const helpTrigger = cssBlock(css, '.st-devtools-window .st-devtools-help-trigger');
+    const helpVisual = cssBlock(
+        css,
+        '.st-devtools-window .st-devtools-help-trigger::before',
+    );
+    assert.ok(remProperty(helpTrigger, 'width') >= 1.25);
+    assert.ok(remProperty(helpVisual, 'width') < 1.1);
+    assert.equal(
+        remProperty(helpVisual, 'width'),
+        remProperty(helpVisual, 'height'),
+    );
     assert.match(
         css,
         /\.st-devtools-window\s+details:not\(\[open\]\)\s*>\s*:not\(summary\)[\s\S]*?display:\s*none\s*!important/,
@@ -347,7 +414,7 @@ test('v0.9.1 safety and theme controls remain responsive', async () => {
     assert.match(ui, /this\.store\.getTimelinePage\(chatId, \{ limit \}\)/);
     assert.match(ui, /function attachLazyDetailsContent\(details, createContent\)/);
     assert.match(cssBlock(css, '.st-devtools-settings-overlay'), /position:\s*absolute/);
-    assert.match(cssBlock(css, '.st-devtools-settings-panel'), /width:\s*min\(480px, 100%\)/);
+    assert.match(cssBlock(css, '.st-devtools-settings-panel'), /width:\s*min\(560px, 100%\)/);
     assert.match(i18n, /'settings\.timelineRetentionLimitHint':/);
     assert.match(i18n, /'settings\.timelineRetentionDecreaseConfirm':/);
     assert.match(i18n, /'settings\.timelineReadLimitHint':/);
@@ -365,4 +432,18 @@ test('v0.9.1 safety and theme controls remain responsive', async () => {
     const submitEnd = ui.indexOf('\n        panel.append', submitStart);
     const settingsSubmit = ui.slice(submitStart, submitEnd);
     assert.doesNotMatch(settingsSubmit, /await this\.refresh\(\)/);
+
+    const settingsHeader = cssBlock(css, '.st-devtools-settings-header');
+    const mobile = mediaSection(css, 'max-width: 430px');
+    assert.match(settingsHeader, /display:\s*flex/);
+    assert.match(settingsHeader, /align-items:\s*center/);
+    assert.match(settingsHeader, /justify-content:\s*space-between/);
+    assert.doesNotMatch(
+        mobile,
+        /\.st-devtools-settings-header\s*,[\s\S]{0,600}?flex-direction:\s*column/u,
+    );
+    assert.doesNotMatch(
+        mobile,
+        /\.st-devtools-settings-header\s*\{[^}]*flex-direction:\s*column/u,
+    );
 });

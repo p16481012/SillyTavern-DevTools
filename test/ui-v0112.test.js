@@ -8,6 +8,14 @@ const UI_SOURCE_URL = new URL('../src/ui.js', import.meta.url);
 const I18N_SOURCE_URL = new URL('../src/i18n.js', import.meta.url);
 const CSS_SOURCE_URL = new URL('../style.css', import.meta.url);
 
+function sourceBlock(source, start, end) {
+    const startIndex = source.indexOf(start);
+    assert.notEqual(startIndex, -1, `missing source block start: ${start}`);
+    const endIndex = source.indexOf(end, startIndex + start.length);
+    assert.notEqual(endIndex, -1, `missing source block end: ${end}`);
+    return source.slice(startIndex, endIndex);
+}
+
 function fakeSelect() {
     return {
         children: [],
@@ -156,6 +164,69 @@ test('settings wire the selected semantic profile through reset, save, and reope
     }
 });
 
+test('settings open without surprising input focus and keep an explicit top close action', async () => {
+    const ui = await readFile(UI_SOURCE_URL, 'utf8');
+    const settings = sourceBlock(
+        ui,
+        '\n    buildSettingsPanel() {',
+        '\n    setStorageToolsStatus(',
+    );
+    const open = sourceBlock(
+        ui,
+        '\n    openSettings() {',
+        '\n    closeSettings(',
+    );
+    const focusTask = sourceBlock(
+        open,
+        'queueMicrotask(() => {',
+        '\n        });',
+    );
+
+    assert.match(settings, /panel\.tabIndex = -1/u);
+    assert.match(
+        settings,
+        /className: 'menu_button st-devtools-icon-button st-devtools-settings-close'/u,
+    );
+    assert.match(settings, /title: t\('action\.close'\)/u);
+    assert.match(settings, /close\.setAttribute\('aria-label', t\('action\.close'\)\)/u);
+    assert.doesNotMatch(open, /timelineRetentionLimitInput\?\.focus\(\)/u);
+    assert.doesNotMatch(open, /timelineRetentionLimitInput\?\.select\(\)/u);
+    assert.match(open, /this\.settingsPanel\.scrollTop = 0/u);
+    assert.match(focusTask, /settingsOverlay(?:\.|\?\.)hidden/u);
+    assert.match(
+        focusTask,
+        /settingsPanel\?\.focus\(\{ preventScroll: true \}\)/u,
+    );
+    assert.match(
+        focusTask,
+        /if\s*\([^)]*settingsOverlay[^)]*!this\.settingsOverlay\.hidden[^)]*\)\s*\{/u,
+    );
+});
+
+test('settings expose common controls and collapse only advanced controls', async () => {
+    const ui = await readFile(UI_SOURCE_URL, 'utf8');
+    const settings = sourceBlock(
+        ui,
+        '\n    buildSettingsPanel() {',
+        '\n    setStorageToolsStatus(',
+    );
+
+    assert.match(settings, /className: 'st-devtools-settings-section'/u);
+    assert.match(
+        settings,
+        /settingsGroup\('settings\.group\.basic', \[themeField\]\)/u,
+    );
+    assert.match(
+        settings,
+        /settingsGroup\(\s*'settings\.group\.snapshots',[\s\S]*?\[retentionField, readField, captureField\][\s\S]*?\)/u,
+    );
+    assert.match(
+        settings,
+        /settingsGroup\(\s*'settings\.group\.advanced',[\s\S]*?\{ collapsible: true \}[\s\S]*?\)/u,
+    );
+    assert.doesNotMatch(settings, /settings\.group\.advanced'[\s\S]{0,300}?open:\s*true/u);
+});
+
 test('theme-resistant controls and disclosure headings use one left-aligned direction', async () => {
     const css = await readFile(CSS_SOURCE_URL, 'utf8');
 
@@ -165,7 +236,7 @@ test('theme-resistant controls and disclosure headings use one left-aligned dire
     );
     assert.match(
         css,
-        /\.st-devtools-window :where\(details > summary\)\s*\{[\s\S]*?display:\s*list-item;[\s\S]*?text-align:\s*left;/u,
+        /\.st-devtools-window :where\(details > summary\)\s*\{[\s\S]*?display:\s*flex;[\s\S]*?justify-content:\s*flex-start\s*!important;[\s\S]*?text-align:\s*left\s*!important;/u,
     );
     assert.match(
         css,

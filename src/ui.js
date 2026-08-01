@@ -182,6 +182,12 @@ const NAV_GROUPS = [
     ['history', 'nav.history', ['timeline', 'diff'], 'timeline'],
     ['tools', 'nav.tools', ['search', 'context'], 'search'],
 ];
+const NAV_GROUP_ICONS = Object.freeze({
+    prompt: 'fa-layer-group',
+    inspect: 'fa-shield-halved',
+    history: 'fa-clock-rotate-left',
+    tools: 'fa-wand-magic-sparkles',
+});
 const CAPTURE_STATUS_STATES = new Set([
     'waiting',
     'capturing',
@@ -224,6 +230,15 @@ function element(tag, options = {}) {
     if (options.title) node.title = options.title;
     if (options.type) node.type = options.type;
     return node;
+}
+
+function closeIcon() {
+    const icon = element('span', {
+        className: 'st-devtools-button-glyph',
+        text: '\u00d7',
+    });
+    icon.setAttribute('aria-hidden', 'true');
+    return icon;
 }
 
 function setPolicyFormStatus(node, text, isError = false) {
@@ -820,6 +835,7 @@ export class DevToolsWindow {
         this.semanticConnectionProfileInput = null;
         this.semanticConnectionProfileStatus = null;
         this.semanticResponseTokenCapInput = null;
+        this.semanticInspectorOpen = false;
         this.resetPricingEditor = null;
         this.semanticInspectionState = {
             snapshotId: null,
@@ -1764,12 +1780,12 @@ export class DevToolsWindow {
             proseElement('p', t('settings.description')),
         );
         const close = element('button', {
-            className: 'menu_button',
-            title: t('action.cancel'),
+            className: 'menu_button st-devtools-icon-button st-devtools-settings-close',
+            title: t('action.close'),
             type: 'button',
         });
-        close.setAttribute('aria-label', t('action.cancel'));
-        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
+        close.setAttribute('aria-label', t('action.close'));
+        close.appendChild(closeIcon());
         close.addEventListener('click', () => this.closeSettings());
         heading.append(titleGroup, close);
 
@@ -2072,7 +2088,6 @@ export class DevToolsWindow {
             syncSemanticSettings();
             pricingEditor.resetEntries([]);
             syncReadLimit();
-            retentionInput.focus();
         });
         const cancel = element('button', {
             className: 'menu_button',
@@ -2081,34 +2096,48 @@ export class DevToolsWindow {
         });
         cancel.addEventListener('click', () => this.closeSettings());
         const apply = element('button', {
-            className: 'menu_button',
+            className: 'menu_button st-devtools-primary-button',
             text: t('action.applySettings'),
             type: 'submit',
         });
         actions.append(reset, cancel, apply);
-        const settingsGroup = (labelKey, fields, { open = false } = {}) => {
+        const settingsGroup = (
+            labelKey,
+            fields,
+            { collapsible = false, open = false } = {},
+        ) => {
+            const content = element('div', {
+                className: 'st-devtools-settings-group-content',
+            });
+            content.append(...fields);
+            if (!collapsible) {
+                const section = element('section', {
+                    className: 'st-devtools-settings-section',
+                });
+                section.append(
+                    element('h3', { text: t(labelKey) }),
+                    content,
+                );
+                return section;
+            }
             const details = element('details', {
                 className: 'st-devtools-settings-group st-devtools-disclosure',
             });
             details.open = open;
             details.appendChild(element('summary', { text: t(labelKey) }));
-            const content = element('div', {
-                className: 'st-devtools-settings-group-content',
-            });
-            content.append(...fields);
             details.appendChild(content);
             return details;
         };
         form.append(
-            settingsGroup('settings.group.basic', [themeField], { open: true }),
+            settingsGroup('settings.group.basic', [themeField]),
             settingsGroup(
                 'settings.group.snapshots',
                 [retentionField, readField, captureField],
-                { open: true },
             ),
             settingsGroup(
                 'settings.group.advanced',
                 [ageField, byteField, semanticField, pricingEditor.details],
+                { collapsible: true },
             ),
             actions,
         );
@@ -2621,10 +2650,10 @@ export class DevToolsWindow {
     }
 
     buildStorageToolsPanel() {
-        const tools = element('section', {
-            className: 'st-devtools-settings-tools',
+        const tools = element('details', {
+            className: 'st-devtools-settings-tools st-devtools-disclosure',
         });
-        const heading = element('h3');
+        const heading = element('summary');
         heading.append(explainedTitle(
             t('storage.toolsTitle'),
             t('storage.toolsDescription'),
@@ -2882,9 +2911,11 @@ export class DevToolsWindow {
             region.setAttribute('aria-hidden', 'true');
         }
         this.settingsOverlay.hidden = false;
+        this.settingsPanel.scrollTop = 0;
         queueMicrotask(() => {
-            this.timelineRetentionLimitInput?.focus();
-            this.timelineRetentionLimitInput?.select();
+            if (this.settingsOverlay && !this.settingsOverlay.hidden) {
+                this.settingsPanel?.focus({ preventScroll: true });
+            }
         });
     }
 
@@ -2933,12 +2964,12 @@ export class DevToolsWindow {
         });
         title.id = 'st-devtools-semantic-consent-title';
         const close = element('button', {
-            className: 'menu_button',
+            className: 'menu_button st-devtools-icon-button',
             title: t('action.cancel'),
             type: 'button',
         });
         close.setAttribute('aria-label', t('action.cancel'));
-        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
+        close.appendChild(closeIcon());
         close.addEventListener('click', () => this.closeSemanticConsent(false));
         header.append(title, close);
 
@@ -2964,7 +2995,7 @@ export class DevToolsWindow {
         });
         cancel.addEventListener('click', () => this.closeSemanticConsent(false));
         const confirm = element('button', {
-            className: 'menu_button',
+            className: 'menu_button st-devtools-primary-button',
             text: t('semantic.consentSend'),
             type: 'button',
         });
@@ -3259,29 +3290,31 @@ export class DevToolsWindow {
         const header = element('header', { className: 'st-devtools-header' });
         const title = element('div', { className: 'st-devtools-title' });
         const titleIcon = element('i', { className: 'fa-solid fa-code' });
+        this.captureStatusRegion = this.buildCaptureStatus();
         title.append(
             titleIcon,
             element('strong', { text: 'ST DevTools' }),
+            this.captureStatusRegion,
             element('small', { text: `v${this.version}` }),
             element('span', { className: 'st-devtools-readonly-badge', text: t('app.readOnly') }),
         );
 
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
         const settings = element('button', {
-            className: 'menu_button',
+            className: 'menu_button st-devtools-icon-button',
             title: t('action.settings'),
             type: 'button',
         });
         settings.setAttribute('aria-label', t('action.settings'));
         settings.appendChild(element('i', { className: 'fa-solid fa-gear' }));
         settings.addEventListener('click', () => this.openSettings());
-        const refresh = element('button', { className: 'menu_button', title: t('action.refresh'), type: 'button' });
+        const refresh = element('button', { className: 'menu_button st-devtools-icon-button', title: t('action.refresh'), type: 'button' });
         refresh.setAttribute('aria-label', t('action.refresh'));
         refresh.appendChild(element('i', { className: 'fa-solid fa-rotate' }));
         refresh.addEventListener('click', () => this.refresh());
-        const close = element('button', { className: 'menu_button', title: t('action.close'), type: 'button' });
+        const close = element('button', { className: 'menu_button st-devtools-icon-button', title: t('action.close'), type: 'button' });
         close.setAttribute('aria-label', t('action.close'));
-        close.appendChild(element('i', { className: 'fa-solid fa-xmark' }));
+        close.appendChild(closeIcon());
         close.addEventListener('click', () => this.close());
         headerActions.append(settings, refresh, close);
         header.append(title, headerActions);
@@ -3293,9 +3326,16 @@ export class DevToolsWindow {
         for (const [groupId, labelKey, , defaultTab] of NAV_GROUPS) {
             const button = element('button', {
                 className: 'st-devtools-primary-tab',
-                text: t(labelKey),
                 type: 'button',
             });
+            const icon = element('i', {
+                className: `fa-solid ${NAV_GROUP_ICONS[groupId]}`,
+            });
+            icon.setAttribute('aria-hidden', 'true');
+            button.append(
+                icon,
+                element('span', { text: t(labelKey) }),
+            );
             button.dataset.navGroup = groupId;
             button.id = `st-devtools-nav-${groupId}`;
             button.addEventListener('click', () => {
@@ -3326,20 +3366,17 @@ export class DevToolsWindow {
 
         this.content = element('main', { className: 'st-devtools-content' });
         this.content.setAttribute('role', 'tabpanel');
-        this.captureStatusRegion = this.buildCaptureStatus();
         this.updateCaptureStatus();
         this.primaryRegions = [
             header,
             primaryTabs,
             tabList,
-            this.captureStatusRegion,
             this.content,
         ];
         this.window.append(
             header,
             primaryTabs,
             tabList,
-            this.captureStatusRegion,
             this.content,
             this.buildSettingsPanel(),
             this.buildSemanticConsentDialog(),
@@ -3361,22 +3398,20 @@ export class DevToolsWindow {
     }
 
     buildCaptureStatus() {
-        const region = element('section', {
+        const region = element('span', {
             className: 'st-devtools-capture-status',
         });
         region.dataset.tourId = 'capture-status';
         region.setAttribute('role', 'status');
         region.setAttribute('aria-live', 'polite');
         region.setAttribute('aria-atomic', 'true');
+        const dot = element('span', {
+            className: 'st-devtools-capture-status-dot',
+            text: '',
+        });
+        dot.setAttribute('aria-hidden', 'true');
         region.append(
-            element('span', {
-                className: 'st-devtools-capture-status-dot',
-                text: '',
-            }),
-            element('strong', {
-                className: 'st-devtools-capture-status-label',
-                text: t('capture.status.label'),
-            }),
+            dot,
             element('span', {
                 className: 'st-devtools-capture-status-copy',
             }),
@@ -3423,16 +3458,22 @@ export class DevToolsWindow {
         const copy = this.captureStatusRegion.querySelector(
             '.st-devtools-capture-status-copy',
         );
+        const phase = this.captureStatus?.phase;
+        const phasedKey = (
+            ['processing', 'failed'].includes(state)
+            && CAPTURE_PIPELINE_PHASES.has(phase)
+        )
+            ? `capture.status.${keySuffix}.${phase}`
+            : null;
+        const description = t(phasedKey ?? `capture.status.${keySuffix}`);
         if (copy) {
-            const phase = this.captureStatus?.phase;
-            const phasedKey = (
-                ['processing', 'failed'].includes(state)
-                && CAPTURE_PIPELINE_PHASES.has(phase)
-            )
-                ? `capture.status.${keySuffix}.${phase}`
-                : null;
-            copy.textContent = t(phasedKey ?? `capture.status.${keySuffix}`);
+            copy.textContent = t(`capture.status.short.${keySuffix}`);
         }
+        const accessibleStatus = t('capture.status.accessible', {
+            status: description,
+        });
+        this.captureStatusRegion.setAttribute('aria-label', accessibleStatus);
+        this.captureStatusRegion.title = accessibleStatus;
     }
 
     renderQuickStart({ showHeading = false } = {}) {
@@ -3445,21 +3486,22 @@ export class DevToolsWindow {
                 text: t('empty.quickStartTitle'),
             }));
         }
-        const steps = element('ol', {
-            className: 'st-devtools-quick-start-steps',
+        const nextStep = element('div', {
+            className: 'st-devtools-quick-start-next',
         });
-        for (const index of [1, 2, 3]) {
-            const step = element('li', {
-                className: 'st-devtools-quick-start-step',
-            });
-            step.append(
-                element('strong', { text: t(`help.step${index}Title`) }),
-                proseElement('p', t(`help.step${index}Description`)),
-            );
-            steps.appendChild(step);
-        }
-        const note = proseElement('p', t('help.semanticNote'));
-        note.className = 'st-devtools-quick-start-note';
+        const nextStepIcon = element('span', {
+            className: 'st-devtools-quick-start-icon',
+        });
+        nextStepIcon.setAttribute('aria-hidden', 'true');
+        nextStepIcon.appendChild(element('i', {
+            className: 'fa-solid fa-paper-plane',
+        }));
+        const nextStepCopy = element('div');
+        nextStepCopy.append(
+            element('strong', { text: t('help.step1Title') }),
+            proseElement('p', t('help.step1Description')),
+        );
+        nextStep.append(nextStepIcon, nextStepCopy);
         const diagnostics = element('details', {
             className: 'st-devtools-empty-diagnostics st-devtools-disclosure',
         });
@@ -3467,7 +3509,7 @@ export class DevToolsWindow {
             element('summary', { text: t('help.troubleshootTitle') }),
             proseElement('p', t('help.troubleshootDescription')),
         );
-        section.append(steps, note, diagnostics);
+        section.append(nextStep, diagnostics);
         return section;
     }
 
@@ -4441,7 +4483,7 @@ export class DevToolsWindow {
             className: 'st-devtools-empty-actions',
         });
         const back = element('button', {
-            className: 'menu_button',
+            className: 'menu_button st-devtools-primary-button',
             text: t('action.returnToChat'),
             type: 'button',
         });
@@ -6080,22 +6122,28 @@ export class DevToolsWindow {
         });
         const head = element('thead');
         const headRow = element('tr');
-        headRow.append(
-            element('th', { text: t('diff.changeKinds') }),
-            element('th', { text: t('diff.before') }),
-            element('th', { text: t('diff.after') }),
-        );
+        for (const label of [
+            t('diff.changeKinds'),
+            t('diff.before'),
+            t('diff.after'),
+        ]) {
+            const heading = element('th', { text: label });
+            heading.scope = 'col';
+            headRow.appendChild(heading);
+        }
         head.appendChild(headRow);
         const body = element('tbody');
         for (const change of normalized) {
             const row = element('tr');
-            row.append(
-                element('th', {
-                    text: diffFieldLabel(namespace, change.field),
-                }),
-                element('td', { text: diffValueLabel(change.before) }),
-                element('td', { text: diffValueLabel(change.after) }),
-            );
+            const before = element('td', { text: diffValueLabel(change.before) });
+            before.dataset.label = t('diff.before');
+            const after = element('td', { text: diffValueLabel(change.after) });
+            after.dataset.label = t('diff.after');
+            const field = element('th', {
+                text: diffFieldLabel(namespace, change.field),
+            });
+            field.scope = 'row';
+            row.append(field, before, after);
             body.appendChild(row);
         }
         table.append(head, body);
@@ -9312,6 +9360,38 @@ export class DevToolsWindow {
         }
     }
 
+    enableSemanticInspectorFromRules() {
+        try {
+            const preferences = this.saveUiPreferences({
+                ...this.preferences,
+                semanticInspectorEnabled: true,
+            });
+            this.resetSemanticInspectionForSettingsChange(preferences);
+            if (this.semanticInspectorEnabledInput) {
+                this.semanticInspectorEnabledInput.checked = true;
+            }
+            if (this.semanticConnectionProfileInput) {
+                this.semanticConnectionProfileInput.disabled = false;
+                this.semanticConnectionProfileInput
+                    .closest('.st-devtools-semantic-profile')
+                    ?.classList.remove('is-disabled');
+            }
+            if (this.semanticResponseTokenCapInput) {
+                this.semanticResponseTokenCapInput.disabled = false;
+                this.semanticResponseTokenCapInput
+                    .closest('.st-devtools-semantic-cap')
+                    ?.classList.remove('is-disabled');
+            }
+            globalThis.toastr?.success?.(t('semantic.enabled'), 'ST DevTools');
+            this.render();
+            return true;
+        } catch (error) {
+            console.error('[ST DevTools] Failed to enable semantic inspection.', error);
+            globalThis.toastr?.error?.(t('semantic.enableFailed'), 'ST DevTools');
+            return false;
+        }
+    }
+
     semanticSnapshotSupportsInspection(snapshot) {
         if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
             return false;
@@ -9656,10 +9736,32 @@ export class DevToolsWindow {
             return section;
         }
         if (!this.preferences.semanticInspectorEnabled) {
-            section.appendChild(proseElement(
-                'p',
-                t('semantic.disabledDescription'),
-            ));
+            const enableCard = element('div', {
+                className: 'st-devtools-semantic-enable-card',
+            });
+            const copy = element('div');
+            copy.append(
+                proseElement('p', t('semantic.disabledDescription')),
+                proseElement('small', t('semantic.enableHint')),
+            );
+            const enable = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: t('semantic.enable'),
+                type: 'button',
+            });
+            const status = element('p', {
+                className: 'st-devtools-semantic-enable-status',
+            });
+            status.setAttribute('aria-live', 'polite');
+            enable.addEventListener('click', () => {
+                const enabled = this.enableSemanticInspectorFromRules();
+                if (!enabled) {
+                    status.textContent = t('semantic.enableFailed');
+                    status.setAttribute('role', 'alert');
+                }
+            });
+            enableCard.append(copy, enable, status);
+            section.appendChild(enableCard);
             return section;
         }
         if (
@@ -9873,6 +9975,10 @@ export class DevToolsWindow {
             className: 'st-devtools-semantic-disclosure st-devtools-disclosure',
         });
         details.dataset.tourId = 'semantic-inspector';
+        details.open = this.semanticInspectorOpen;
+        details.addEventListener('toggle', () => {
+            this.semanticInspectorOpen = details.open;
+        });
         details.appendChild(element('summary', {
             text: t('rules.semanticDisclosureTitle'),
         }));
