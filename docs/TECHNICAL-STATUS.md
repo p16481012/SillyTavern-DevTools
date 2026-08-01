@@ -1,4 +1,14 @@
-# v0.12.0 기술 구현 현황
+# v0.12.1 기술 구현 현황
+
+## v0.12.1 단층 하단 내비게이션 교정
+
+- v0.12.0의 4개 그룹·조건부 하위 탭·그룹별 마지막 탭 상태를 제거하고 여섯 실제 renderer를 `전송 프롬프트`·`규칙 검사`·`기록`·`변경 비교`·`요청 상세`·`검색` 하단 tablist에 일대일로 연결함
+- 선택 상태·roving `tabindex`·좌우 화살표·Home·End 이동을 여섯 기능 전체에서 하나의 계약으로 통일하고 기존 `last-tab` 값은 실제 탭 ID 그대로 재사용함
+- 패널을 `헤더 / 스크롤 콘텐츠 / 고정 하단 내비게이션` 3행으로 구성하고 각 콘텐츠 화면에 실제 기능 이름 제목과 hover·focus·click 설명 tooltip을 추가함
+- `전송 프롬프트`의 첫 블록은 총 토큰·컨텍스트 사용률 progress·남은 컨텍스트·provider/model·스냅샷 선택기를 합친 단일 요청 요약 카드로 구성함
+- 700px 이하에서는 `100vw`·`100dvh` 앱 셸과 하단 safe area를 사용함. 모바일은 저장된 데스크톱 geometry를 복원하지 않고 geometry를 기록하지 않으며 pointer drag를 시작하지 않음
+- 430px 이하 헤더 action의 터치 영역을 44px로 고정하고 상단 safe area를 반영함. 패널의 더 구체적인 form selector가 뒤에 선언된 호스트 `!important` 배경·색 규칙보다 우선함
+- 데스크톱 geometry·resize·drag, 설정 모달, 캡처·저장·개인정보 모드와 Rule Inspector·선택적 AI의 대상 선택·미리보기·호출별 동의 경계는 변경하지 않음
 
 ## v0.12.0 초보자 중심 UI/UX 개편
 
@@ -166,7 +176,8 @@
 - nonce gate identity-exact consume·TTL·capacity·exact duplicate 억제, explicit-ID 정상 요청 보존과 모호한 id-less 동시성 fail-closed
 - tokenizer 미종료 1회 probe·로컬 추정 저장, privacy/storage 미종료 timeout과 모든 캡처 terminal 상태
 - Connection Manager 프로필 표시 필드·opaque ID 저장, Chat/Text 프로필 라우팅, 미지원·소실 시 현재 연결과 profile 요청 실패의 무재시도
-- 네 작업 탭 아이콘·헤더 상태 점·좌측 정렬 제목·작은 tooltip과 검사 탭 inline AI opt-in의 접근성 계약
+- 여섯 기능 하단 tablist·헤더 상태 점·화면 제목 tooltip과 규칙 검사 화면 inline AI opt-in의 접근성 계약
+- `100vw`·`100dvh` 모바일 앱 셸, safe area와 모바일 geometry 복원·저장·drag 방지
 - 내부 밝은/어두운 색 토큰과 공격적인 호스트 테마 격리, 430px 프롬프트 비교 표와 설정 포커스·데이터 도구 정보 구조
 
 ### 릴리스 전 결정적 UI 샌드박스 검토 대상
@@ -179,7 +190,7 @@
 - 실제 `SemanticInspector`·strict validator·memory cache에 결정적 fake adapter를 주입한 AI preview·동의·성공·오류·취소
 - `semanticCore=true`, validated result count와 provider/network call 0회 dataset으로 샌드박스 경계 확인
 - 헤더 새로고침·설정·닫기 세 버튼, 좌측 정렬 disclosure와 여러 SillyTavern 테마·430px에서 패널 control 폭·writing-mode 방어
-- 네 작업 탭 아이콘과 상태 점, 설정의 상단 닫기·펼쳐진 자주 쓰는 항목·단일 데이터 도구 진입점, 모바일 간결 비교 표
+- 여섯 기능 고정 하단 내비게이션과 상태 점·기능별 제목, 설정의 상단 닫기·펼쳐진 자주 쓰는 항목·단일 데이터 도구 진입점, 모바일 간결 비교 표
 
 샌드박스는 가짜 저장 backend와 결정적 semantic adapter를 사용합니다. Semantic Inspector 코어의 closure·preview·strict response/evidence 검증·memory cache는 실제 구현을 통과하지만 SillyTavern의 실제 `generateRaw`, 사용자의 IndexedDB, 브라우저 비공개 모드와 provider 응답 품질·과금은 대신 검증하지 않습니다.
 
@@ -250,12 +261,12 @@
 
 - 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
 - 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- v0.12.0의 네 작업 탐색·상태 점·설정 단순화·모바일 비교 표에 대한 실사용 피드백 수집과 UI/UX 보완
+- v0.12.1의 단층 하단 탐색·모바일 앱 셸·상태 점·설정 단순화·모바일 비교 표에 대한 실사용 피드백 수집과 UI/UX 보완
 
-세부 기능은 v0.12.0 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.12.1 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.12.0의 UI 정보 구조와 실제 OpenAI·TextGen 요청 캡처·선저장·재읽기 검증을 사용자 체크리스트로 확인합니다.
+1. v0.12.1의 단층 정보 구조와 실제 OpenAI·TextGen 요청 캡처·선저장·재읽기 검증을 사용자 체크리스트로 확인합니다.
 2. v0.13.0에서 AI 평가 corpus·품질 회귀·provider 호환성과 실사용 UI/UX를 보강합니다.
 3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.

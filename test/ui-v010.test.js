@@ -38,14 +38,45 @@ function createUi(store = {}) {
 function fakeContent() {
     return {
         children: [],
+        attributes: new Map(),
         id: '',
-        setAttribute() {},
-        replaceChildren() {
-            this.children = [];
+        scrollTop: 0,
+        setAttribute(name, value) {
+            this.attributes.set(name, String(value));
+        },
+        getAttribute(name) {
+            return this.attributes.get(name) ?? null;
+        },
+        replaceChildren(...values) {
+            this.children = [...values];
         },
         appendChild(value) {
             this.children.push(value);
             return value;
+        },
+    };
+}
+
+function fakeAppTab(id) {
+    const classes = new Set();
+    const attributes = new Map();
+    return {
+        dataset: { tab: id },
+        tabIndex: -1,
+        classList: {
+            toggle(name, force) {
+                if (force) classes.add(name);
+                else classes.delete(name);
+            },
+            contains(name) {
+                return classes.has(name);
+            },
+        },
+        setAttribute(name, value) {
+            attributes.set(name, String(value));
+        },
+        getAttribute(name) {
+            return attributes.get(name) ?? null;
         },
     };
 }
@@ -82,11 +113,19 @@ function privateSnapshot(mode) {
 
 test('metadata and redacted snapshots are gated before unavailable tab renderers run', () => {
     const ui = createUi();
+    const limitedNotices = [];
     ui.content = fakeContent();
     ui.window = { querySelectorAll: () => [] };
+    ui.renderScreenHeader = (tab) => ({ kind: 'screen-header', tab });
     ui.renderSnapshotPrivacyNotice = () => ({ kind: 'privacy-notice' });
-    ui.renderMetadataOnlySnapshot = () => ({ kind: 'metadata-limited' });
-    ui.renderRedactedLimitedFeature = () => ({ kind: 'redacted-limited' });
+    ui.renderMetadataOnlySnapshot = (_snapshot, notice) => {
+        limitedNotices.push(notice?.kind);
+        return { kind: 'metadata-limited' };
+    };
+    ui.renderRedactedLimitedFeature = (_snapshot, notice) => {
+        limitedNotices.push(notice?.kind);
+        return { kind: 'redacted-limited' };
+    };
     ui.renderTimeline = () => ({ kind: 'timeline' });
     const forbidden = () => {
         throw new Error('private snapshot reached an unavailable renderer');
@@ -105,14 +144,14 @@ test('metadata and redacted snapshots are gated before unavailable tab renderers
         ui.render();
         assert.deepEqual(
             ui.content.children.map(({ kind }) => kind),
-            ['privacy-notice', 'metadata-limited'],
+            ['screen-header', 'metadata-limited'],
         );
     }
     ui.activeTab = 'timeline';
     ui.render();
     assert.deepEqual(
         ui.content.children.map(({ kind }) => kind),
-        ['privacy-notice', 'timeline'],
+        ['screen-header', 'privacy-notice', 'timeline'],
     );
 
     const redacted = privateSnapshot('redacted');
@@ -123,8 +162,66 @@ test('metadata and redacted snapshots are gated before unavailable tab renderers
         ui.render();
         assert.deepEqual(
             ui.content.children.map(({ kind }) => kind),
-            ['privacy-notice', 'redacted-limited'],
+            ['screen-header', 'redacted-limited'],
         );
+    }
+    assert.deepEqual(
+        limitedNotices,
+        Array(7).fill('privacy-notice'),
+    );
+});
+
+test('render keeps exactly one of the six direct app tabs selected', () => {
+    const ids = ['explorer', 'rules', 'timeline', 'diff', 'context', 'search'];
+    const ui = createUi();
+    const content = fakeContent();
+    const tabs = ids.map(fakeAppTab);
+    const snapshot = privateSnapshot('full');
+    ui.content = content;
+    ui.window = {
+        querySelectorAll(selector) {
+            assert.equal(selector, '.st-devtools-app-nav-item');
+            return tabs;
+        },
+    };
+    ui.timeline = [snapshot];
+    ui.selectedId = snapshot.id;
+    ui.renderScreenHeader = (id) => ({ kind: 'screen-header', id });
+    ui.renderExplorer = () => ({ kind: 'explorer' });
+    ui.renderRules = () => ({ kind: 'rules' });
+    ui.renderTimeline = () => ({ kind: 'timeline' });
+    ui.renderDiff = () => ({ kind: 'diff' });
+    ui.renderContext = () => ({ kind: 'context' });
+    ui.renderSearch = () => ({ kind: 'search' });
+
+    for (const id of ids) {
+        ui.activeTab = id;
+        ui.render();
+
+        assert.deepEqual(
+            content.children.map(({ kind }) => kind),
+            ['screen-header', id],
+        );
+        assert.equal(content.id, 'st-devtools-panel');
+        assert.equal(
+            content.getAttribute('aria-labelledby'),
+            `st-devtools-tab-${id}`,
+        );
+        assert.equal(
+            tabs.filter((tab) => tab.classList.contains('active')).length,
+            1,
+        );
+        assert.equal(
+            tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true').length,
+            1,
+        );
+        assert.equal(tabs.filter((tab) => tab.tabIndex === 0).length, 1);
+        for (const tab of tabs) {
+            const selected = tab.dataset.tab === id;
+            assert.equal(tab.classList.contains('active'), selected);
+            assert.equal(tab.getAttribute('aria-selected'), String(selected));
+            assert.equal(tab.tabIndex, selected ? 0 : -1);
+        }
     }
 });
 

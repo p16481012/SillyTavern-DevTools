@@ -72,7 +72,7 @@
     resize: both;
     overflow: hidden;
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
     border: 1px solid var(--st-devtools-border);
     border-radius: var(--st-devtools-radius-lg);
     background: var(--st-devtools-panel-bg);
@@ -207,6 +207,21 @@
     color: var(--st-devtools-text) !important;
 }
 
+/* Outrank host themes that place later !important form rules on body classes. */
+.st-devtools-overlay .st-devtools-window :where(
+    input:not([type='checkbox']):not([type='radio']):not([type='range']),
+    select,
+    textarea
+) {
+    margin: 0 !important;
+    border-color: var(--st-devtools-border) !important;
+    border-radius: var(--st-devtools-radius-sm) !important;
+    background: var(--st-devtools-surface) !important;
+    box-shadow: none !important;
+    filter: none !important;
+    color: var(--st-devtools-text) !important;
+}
+
 .st-devtools-window :where(input[type='checkbox'], input[type='radio']) {
     flex: 0 0 1.1rem !important;
     width: 1.1rem !important;
@@ -226,6 +241,21 @@
 }
 
 .st-devtools-window :where(input[type='checkbox'], input[type='radio'])::before {
+    display: none !important;
+    content: none !important;
+}
+
+.st-devtools-overlay .st-devtools-window
+:where(input[type='checkbox'], input[type='radio']) {
+    appearance: auto !important;
+    -webkit-appearance: auto !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    filter: none !important;
+}
+
+.st-devtools-overlay .st-devtools-window
+:where(input[type='checkbox'], input[type='radio'])::before {
     display: none !important;
     content: none !important;
 }
@@ -851,169 +881,76 @@
     overflow-wrap: break-word;
 }
 
-.st-devtools-tabs {
-    display: flex;
-    gap: 0.3rem;
-    overflow-x: auto;
-    padding: 0.35rem;
-    border: 0;
-    border-radius: var(--st-devtools-radius-sm);
-    background: var(--st-devtools-surface-muted);
+.st-devtools-app-nav {
+    position: relative;
+    z-index: 4;
+    display: grid !important;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.25rem;
+    min-width: 0;
+    padding: 0.5rem max(0.75rem, calc((100% - 760px) / 2));
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-surface);
+    box-shadow: 0 -10px 28px rgb(0 0 0 / 8%);
 }
 
-.st-devtools-tab {
-    appearance: none;
-    border: 0;
-    border-radius: 8px;
-    padding: 0.55rem 0.8rem;
-    background: transparent;
-    color: var(--st-devtools-text-muted);
+.st-devtools-overlay .st-devtools-window .st-devtools-app-nav-item {
+    display: flex !important;
+    flex: 1 1 0 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 52px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    margin: 0 !important;
+    padding: 0.55rem 0.45rem !important;
+    appearance: none !important;
+    border: 0 !important;
+    border-radius: var(--st-devtools-radius-sm) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--st-devtools-text-muted) !important;
     cursor: pointer;
-    outline: 0;
-    box-shadow: none;
-    font-weight: 650;
-    white-space: nowrap;
+    font: inherit !important;
+    font-weight: 650 !important;
+    line-height: 1.15;
+    text-align: center !important;
+    text-shadow: none !important;
+    white-space: normal;
+    word-break: keep-all;
+    writing-mode: horizontal-tb !important;
 }
 
-.st-devtools-tab:hover,
-.st-devtools-tab:focus {
-    border: 0;
-    outline: 0;
-    box-shadow: none;
+.st-devtools-app-nav-item > i {
+    flex: none;
+    color: currentColor !important;
+    font-size: 1rem;
 }
 
-.st-devtools-tab.active {
-    background: var(--st-devtools-surface-raised);
-    color: var(--st-devtools-primary);
-    box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+.st-devtools-app-nav-item > span {
+    min-width: 0;
+}
+
+.st-devtools-overlay .st-devtools-window .st-devtools-app-nav-item.active,
+.st-devtools-overlay .st-devtools-window
+.st-devtools-app-nav-item[aria-selected='true'] {
+    background: var(--st-devtools-primary-soft) !important;
+    color: var(--st-devtools-primary) !important;
 }
 
 @media (hover: hover) {
-    .st-devtools-tab:not(.active):hover {
-        background: color-mix(
-            in srgb,
-            var(--st-devtools-hover) 45%,
-            var(--st-devtools-surface)
-        );
+    .st-devtools-overlay .st-devtools-window
+    .st-devtools-app-nav-item:not(.active):hover {
+        background: var(--st-devtools-hover) !important;
+        color: var(--st-devtools-text) !important;
     }
 }
 
-.st-devtools-tab:focus-visible {
+.st-devtools-app-nav-item:focus-visible {
     outline: 2px solid var(--st-devtools-focus);
     outline-offset: -2px;
-}
-
-.st-devtools-primary-tabs {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.35rem;
-    min-width: 0;
-    overflow: visible;
-    padding: 0.55rem 0.7rem;
-    border-bottom: 1px solid var(--st-devtools-border);
-    background: var(--st-devtools-surface);
-}
-
-.st-devtools-primary-tab {
-    display: inline-flex;
-    box-sizing: border-box;
-    min-width: 0;
-    min-height: 44px;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 0.6rem 0.55rem;
-    appearance: none;
-    border: 0;
-    border-radius: var(--st-devtools-radius-sm);
-    background: transparent;
-    box-shadow: none;
-    color: var(--st-devtools-text-muted);
-    cursor: pointer;
-    font: inherit;
-    font-weight: 650;
-    line-height: 1.25;
-    overflow-wrap: normal;
-    text-align: center;
-    white-space: normal;
-    word-break: keep-all;
-}
-
-.st-devtools-primary-tab > i {
-    flex: none;
-    color: currentColor;
-    font-size: 0.9rem;
-}
-
-.st-devtools-primary-tab > span {
-    min-width: 0;
-}
-
-.st-devtools-primary-tab:hover {
-    background: var(--st-devtools-hover);
-    color: var(--st-devtools-text);
-}
-
-.st-devtools-primary-tab.active,
-.st-devtools-primary-tab[aria-selected='true'] {
-    background: var(--st-devtools-primary-soft);
-    color: var(--st-devtools-primary);
-}
-
-.st-devtools-primary-tab:focus-visible,
-.st-devtools-secondary-tabs > button:focus-visible {
-    outline: 2px solid var(--st-devtools-focus);
-    outline-offset: -2px;
-}
-
-.st-devtools-secondary-tabs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.3rem;
-    min-width: 0;
-    overflow-x: hidden;
-    margin: 0.55rem 0.7rem 0;
-    padding: 0.3rem;
-    border-bottom: 1px solid var(--st-devtools-border);
-    border: 0;
-    border-radius: var(--st-devtools-radius-sm);
-    background: var(--st-devtools-surface-muted);
-}
-
-.st-devtools-secondary-tabs[hidden] {
-    display: none;
-}
-
-.st-devtools-secondary-tabs > button {
-    box-sizing: border-box;
-    min-width: 0;
-    min-height: 44px;
-    padding: 0.5rem 0.65rem;
-    appearance: none;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    box-shadow: none;
-    color: var(--st-devtools-text-muted);
-    cursor: pointer;
-    font: inherit;
-    line-height: 1.25;
-    overflow-wrap: normal;
-    text-align: center;
-    white-space: normal;
-    word-break: keep-all;
-}
-
-.st-devtools-secondary-tabs > button:hover {
-    background: var(--st-devtools-hover);
-}
-
-.st-devtools-secondary-tabs > button.active,
-.st-devtools-secondary-tabs > button[aria-selected='true'] {
-    background: var(--st-devtools-surface-raised);
-    color: var(--st-devtools-primary);
-    box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
-    font-weight: 700;
 }
 
 .st-devtools-content {
@@ -1022,15 +959,39 @@
     background: var(--st-devtools-panel-bg);
 }
 
+.st-devtools-screen-header {
+    box-sizing: border-box;
+    width: min(760px, 100%);
+    margin: 0 auto;
+    padding: 1.3rem 1rem 0.35rem;
+}
+
+.st-devtools-screen-header h1 {
+    margin: 0;
+}
+
+.st-devtools-screen-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.st-devtools-screen-title h1 {
+    color: var(--st-devtools-text);
+    font-size: clamp(1.3rem, 2.4vw, 1.65rem);
+    line-height: 1.25;
+    letter-spacing: -0.025em;
+}
+
 .st-devtools-page {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
-    min-height: 100%;
+    min-height: auto;
     width: min(760px, 100%);
     margin: 0 auto;
-    padding: 1rem;
+    padding: 0.55rem 1rem 1.5rem;
 }
 
 .st-devtools-section-intro {
@@ -1553,12 +1514,122 @@
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
     gap: 0.6rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-surface);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 5%);
+}
+
+.st-devtools-picker-label {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
 }
 
 .st-devtools-picker select,
 .st-devtools-search-controls input[type='search'] {
     min-width: 0;
     width: 100%;
+}
+
+.st-devtools-overview-card {
+    display: grid;
+    gap: 0.9rem;
+    min-width: 0;
+    padding: 1.05rem;
+    border: 0;
+    border-radius: var(--st-devtools-radius-lg);
+    background: linear-gradient(145deg, #1b64da 0%, #3279e6 100%);
+    box-shadow: 0 12px 30px rgb(27 100 218 / 24%);
+    color: #ffffff;
+}
+
+.st-devtools-overview-headline {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.st-devtools-overview-summary {
+    display: grid;
+    min-width: 0;
+}
+
+.st-devtools-overview-kicker,
+.st-devtools-overview-total-label,
+.st-devtools-overview-model,
+.st-devtools-overview-progress-labels,
+.st-devtools-overview-remaining > span {
+    color: rgb(255 255 255 / 82%);
+}
+
+.st-devtools-overview-kicker,
+.st-devtools-overview-total-label,
+.st-devtools-overview-model {
+    font-size: 0.78rem;
+}
+
+.st-devtools-overview-total {
+    margin-block: 0.1rem;
+    font-size: clamp(1.8rem, 5vw, 2.35rem);
+    line-height: 1;
+    letter-spacing: -0.035em;
+}
+
+.st-devtools-overview-model {
+    min-width: 0;
+    max-width: 55%;
+    padding-top: 0.15rem;
+    overflow-wrap: break-word;
+    text-align: right;
+}
+
+.st-devtools-overview-progress-group {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.st-devtools-overview-progress-labels,
+.st-devtools-overview-remaining {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.78rem;
+}
+
+.st-devtools-overview-progress-labels strong,
+.st-devtools-overview-remaining strong {
+    color: #ffffff;
+    font-size: 0.85rem;
+}
+
+.st-devtools-overview-progress {
+    height: 0.5rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 24%);
+}
+
+.st-devtools-overview-progress-value {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #ffffff;
+}
+
+.st-devtools-overview-card .st-devtools-picker {
+    border-color: rgb(255 255 255 / 30%);
+    background: rgb(255 255 255 / 12%);
+    box-shadow: none;
+}
+
+.st-devtools-overview-card .st-devtools-picker-label {
+    color: rgb(255 255 255 / 82%);
 }
 
 .st-devtools-source-list,
@@ -4222,35 +4293,30 @@
 
 @media (max-width: 700px) {
     .st-devtools-window {
-        left: 2vw !important;
-        top: 4vh !important;
-        width: 96vw !important;
-        height: 90vh !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        height: 100dvh !important;
         min-width: 0;
         transform: none;
         resize: none;
+        border: 0;
+        border-radius: 0;
     }
 
-    .st-devtools-primary-tabs {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 0.15rem;
-        overflow-x: hidden;
-        padding-inline: 0.35rem;
+    .st-devtools-app-nav {
+        gap: 0.1rem;
+        padding: 0.4rem 0.25rem max(0.4rem, env(safe-area-inset-bottom));
     }
 
-    .st-devtools-primary-tab {
-        min-height: 44px;
-        padding-inline: 0.25rem;
-        font-size: 0.84rem;
-    }
-
-    .st-devtools-secondary-tabs {
-        gap: 0.3rem;
-        padding: 0.4rem;
-    }
-
-    .st-devtools-secondary-tabs > button {
-        min-height: 44px;
+    .st-devtools-overlay .st-devtools-window .st-devtools-app-nav-item {
+        min-height: 60px;
+        flex-direction: column;
+        gap: 0.2rem;
+        padding: 0.35rem 0.1rem !important;
+        border-radius: 9px !important;
+        font-size: 0.7rem !important;
     }
 
     .st-devtools-capture-status {
@@ -4403,6 +4469,7 @@
 @media (max-width: 430px) {
     .st-devtools-header {
         gap: 0.35rem;
+        padding-top: max(0.65rem, env(safe-area-inset-top));
         padding-inline: 0.55rem;
     }
 
@@ -4420,24 +4487,37 @@
     }
 
     .st-devtools-header-actions .menu_button {
-        width: 2rem !important;
-        min-width: 2rem !important;
-        max-width: 2rem !important;
-        height: 2rem !important;
-        min-height: 2rem !important;
-        max-height: 2rem !important;
+        width: 44px !important;
+        min-width: 44px !important;
+        max-width: 44px !important;
+        height: 44px !important;
+        min-height: 44px !important;
+        max-height: 44px !important;
     }
 
     .st-devtools-overlay .st-devtools-window .st-devtools-header-actions
     .st-devtools-icon-button {
-        flex-basis: 2rem !important;
-        width: 2rem !important;
-        min-width: 2rem !important;
-        max-width: 2rem !important;
+        flex-basis: 44px !important;
+        width: 44px !important;
+        min-width: 44px !important;
+        max-width: 44px !important;
     }
 
-    .st-devtools-primary-tab {
-        font-size: 0.8rem;
+    .st-devtools-screen-header {
+        padding: 1.05rem 0.9rem 0.3rem;
+    }
+
+    .st-devtools-page {
+        padding: 0.5rem 0.9rem 1.25rem;
+    }
+
+    .st-devtools-overview-headline {
+        gap: 0.7rem;
+    }
+
+    .st-devtools-overview-card .st-devtools-picker {
+        grid-template-columns: 1fr;
+        gap: 0.35rem;
     }
 
     .st-devtools-capture-status-copy {

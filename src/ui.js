@@ -169,25 +169,13 @@ const PRICING_RATE_FIELDS = Object.freeze([
     'cachedInputPerMillion',
 ]);
 const TABS = [
-    ['explorer', 'tab.explorer'],
-    ['rules', 'tab.rules'],
-    ['timeline', 'tab.timeline'],
-    ['diff', 'tab.diff'],
-    ['search', 'tab.search'],
-    ['context', 'tab.context'],
+    ['explorer', 'tab.explorer', 'nav.short.explorer', 'fa-layer-group'],
+    ['rules', 'tab.rules', 'nav.short.rules', 'fa-shield-halved'],
+    ['timeline', 'tab.timeline', 'nav.short.timeline', 'fa-clock-rotate-left'],
+    ['diff', 'tab.diff', 'nav.short.diff', 'fa-code-compare'],
+    ['context', 'tab.context', 'nav.short.context', 'fa-file-lines'],
+    ['search', 'tab.search', 'nav.short.search', 'fa-magnifying-glass'],
 ];
-const NAV_GROUPS = [
-    ['prompt', 'nav.prompt', ['explorer'], 'explorer'],
-    ['inspect', 'nav.inspect', ['rules'], 'rules'],
-    ['history', 'nav.history', ['timeline', 'diff'], 'timeline'],
-    ['tools', 'nav.tools', ['search', 'context'], 'search'],
-];
-const NAV_GROUP_ICONS = Object.freeze({
-    prompt: 'fa-layer-group',
-    inspect: 'fa-shield-halved',
-    history: 'fa-clock-rotate-left',
-    tools: 'fa-wand-magic-sparkles',
-});
 const CAPTURE_STATUS_STATES = new Set([
     'waiting',
     'capturing',
@@ -209,10 +197,6 @@ const CAPTURE_PIPELINE_ERROR_KEYS = new Map([
 ]);
 let tooltipSequence = 0;
 let fieldSequence = 0;
-
-function navigationGroupForTab(tabId) {
-    return NAV_GROUPS.find(([, , tabs]) => tabs.includes(tabId)) ?? NAV_GROUPS[0];
-}
 
 function capturePipelineErrorMessage(detail) {
     const code = typeof detail?.error?.code === 'string'
@@ -777,17 +761,11 @@ export class DevToolsWindow {
         this.pendingPricingOverrides = null;
         this.store.setMaxSnapshotsPerChat?.(this.preferences.timelineRetentionLimit);
         this.activeTab = localStorage.getItem(LAST_TAB_KEY) || 'explorer';
-        this.lastTabByGroup = new Map(
-            NAV_GROUPS.map(([groupId, , , defaultTab]) => [groupId, defaultTab]),
-        );
-        const initialGroup = navigationGroupForTab(this.activeTab);
-        this.lastTabByGroup.set(initialGroup[0], this.activeTab);
         this.captureStatus = {
             state: 'waiting',
             at: Date.now(),
         };
         this.captureStatusRegion = null;
-        this.secondaryTabList = null;
         this.ruleSettings = this.loadRuleSettings();
         this.ruleSettingsOpen = false;
         this.comparisonPolicySettings = this.loadComparisonPolicySettings();
@@ -3257,7 +3235,7 @@ export class DevToolsWindow {
         this.syncOpaqueTheme();
         this.root.hidden = false;
         await this.refresh();
-        this.activeTabButton()?.focus();
+        this.window?.focus({ preventScroll: true });
     }
 
     close() {
@@ -3290,6 +3268,7 @@ export class DevToolsWindow {
         const header = element('header', { className: 'st-devtools-header' });
         const title = element('div', { className: 'st-devtools-title' });
         const titleIcon = element('i', { className: 'fa-solid fa-code' });
+        titleIcon.setAttribute('aria-hidden', 'true');
         this.captureStatusRegion = this.buildCaptureStatus();
         title.append(
             titleIcon,
@@ -3306,11 +3285,15 @@ export class DevToolsWindow {
             type: 'button',
         });
         settings.setAttribute('aria-label', t('action.settings'));
-        settings.appendChild(element('i', { className: 'fa-solid fa-gear' }));
+        const settingsIcon = element('i', { className: 'fa-solid fa-gear' });
+        settingsIcon.setAttribute('aria-hidden', 'true');
+        settings.appendChild(settingsIcon);
         settings.addEventListener('click', () => this.openSettings());
         const refresh = element('button', { className: 'menu_button st-devtools-icon-button', title: t('action.refresh'), type: 'button' });
         refresh.setAttribute('aria-label', t('action.refresh'));
-        refresh.appendChild(element('i', { className: 'fa-solid fa-rotate' }));
+        const refreshIcon = element('i', { className: 'fa-solid fa-rotate' });
+        refreshIcon.setAttribute('aria-hidden', 'true');
+        refresh.appendChild(refreshIcon);
         refresh.addEventListener('click', () => this.refresh());
         const close = element('button', { className: 'menu_button st-devtools-icon-button', title: t('action.close'), type: 'button' });
         close.setAttribute('aria-label', t('action.close'));
@@ -3319,46 +3302,30 @@ export class DevToolsWindow {
         headerActions.append(settings, refresh, close);
         header.append(title, headerActions);
 
-        const primaryTabs = element('nav', {
-            className: 'st-devtools-primary-tabs',
-        });
-        primaryTabs.setAttribute('aria-label', t('nav.label'));
-        for (const [groupId, labelKey, , defaultTab] of NAV_GROUPS) {
-            const button = element('button', {
-                className: 'st-devtools-primary-tab',
-                type: 'button',
-            });
-            const icon = element('i', {
-                className: `fa-solid ${NAV_GROUP_ICONS[groupId]}`,
-            });
-            icon.setAttribute('aria-hidden', 'true');
-            button.append(
-                icon,
-                element('span', { text: t(labelKey) }),
-            );
-            button.dataset.navGroup = groupId;
-            button.id = `st-devtools-nav-${groupId}`;
-            button.addEventListener('click', () => {
-                this.selectTab(this.lastTabByGroup.get(groupId) ?? defaultTab);
-            });
-            button.addEventListener('keydown', (event) => {
-                this.handlePrimaryTabKeydown(event, groupId);
-            });
-            primaryTabs.appendChild(button);
-        }
-
         const tabList = element('nav', {
-            className: 'st-devtools-tabs st-devtools-secondary-tabs',
+            className: 'st-devtools-app-nav',
         });
         tabList.setAttribute('role', 'tablist');
-        tabList.setAttribute('aria-label', t('nav.secondaryLabel'));
-        this.secondaryTabList = tabList;
-        for (const [id, labelKey] of TABS) {
-            const button = element('button', { className: 'st-devtools-tab', text: t(labelKey), type: 'button' });
+        tabList.setAttribute('aria-label', t('nav.label'));
+        for (const [id, labelKey, shortLabelKey, iconClass] of TABS) {
+            const button = element('button', {
+                className: 'st-devtools-app-nav-item',
+                title: t(labelKey),
+                type: 'button',
+            });
             button.dataset.tab = id;
             button.id = this.tabElementId(id);
             button.setAttribute('role', 'tab');
             button.setAttribute('aria-controls', this.panelElementId(id));
+            button.setAttribute('aria-label', t(labelKey));
+            const icon = element('i', {
+                className: `fa-solid ${iconClass}`,
+            });
+            icon.setAttribute('aria-hidden', 'true');
+            button.append(
+                icon,
+                element('span', { text: t(shortLabelKey) }),
+            );
             button.addEventListener('click', () => this.selectTab(id));
             button.addEventListener('keydown', (event) => this.handleTabKeydown(event, id));
             tabList.appendChild(button);
@@ -3369,15 +3336,13 @@ export class DevToolsWindow {
         this.updateCaptureStatus();
         this.primaryRegions = [
             header,
-            primaryTabs,
-            tabList,
             this.content,
+            tabList,
         ];
         this.window.append(
             header,
-            primaryTabs,
-            tabList,
             this.content,
+            tabList,
             this.buildSettingsPanel(),
             this.buildSemanticConsentDialog(),
         );
@@ -3476,6 +3441,23 @@ export class DevToolsWindow {
         this.captureStatusRegion.title = accessibleStatus;
     }
 
+    renderScreenHeader(tabId) {
+        const tab = TABS.find(([id]) => id === tabId) ?? TABS[0];
+        const header = element('header', {
+            className: 'st-devtools-screen-header',
+        });
+        header.appendChild(explainedTitle(
+            t(tab[1]),
+            t(`screen.${tab[0]}.description`),
+            {
+                tag: 'div',
+                titleTag: 'h1',
+                className: 'st-devtools-screen-title',
+            },
+        ));
+        return header;
+    }
+
     renderQuickStart({ showHeading = false } = {}) {
         const section = element('section', {
             className: 'st-devtools-quick-start',
@@ -3532,6 +3514,7 @@ export class DevToolsWindow {
     }
 
     restoreGeometry() {
+        if (this.usesCompactLayout()) return;
         try {
             const geometry = JSON.parse(localStorage.getItem(GEOMETRY_KEY));
             if (!geometry) return;
@@ -3566,6 +3549,7 @@ export class DevToolsWindow {
 
     observeGeometry() {
         const save = () => {
+            if (this.usesCompactLayout()) return;
             const rect = this.window.getBoundingClientRect();
             localStorage.setItem(GEOMETRY_KEY, JSON.stringify({
                 width: Math.round(rect.width),
@@ -3583,6 +3567,7 @@ export class DevToolsWindow {
     enableDragging(handle) {
         let drag = null;
         handle.addEventListener('pointerdown', (event) => {
+            if (this.usesCompactLayout()) return;
             if (event.target.closest('button')) return;
             const rect = this.window.getBoundingClientRect();
             drag = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
@@ -3603,6 +3588,13 @@ export class DevToolsWindow {
         };
         handle.addEventListener('pointerup', endDrag);
         handle.addEventListener('pointercancel', endDrag);
+    }
+
+    usesCompactLayout() {
+        if (typeof window.matchMedia === 'function') {
+            return window.matchMedia('(max-width: 700px)').matches;
+        }
+        return Number(window.innerWidth) <= 700;
     }
 
     async onSnapshot(snapshot) {
@@ -3993,14 +3985,8 @@ export class DevToolsWindow {
     }
 
     activeTabButton() {
-        const [groupId, , tabs] = navigationGroupForTab(this.activeTab);
-        if (tabs.length <= 1) {
-            return this.window?.querySelector(
-                `.st-devtools-primary-tab[data-nav-group="${groupId}"]`,
-            ) ?? null;
-        }
         return this.window?.querySelector(
-            `.st-devtools-tab[data-tab="${this.activeTab}"]`,
+            `.st-devtools-app-nav-item[data-tab="${this.activeTab}"]`,
         ) ?? null;
     }
 
@@ -4256,7 +4242,7 @@ export class DevToolsWindow {
     }
 
     handleTabKeydown(event, id) {
-        const [, , ids] = navigationGroupForTab(id);
+        const ids = TABS.map(([tabId]) => tabId);
         const currentIndex = ids.indexOf(id);
         let nextIndex = null;
         if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ids.length;
@@ -4268,29 +4254,10 @@ export class DevToolsWindow {
         this.selectTab(ids[nextIndex], { focus: true });
     }
 
-    handlePrimaryTabKeydown(event, groupId) {
-        const ids = NAV_GROUPS.map(([id]) => id);
-        const currentIndex = ids.indexOf(groupId);
-        let nextIndex = null;
-        if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ids.length;
-        if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + ids.length) % ids.length;
-        if (event.key === 'Home') nextIndex = 0;
-        if (event.key === 'End') nextIndex = ids.length - 1;
-        if (nextIndex == null) return;
-        event.preventDefault();
-        const [nextGroupId, , , defaultTab] = NAV_GROUPS[nextIndex];
-        this.selectTab(this.lastTabByGroup.get(nextGroupId) ?? defaultTab);
-        this.window?.querySelector(
-            `.st-devtools-primary-tab[data-nav-group="${nextGroupId}"]`,
-        )?.focus();
-    }
-
     selectTab(id, { focus = false } = {}) {
         const nextTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
         const changed = nextTab !== this.activeTab;
         this.activeTab = nextTab;
-        const [groupId] = navigationGroupForTab(nextTab);
-        this.lastTabByGroup.set(groupId, nextTab);
         localStorage.setItem(LAST_TAB_KEY, this.activeTab);
         this.render();
         if (this.activeTab === 'timeline' && this.root && !this.root.hidden) {
@@ -4305,33 +4272,15 @@ export class DevToolsWindow {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.syncOpaqueTheme();
-        const [activeGroupId, , activeGroupTabs] = navigationGroupForTab(
-            this.activeTab,
-        );
-        for (const button of this.window.querySelectorAll('.st-devtools-primary-tab')) {
-            const active = button.dataset.navGroup === activeGroupId;
-            button.classList.toggle('active', active);
-            if (active) button.setAttribute('aria-current', 'page');
-            else button.removeAttribute('aria-current');
-        }
-        if (this.secondaryTabList) {
-            this.secondaryTabList.hidden = activeGroupTabs.length <= 1;
-        }
-        for (const button of this.window.querySelectorAll('.st-devtools-tab')) {
-            button.hidden = !activeGroupTabs.includes(button.dataset.tab);
+        for (const button of this.window.querySelectorAll('.st-devtools-app-nav-item')) {
             const active = button.dataset.tab === this.activeTab;
             button.classList.toggle('active', active);
             button.setAttribute('aria-selected', String(active));
             button.tabIndex = active ? 0 : -1;
         }
         this.content.id = this.panelElementId(this.activeTab);
-        this.content.setAttribute(
-            'aria-labelledby',
-            activeGroupTabs.length <= 1
-                ? `st-devtools-nav-${activeGroupId}`
-                : this.tabElementId(this.activeTab),
-        );
-        this.content.replaceChildren();
+        this.content.setAttribute('aria-labelledby', this.tabElementId(this.activeTab));
+        this.content.replaceChildren(this.renderScreenHeader(this.activeTab));
         if (this.storageErrors.length > 0) {
             this.content.appendChild(this.renderStorageErrors());
         }
@@ -4343,18 +4292,25 @@ export class DevToolsWindow {
         }
         const privacyMode = snapshot?.privacy?.mode ?? 'full';
         if (snapshot && privacyMode !== 'full') {
-            this.content.appendChild(this.renderSnapshotPrivacyNotice(snapshot));
+            const privacyNotice = this.renderSnapshotPrivacyNotice(snapshot);
             if (privacyMode === 'metadata' && this.activeTab !== 'timeline') {
-                this.content.appendChild(this.renderMetadataOnlySnapshot(snapshot));
+                this.content.appendChild(this.renderMetadataOnlySnapshot(
+                    snapshot,
+                    privacyNotice,
+                ));
                 return;
             }
             if (
                 privacyMode === 'redacted'
                 && ['rules', 'search'].includes(this.activeTab)
             ) {
-                this.content.appendChild(this.renderRedactedLimitedFeature(snapshot));
+                this.content.appendChild(this.renderRedactedLimitedFeature(
+                    snapshot,
+                    privacyNotice,
+                ));
                 return;
             }
+            this.content.appendChild(privacyNotice);
         }
 
         const renderers = {
@@ -4385,11 +4341,12 @@ export class DevToolsWindow {
         return notice;
     }
 
-    renderMetadataOnlySnapshot(snapshot) {
+    renderMetadataOnlySnapshot(snapshot, privacyNotice = null) {
         const page = element('div', {
             className: 'st-devtools-page st-devtools-metadata-only',
         });
         page.appendChild(this.renderSnapshotPicker());
+        if (privacyNotice) page.appendChild(privacyNotice);
         const metrics = element('dl', {
             className: 'st-devtools-metadata-only-metrics',
         });
@@ -4417,12 +4374,13 @@ export class DevToolsWindow {
         return page;
     }
 
-    renderRedactedLimitedFeature(snapshot) {
+    renderRedactedLimitedFeature(snapshot, privacyNotice = null) {
         const page = element('div', {
             className: 'st-devtools-page st-devtools-redacted-limited',
         });
         page.append(
             this.renderSnapshotPicker(),
+            ...(privacyNotice ? [privacyNotice] : []),
             proseElement('p', t('privacy.redactedAnalysisUnavailable')),
         );
         return page;
@@ -4652,12 +4610,96 @@ export class DevToolsWindow {
         return details;
     }
 
+    renderExplorerOverview(snapshot) {
+        const overview = element('section', {
+            className: 'st-devtools-overview-card',
+        });
+        const headline = element('div', {
+            className: 'st-devtools-overview-headline',
+        });
+        const summary = element('div', {
+            className: 'st-devtools-overview-summary',
+        });
+        summary.append(
+            element('span', {
+                className: 'st-devtools-overview-kicker',
+                text: t('explorer.overviewTitle'),
+            }),
+            element('strong', {
+                className: 'st-devtools-overview-total',
+                text: snapshot.stats?.totalTokens ?? 0,
+            }),
+            element('span', {
+                className: 'st-devtools-overview-total-label',
+                text: t('stat.promptTokens'),
+            }),
+        );
+        const model = element('span', {
+            className: 'st-devtools-overview-model',
+            text: t('explorer.overviewModel', {
+                provider: snapshotProviderDisplay(snapshot),
+                model: snapshot.model ?? t('common.unknown'),
+            }),
+        });
+        headline.append(summary, model);
+
+        const usage = Number.isFinite(snapshot.stats?.contextUsage)
+            ? Math.max(0, Math.min(1, snapshot.stats.contextUsage))
+            : null;
+        const usageText = usage == null
+            ? t('common.unknown')
+            : `${(usage * 100).toFixed(1)}%`;
+        const progressGroup = element('div', {
+            className: 'st-devtools-overview-progress-group',
+        });
+        const progressLabels = element('div', {
+            className: 'st-devtools-overview-progress-labels',
+        });
+        progressLabels.append(
+            element('span', { text: t('stat.contextUsage') }),
+            element('strong', { text: usageText }),
+        );
+        const progress = element('div', {
+            className: 'st-devtools-overview-progress',
+        });
+        progress.setAttribute('role', 'progressbar');
+        progress.setAttribute('aria-label', t('stat.contextUsage'));
+        progress.setAttribute('aria-valuemin', '0');
+        progress.setAttribute('aria-valuemax', '100');
+        progress.setAttribute('aria-valuetext', usageText);
+        if (usage != null) progress.setAttribute('aria-valuenow', String(Math.round(usage * 100)));
+        const progressValue = element('span', {
+            className: 'st-devtools-overview-progress-value',
+        });
+        progressValue.style.width = `${usage == null ? 0 : usage * 100}%`;
+        progress.appendChild(progressValue);
+        progressGroup.append(progressLabels, progress);
+
+        const remaining = element('div', {
+            className: 'st-devtools-overview-remaining',
+        });
+        remaining.append(
+            element('span', { text: t('stat.remaining') }),
+            element('strong', {
+                text: snapshot.stats?.remainingContext ?? t('common.unknown'),
+            }),
+        );
+
+        overview.append(
+            headline,
+            progressGroup,
+            remaining,
+            this.renderSnapshotPicker(),
+        );
+        return overview;
+    }
+
     renderExplorer(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         const sourceGroups = explorerSourceGroups(snapshot.sources);
         const configuredGroup = sourceGroups.find((group) => group.key === 'configured');
         const promptManagerOrder = configuredGroup?.promptManagerOrder ?? false;
-        page.append(this.renderSnapshotPicker());
+        page.append(this.renderExplorerOverview(snapshot));
         const guide = element('details', {
             className: 'st-devtools-disclosure st-devtools-explorer-guide',
         });

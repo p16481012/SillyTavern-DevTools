@@ -109,6 +109,7 @@ test('panel accents are self-owned and readable in both color schemes', async ()
         const panel = customProperty(theme, '--st-devtools-panel-bg');
         const surface = customProperty(theme, '--st-devtools-surface');
         const primary = customProperty(theme, '--st-devtools-primary');
+        const primarySoft = customProperty(theme, '--st-devtools-primary-soft');
         const focus = customProperty(theme, '--st-devtools-focus');
         const mutedText = customProperty(theme, '--st-devtools-text-muted');
         const primaryStrong = customProperty(theme, '--st-devtools-primary-strong');
@@ -116,6 +117,10 @@ test('panel accents are self-owned and readable in both color schemes', async ()
         assert.ok(
             contrastRatio(primary, panel) >= 4.5,
             `${primary} must remain readable against ${panel}`,
+        );
+        assert.ok(
+            contrastRatio(primary, primarySoft) >= 4.5,
+            `${primary} must keep active app navigation text readable against ${primarySoft}`,
         );
         assert.ok(
             contrastRatio(focus, panel) >= 3,
@@ -132,13 +137,17 @@ test('panel accents are self-owned and readable in both color schemes', async ()
     }
 });
 
-test('tabs stay distinct while Korean action text wraps only at safe boundaries', async () => {
+test('app navigation stays visually singular and resists host button styles', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
     const actionButton = cssBlock(css, '.st-devtools-window .menu_button');
     const panel = cssBlock(css, '.st-devtools-window');
-    const activeTab = cssBlock(css, '.st-devtools-tab.active');
-    const focusTab = cssBlock(css, '.st-devtools-tab:focus-visible');
+    const appNav = cssBlock(css, '.st-devtools-app-nav');
+    const appTab = cssBlock(
+        css,
+        '.st-devtools-overlay .st-devtools-window .st-devtools-app-nav-item',
+    );
+    const focusTab = cssBlock(css, '.st-devtools-app-nav-item:focus-visible');
     const searchOptionsBody = cssBlock(css, '.st-devtools-search-options-body');
 
     assert.match(actionButton, /white-space:\s*normal/);
@@ -148,10 +157,35 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
     assert.match(panel, /overflow-wrap:\s*normal/);
     assert.match(panel, /text-wrap:\s*pretty/);
     assert.match(panel, /word-break:\s*keep-all/);
-    assert.doesNotMatch(activeTab, /border(?:-bottom)?(?:-color)?:/u);
-    assert.match(activeTab, /background:\s*var\(--st-devtools-surface-raised\)/u);
-    assert.match(activeTab, /color:\s*var\(--st-devtools-primary\)/u);
+    assert.match(appNav, /display:\s*grid\s*!important/u);
+    assert.match(
+        css,
+        /\.st-devtools-window button,\s*\.st-devtools-window select\s*\{[\s\S]*?box-sizing:\s*border-box/u,
+    );
+    assert.match(appTab, /display:\s*flex\s*!important/u);
+    assert.match(appTab, /width:\s*100%\s*!important/u);
+    assert.match(appTab, /min-width:\s*0\s*!important/u);
+    assert.match(appTab, /background:\s*transparent\s*!important/u);
+    assert.match(appTab, /color:\s*var\(--st-devtools-text-muted\)\s*!important/u);
+    assert.match(appTab, /writing-mode:\s*horizontal-tb\s*!important/u);
+    assert.match(
+        cssBlock(css, '.st-devtools-app-nav-item > i'),
+        /color:\s*currentColor\s*!important/u,
+    );
+    assert.match(
+        css,
+        /\.st-devtools-app-nav-item\.active,[\s\S]*?\.st-devtools-app-nav-item\[aria-selected='true'\]\s*\{[\s\S]*?background:\s*var\(--st-devtools-primary-soft\)\s*!important;[\s\S]*?color:\s*var\(--st-devtools-primary\)\s*!important/u,
+    );
+    assert.match(
+        css,
+        /\.st-devtools-app-nav-item:not\(\.active\):hover\s*\{[\s\S]*?background:\s*var\(--st-devtools-hover\)\s*!important/u,
+    );
     assert.doesNotMatch(focusTab, /background:/);
+    assert.match(focusTab, /outline:\s*2px solid var\(--st-devtools-focus\)/u);
+    assert.doesNotMatch(
+        `${css}\n${ui}`,
+        /(?:\.|className:\s*['"])st-devtools-(?:primary-tabs?|secondary-tabs?|tab)(?:\b|['"])/u,
+    );
     assert.match(searchOptionsBody, /display:\s*flex/);
     assert.match(
         ui,
@@ -159,16 +193,19 @@ test('tabs stay distinct while Korean action text wraps only at safe boundaries'
     );
 });
 
-test('beginner navigation and header capture status stay compact and accessible', async () => {
+test('bottom app navigation stays in a three-row shell without mobile overflow', async () => {
     const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
     const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
     const panel = cssBlock(css, '.st-devtools-window');
-    const primaryTabs = cssBlock(css, '.st-devtools-primary-tabs');
-    const primaryTab = cssBlock(css, '.st-devtools-primary-tab');
-    const secondaryTabs = cssBlock(css, '.st-devtools-secondary-tabs');
-    const secondaryButton = cssBlock(css, '.st-devtools-secondary-tabs > button');
+    const appNav = cssBlock(css, '.st-devtools-app-nav');
+    const appTab = cssBlock(
+        css,
+        '.st-devtools-overlay .st-devtools-window .st-devtools-app-nav-item',
+    );
+    const appLabel = cssBlock(css, '.st-devtools-app-nav-item > span');
     const headerAction = cssBlock(css, '.st-devtools-header-actions .menu_button');
     const captureStatus = cssBlock(css, '.st-devtools-capture-status');
+    const mobile = mediaSection(css, 'max-width: 700px');
     const settingsGroupSummary = cssBlock(
         css,
         '.st-devtools-settings-group > summary',
@@ -180,19 +217,34 @@ test('beginner navigation and header capture status stay compact and accessible'
 
     assert.match(
         panel,
-        /grid-template-rows:\s*auto auto auto minmax\(0, 1fr\)/,
+        /grid-template-rows:\s*auto minmax\(0, 1fr\) auto/,
     );
-    assert.match(primaryTabs, /display:\s*grid/);
+    assert.match(panel, /overflow:\s*hidden/u);
+    assert.match(appNav, /display:\s*grid\s*!important/u);
     assert.match(
-        primaryTabs,
-        /grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/,
+        appNav,
+        /grid-template-columns:\s*repeat\(6, minmax\(0, 1fr\)\)/,
     );
-    assert.match(primaryTabs, /overflow:\s*visible/);
-    assert.match(primaryTab, /min-height:\s*44px/);
-    assert.match(primaryTab, /word-break:\s*keep-all/);
-    assert.match(secondaryTabs, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
-    assert.match(secondaryTabs, /overflow-x:\s*hidden/);
-    assert.match(secondaryButton, /min-height:\s*44px/);
+    assert.match(appNav, /min-width:\s*0/u);
+    assert.doesNotMatch(appNav, /overflow-x:\s*auto/u);
+    assert.match(appTab, /width:\s*100%\s*!important/u);
+    assert.match(appTab, /min-width:\s*0\s*!important/u);
+    assert.ok(
+        Number(appTab.match(/min-height:\s*(\d+)px/u)?.[1] ?? 0) >= 44,
+        'each app navigation target must be at least 44px tall',
+    );
+    assert.match(appTab, /word-break:\s*keep-all/u);
+    assert.match(appLabel, /min-width:\s*0/u);
+    assert.match(mobile, /width:\s*100vw\s*!important/u);
+    assert.match(mobile, /height:\s*100dvh\s*!important/u);
+    assert.match(
+        mobile,
+        /\.st-devtools-app-nav\s*\{[\s\S]*?env\(safe-area-inset-bottom\)/u,
+    );
+    assert.match(
+        mobile,
+        /\.st-devtools-app-nav-item\s*\{[\s\S]*?min-height:\s*60px[\s\S]*?flex-direction:\s*column/u,
+    );
     assert.match(headerAction, /display:\s*inline-grid/);
     assert.match(headerAction, /width:\s*2\.5rem/);
     assert.match(headerAction, /min-width:\s*2\.5rem/);
@@ -209,43 +261,45 @@ test('beginner navigation and header capture status stay compact and accessible'
     assert.match(settingsGroupContent, /display:\s*grid/);
     assert.match(
         css,
-        /@media\s*\(max-width:\s*700px\)[\s\S]*?\.st-devtools-primary-tabs[\s\S]*?overflow-x:\s*hidden/,
-    );
-    assert.match(
-        css,
         /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?animation-duration:\s*0\.01ms\s*!important/,
     );
     assert.match(css, /\.st-devtools-window :is\([\s\S]*?\):focus-visible/);
 
-    const expectedKorean = new Map([
-        ['nav.prompt', '프롬프트'],
-        ['nav.inspect', '검사'],
-        ['nav.history', '기록'],
-        ['nav.tools', '도구'],
-        ['nav.label', '주요 기능'],
-        ['nav.secondaryLabel', '세부 기능'],
-        ['tab.explorer', '전송 프롬프트'],
-        ['tab.timeline', '기록'],
-        ['tab.diff', '변경점'],
-        ['tab.context', '요청 상세'],
-        ['tab.search', '찾기'],
-        ['snapshot.label', '현재 요청'],
-        ['capture.status.label', '캡처 상태'],
-        ['action.refresh', '새로고침'],
-        ['action.returnToChat', '채팅으로 돌아가기'],
-        ['rules.semanticDisclosureTitle', 'AI로 더 자세히 보기'],
-        ['rules.advancedAnalysisTitle', '분석 상세'],
-        ['timeline.storageDetailsTitle', '저장 상태와 관리'],
-        ['settings.group.basic', '화면'],
-        ['settings.group.snapshots', '스냅샷 저장'],
-        ['settings.group.advanced', '고급 설정'],
-    ]);
-    for (const [key, value] of expectedKorean) {
+    const expectedKeys = [
+        'nav.label',
+        'nav.short.explorer',
+        'nav.short.rules',
+        'nav.short.timeline',
+        'nav.short.diff',
+        'nav.short.context',
+        'nav.short.search',
+        'tab.explorer',
+        'tab.rules',
+        'tab.timeline',
+        'tab.diff',
+        'tab.context',
+        'tab.search',
+        'snapshot.label',
+        'capture.status.label',
+        'action.refresh',
+        'action.returnToChat',
+        'rules.semanticDisclosureTitle',
+        'rules.advancedAnalysisTitle',
+        'timeline.storageDetailsTitle',
+        'settings.group.basic',
+        'settings.group.snapshots',
+        'settings.group.advanced',
+    ];
+    for (const key of expectedKeys) {
         assert.match(
             i18n,
-            new RegExp(`'${key.replaceAll('.', '\\.')}':\\s*'${value}'`),
+            new RegExp(`'${key.replaceAll('.', '\\.')}':\\s*'[^']+'`),
         );
     }
+    assert.doesNotMatch(
+        i18n,
+        /'nav\.(?:prompt|inspect|history|tools|secondaryLabel)'/u,
+    );
     for (const key of [
         'capture.status.waiting',
         'capture.status.capturing',
@@ -296,6 +350,14 @@ test('panel controls and disclosure headings resist host theme layout rules', as
     assert.match(
         css,
         /\.st-devtools-window button,\s*\.st-devtools-window select\s*\{[\s\S]*?box-sizing:\s*border-box[\s\S]*?writing-mode:\s*horizontal-tb/,
+    );
+    assert.match(
+        css,
+        /\.st-devtools-overlay \.st-devtools-window :where\([\s\S]*?select,[\s\S]*?background:\s*var\(--st-devtools-surface\)\s*!important[\s\S]*?color:\s*var\(--st-devtools-text\)\s*!important/,
+    );
+    assert.match(
+        css,
+        /@media\s*\(max-width:\s*430px\)[\s\S]*?\.st-devtools-header-actions \.menu_button\s*\{[\s\S]*?width:\s*44px\s*!important[\s\S]*?height:\s*44px\s*!important/,
     );
     assert.match(summary, /display:\s*flex/);
     assert.match(summary, /width:\s*100%/);

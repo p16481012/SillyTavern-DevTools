@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.12.0의 UI 표현 계층과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.12.1의 단층 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -167,7 +167,7 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.12.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 검사 탭의 inline opt-in은 이 설정을 찾고 저장하는 진입점일 뿐이며, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
+v0.12.1의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 inline opt-in은 이 설정을 찾고 저장하는 진입점일 뿐이며, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID만 추가되며 프로필 객체나 credential은 기록하지 않습니다.
 
 처리 흐름은 다음과 같습니다.
 
@@ -263,20 +263,24 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 - 로컬 감사 기록은 최대 200건·256 KiB이며 설정 전체 대신 digest와 제한된 요약을 저장합니다. 같은 브라우저 사용자가 수정·삭제할 수 있으므로 보안 로그나 부인 방지 기록이 아닙니다.
 - 정책 가져오기는 Rule Inspector 설정 초안 교체입니다. IndexedDB 스냅샷 백업·복원, 타임라인 병합, 현재 정책과의 자동 merge 기능은 아닙니다.
 
-## 작업 중심 UI 표현 계층과 지연 공개
+## 여섯 기능 단층 하단 내비게이션
 
-`DevToolsWindow`는 하나의 패널 안에서 아이콘이 있는 `프롬프트`·`검사`·`기록`·`도구` 네 작업만 1차 탐색으로 노출하고 기존 기능을 선택한 작업의 2차 탐색에 연결합니다. 화면마다 가장 중요한 행동을 먼저 배치하는 토스식 `한 화면·한 우선 행동` 원칙을 사용하지만, 안전상 확인·취소·내보내기처럼 필요한 보조 행동을 제거하지는 않습니다. 첫 스냅샷 전에는 빠른 시작을 표시하고 짧은 설명은 제목·필드 옆의 작은 tooltip으로 제공합니다.
+`DevToolsWindow`는 `전송 프롬프트`·`규칙 검사`·`기록`·`변경 비교`·`요청 상세`·`검색` 여섯 실제 renderer를 하나의 하단 tablist에 일대일로 연결합니다. v0.12.0의 4개 그룹, 조건부 하위 tablist와 그룹별 마지막 탭 기억은 사용하지 않습니다. 어느 화면에서나 한 번의 선택으로 같은 기능을 열며 `last-tab`에는 실제 탭 ID만 저장합니다. 선택 상태와 roving `tabindex`, 좌우 화살표·Home·End 이동도 여섯 기능 전체에서 동일합니다.
 
-헤더 상태 점은 기존 `capture-status`의 bounded 상태를 시각화할 뿐 payload·저장·재시도 계약을 바꾸지 않습니다. 점과 함께 짧은 상태 문구와 접근 가능한 이름을 유지해 색만으로 상태를 전달하지 않습니다. 카드·disclosure 요약 제목은 좌측 정렬하며, 규칙 검사는 결과를 먼저 렌더링하고 비교 정책·분석 상세는 사용자가 펼칠 때 내용을 생성합니다.
+패널 grid는 `헤더 / minmax(0, 1fr) 콘텐츠 / 하단 내비게이션` 세 행입니다. 중앙 콘텐츠만 스크롤되며 하단 tablist는 콘텐츠에 가려지거나 함께 스크롤되지 않습니다. 각 화면은 실제 기능 이름의 `h1`을 먼저 렌더링하고 짧은 설명은 제목 옆 tooltip으로 제공합니다. tooltip은 PC hover·키보드 focus·모바일 click을 지원합니다. 헤더 상태 점은 기존 `capture-status`의 bounded 상태를 시각화할 뿐 payload·저장·재시도 계약을 바꾸지 않으며 짧은 상태 문구와 접근 가능한 이름을 함께 유지합니다.
 
-설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼을 두고 자주 쓰는 설정은 바로 렌더링하며 고급 설정만 disclosure로 남깁니다. 백업·가져오기·저장소 정리는 `데이터 도구` 한 진입점 아래에서 기존 개별 실행·확인 경계를 사용합니다. 검사 탭의 AI opt-in은 preference만 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다.
+`전송 프롬프트`는 스냅샷 목록보다 먼저 현재 요청의 총 토큰, 컨텍스트 사용률 progress, 남은 컨텍스트와 provider/model을 같은 overview card에 표시하고 카드 안에서 스냅샷을 바꿉니다. 이 카드는 저장된 집계만 읽으며 새 분석이나 provider 호출을 시작하지 않습니다. 다른 다섯 화면에는 중복 hero를 만들지 않고 기존 규칙 요약·성장 그래프·비교 선택기·핵심 통계·검색 입력을 각 화면의 첫 작업 블록으로 유지합니다.
 
-430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다. 현재 빠른 시작과 tooltip은 완성된 온보딩이 아닙니다. 코치마크·워크스루는 이 정보 구조의 실사용 피드백 뒤 별도 접근성 계약과 함께 설계합니다.
+700px 이하에서는 창을 `100vw`·`100dvh` 앱 셸로 만들고 border·radius·resize를 제거하며 하단 내비게이션에 safe area를 포함합니다. 430px 이하 헤더 action은 시각 아이콘 크기와 별개로 44px 터치 영역을 유지하고 상단 safe area를 반영합니다. `usesCompactLayout()`이 참이면 데스크톱 geometry를 복원하지 않고 ResizeObserver의 geometry 저장을 건너뛰며 header pointerdown도 drag 상태를 만들지 않습니다. 데스크톱에서는 기존 geometry 복원·저장, resize와 drag가 유지됩니다.
+
+설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼, 바로 보이는 자주 쓰는 설정과 접힌 고급 설정, `데이터 도구` 진입점도 유지합니다. 규칙 검사 화면의 AI opt-in은 preference만 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다. 430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다.
+
+현재 빠른 시작과 tooltip은 완성된 온보딩이 아닙니다. 코치마크·워크스루는 이 정보 구조의 실사용 피드백 뒤 별도 접근성 계약과 함께 설계합니다.
 
 ## 내부 고대비 테마와 호스트 격리
 
 SillyTavern 테마의 `--SmartThemeBlurTintColor`에는 알파 값이 포함될 수 있으므로 패널 배경에 직접 사용하지 않습니다. 자동 모드에서는 본문 글자의 계산된 명도를 확인한 후 밝은 글자에는 어두운 패널, 어두운 글자에는 밝은 패널을 사용합니다. 사용자는 같은 설정 저장소에서 패널을 항상 밝게 또는 항상 어둡게 고정할 수 있으며, 고정 모드에서는 매 렌더마다 SillyTavern 색상을 다시 계산하지 않습니다.
 
-v0.12.0은 패널 내부의 배경·본문·보조 글자·테두리·상태·강조 색을 밝은/어두운 고대비 토큰으로 정의합니다. 패널 범위의 `button`·`select`·`.menu_button`·표·상태 요소는 폭·flex·writing-mode·색·배경 등 필요한 속성을 명시해 SillyTavern 전역 테마의 세로 글자·강제 전체 폭·저대비 색 규칙이 내부 control을 덮지 못하게 합니다. 이 격리는 UI 표현에 한정되며 SillyTavern 문서 바깥의 스타일이나 저장 데이터에는 영향을 주지 않습니다.
+v0.12.0은 패널 내부의 배경·본문·보조 글자·테두리·상태·강조 색을 밝은/어두운 고대비 토큰으로 정의합니다. v0.12.1은 패널 범위의 form selector 특이도를 높여 호스트가 extension stylesheet 뒤에 `!important` 배경·색을 선언해도 패널 토큰이 우선하도록 보강했습니다. 패널의 `button`·`select`·`.menu_button`·표·상태 요소는 폭·flex·writing-mode·색·배경 등 필요한 속성을 명시해 SillyTavern 전역 테마의 세로 글자·강제 전체 폭·저대비 색 규칙이 내부 control을 덮지 못하게 합니다. 이 격리는 UI 표현에 한정되며 SillyTavern 문서 바깥의 스타일이나 저장 데이터에는 영향을 주지 않습니다.
 
 구버전 스냅샷의 매크로 템플릿 provenance는 브라우저 정규식 엔진이 안전하게 처리할 수 있는 길이까지만 시도합니다. 정규식 생성 또는 실제 매칭 시점에 엔진 한계가 발생하면 스냅샷 마이그레이션 자체를 실패시키지 않고 해당 소스만 `unmatched`로 유지합니다.

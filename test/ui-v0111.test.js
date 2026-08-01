@@ -9,12 +9,12 @@ const UI_SOURCE_URL = new URL('../src/ui.js', import.meta.url);
 const I18N_SOURCE_URL = new URL('../src/i18n.js', import.meta.url);
 
 const EXPECTED_TABS = [
-    'context',
-    'diff',
     'explorer',
     'rules',
-    'search',
     'timeline',
+    'diff',
+    'context',
+    'search',
 ];
 
 const UI_CAPTURE_STATES = [
@@ -222,43 +222,165 @@ test('privacy pipeline failures are explained as capture errors without a fake r
     }
 });
 
-test('four task-oriented navigation groups cover every legacy tab exactly once', async () => {
+test('one bottom app tablist exposes all six content functions exactly once', async () => {
     const ui = await readFile(UI_SOURCE_URL, 'utf8');
     const navigation = sourceBlock(
         ui,
-        'const NAV_GROUPS = [',
+        'const TABS = [',
         'const CAPTURE_STATUS_STATES',
     );
     const rows = [...navigation.matchAll(
-        /\[\s*'([^']+)',\s*'(nav\.[^']+)',\s*\[([^\]]*)\],\s*'([^']+)'\s*\]/gu,
+        /\[\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)'\s*\]/gu,
     )].map((match) => ({
         id: match[1],
         labelKey: match[2],
-        tabs: [...match[3].matchAll(/'([^']+)'/gu)].map((tab) => tab[1]),
-        defaultTab: match[4],
+        shortLabelKey: match[3],
+        iconClass: match[4],
     }));
 
-    assert.equal(rows.length, 4);
-    assert.equal(new Set(rows.map(({ id }) => id)).size, 4);
-    const flattened = rows.flatMap(({ tabs }) => tabs);
-    assert.equal(new Set(flattened).size, flattened.length);
-    assert.deepEqual([...flattened].sort(), EXPECTED_TABS);
+    assert.equal(rows.length, 6);
+    assert.deepEqual(rows.map(({ id }) => id), EXPECTED_TABS);
+    assert.equal(new Set(rows.map(({ id }) => id)).size, rows.length);
     for (const row of rows) {
-        assert.equal(row.tabs.includes(row.defaultTab), true);
-        assert.match(row.labelKey, /^nav\./u);
+        assert.equal(row.labelKey, `tab.${row.id}`);
+        assert.equal(row.shortLabelKey, `nav.short.${row.id}`);
+        assert.match(row.iconClass, /^fa-[a-z-]+$/u);
     }
 
-    const icons = sourceBlock(
-        ui,
-        'const NAV_GROUP_ICONS = Object.freeze({',
-        'const CAPTURE_STATUS_STATES',
+    const build = sourceBlock(ui, '\n    build() {', '\n    buildCaptureStatus() {');
+    assert.match(build, /className: 'st-devtools-app-nav'/u);
+    assert.equal((build.match(/setAttribute\('role', 'tablist'\)/gu) ?? []).length, 1);
+    assert.match(build, /tabList\.setAttribute\('aria-label', t\('nav\.label'\)\)/u);
+    assert.match(
+        build,
+        /for \(const \[id, labelKey, shortLabelKey, iconClass\] of TABS\)/u,
     );
-    const iconGroups = [...icons.matchAll(/^\s*([a-z]+):\s*'fa-[^']+'/gmu)]
-        .map((match) => match[1])
-        .sort();
-    assert.deepEqual(iconGroups, rows.map(({ id }) => id).sort());
-    assert.match(ui, /icon\.setAttribute\('aria-hidden', 'true'\)/u);
-    assert.match(ui, /element\('span', \{ text: t\(labelKey\) \}\)/u);
+    assert.match(build, /className: 'st-devtools-app-nav-item'/u);
+    assert.match(build, /title: t\(labelKey\)/u);
+    assert.match(build, /button\.setAttribute\('role', 'tab'\)/u);
+    assert.match(build, /button\.setAttribute\('aria-controls', this\.panelElementId\(id\)\)/u);
+    assert.match(build, /button\.setAttribute\('aria-label', t\(labelKey\)\)/u);
+    assert.match(build, /icon\.setAttribute\('aria-hidden', 'true'\)/u);
+    assert.match(build, /element\('span', \{ text: t\(shortLabelKey\) \}\)/u);
+    assert.match(build, /button\.addEventListener\('click', \(\) => this\.selectTab\(id\)\)/u);
+    assert.match(
+        build,
+        /button\.addEventListener\('keydown', \(event\) => this\.handleTabKeydown\(event, id\)\)/u,
+    );
+
+    const primaryRegions = sourceBlock(build, 'this.primaryRegions = [', '];');
+    assert.match(
+        primaryRegions,
+        /this\.primaryRegions = \[\s*header,\s*this\.content,\s*tabList,\s*$/u,
+    );
+    const windowChildren = sourceBlock(build, 'this.window.append(', ');');
+    assert.match(
+        windowChildren,
+        /this\.window\.append\(\s*header,\s*this\.content,\s*tabList,/u,
+    );
+    assert.doesNotMatch(
+        ui,
+        /NAV_GROUPS|NAV_GROUP_ICONS|navigationGroupForTab|lastTabByGroup|secondaryTabList|className:\s*['"]st-devtools-(?:primary-tabs?|secondary-tabs?|tab)(?:\b|['"])/u,
+    );
+
+    const screenHeader = sourceBlock(
+        ui,
+        '\n    renderScreenHeader(tabId) {',
+        '\n    renderQuickStart(',
+    );
+    assert.match(screenHeader, /TABS\.find\(\(\[id\]\) => id === tabId\) \?\? TABS\[0\]/u);
+    assert.match(screenHeader, /explainedTitle\(/u);
+    assert.match(screenHeader, /t\(`screen\.\$\{tab\[0\]\}\.description`\)/u);
+    assert.match(screenHeader, /tag: 'div'/u);
+    assert.match(screenHeader, /titleTag: 'h1'/u);
+    assert.doesNotMatch(screenHeader, /proseElement\(|element\('p'/u);
+});
+
+test('all six app tabs use one roving keyboard sequence', () => {
+    const ui = Object.create(DevToolsWindow.prototype);
+    const calls = [];
+    ui.selectTab = (id, options) => calls.push([id, options]);
+
+    const cases = EXPECTED_TABS.flatMap((current, index) => ([
+        [
+            current,
+            'ArrowLeft',
+            EXPECTED_TABS[(index - 1 + EXPECTED_TABS.length) % EXPECTED_TABS.length],
+        ],
+        [
+            current,
+            'ArrowRight',
+            EXPECTED_TABS[(index + 1) % EXPECTED_TABS.length],
+        ],
+    ]));
+    cases.push(
+        ['rules', 'Home', 'explorer'],
+        ['rules', 'End', 'search'],
+    );
+    for (const [current, key, expected] of cases) {
+        let prevented = 0;
+        ui.handleTabKeydown({
+            key,
+            preventDefault() {
+                prevented += 1;
+            },
+        }, current);
+        assert.deepEqual(calls.pop(), [expected, { focus: true }]);
+        assert.equal(prevented, 1);
+    }
+
+    let prevented = false;
+    ui.handleTabKeydown({
+        key: 'Enter',
+        preventDefault() {
+            prevented = true;
+        },
+    }, 'timeline');
+    assert.equal(prevented, false);
+    assert.deepEqual(calls, []);
+});
+
+test('compact mobile layout skips restored geometry, persisted resize, and dragging', async () => {
+    const ui = await readFile(UI_SOURCE_URL, 'utf8');
+    const build = sourceBlock(ui, '\n    build() {', '\n    buildCaptureStatus() {');
+    const restore = sourceBlock(
+        ui,
+        '\n    restoreGeometry() {',
+        '\n    observeGeometry() {',
+    );
+    const observe = sourceBlock(
+        ui,
+        '\n    observeGeometry() {',
+        '\n    enableDragging(handle) {',
+    );
+    const dragging = sourceBlock(
+        ui,
+        '\n    enableDragging(handle) {',
+        '\n    usesCompactLayout() {',
+    );
+    const compact = sourceBlock(
+        ui,
+        '\n    usesCompactLayout() {',
+        '\n    async onSnapshot(',
+    );
+
+    assert.match(build, /this\.restoreGeometry\(\)/u);
+    assert.match(build, /this\.enableDragging\(header\)/u);
+    assert.match(build, /this\.observeGeometry\(\)/u);
+    assert.match(
+        restore,
+        /restoreGeometry\(\) \{\s*if \(this\.usesCompactLayout\(\)\) return;/u,
+    );
+    assert.match(
+        observe,
+        /const save = \(\) => \{\s*if \(this\.usesCompactLayout\(\)\) return;/u,
+    );
+    assert.match(
+        dragging,
+        /pointerdown[\s\S]*?if \(this\.usesCompactLayout\(\)\) return;[\s\S]*?if \(event\.target\.closest\('button'\)\) return;/u,
+    );
+    assert.match(compact, /window\.matchMedia\('\(max-width: 700px\)'\)\.matches/u);
+    assert.match(compact, /Number\(window\.innerWidth\) <= 700/u);
 });
 
 test('header actions and capture status expose explicit accessible names', async () => {
@@ -274,9 +396,15 @@ test('header actions and capture status expose explicit accessible names', async
             ),
         );
     }
+    for (const icon of ['titleIcon', 'settingsIcon', 'refreshIcon']) {
+        assert.match(
+            build,
+            new RegExp(`${icon}\\.setAttribute\\('aria-hidden', 'true'\\)`, 'u'),
+        );
+    }
     assert.doesNotMatch(build, /action\.help|openHelp|st-devtools-help-overlay/u);
-    assert.match(build, /primaryTabs\.setAttribute\('aria-label',\s*t\('nav\.label'\)\)/u);
-    assert.match(build, /tabList\.setAttribute\('aria-label',\s*t\('nav\.secondaryLabel'\)\)/u);
+    assert.match(build, /tabList\.setAttribute\('aria-label',\s*t\('nav\.label'\)\)/u);
+    assert.doesNotMatch(build, /nav\.secondaryLabel/u);
     assert.match(
         build,
         /this\.captureStatusRegion = this\.buildCaptureStatus\(\);[\s\S]*?title\.append\([\s\S]*?this\.captureStatusRegion/u,
@@ -445,11 +573,9 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
     const keys = [
         'action.returnToChat',
         'nav.label',
-        'nav.secondaryLabel',
-        'nav.prompt',
-        'nav.inspect',
-        'nav.history',
-        'nav.tools',
+        ...EXPECTED_TABS.map((id) => `nav.short.${id}`),
+        ...EXPECTED_TABS.map((id) => `tab.${id}`),
+        ...EXPECTED_TABS.map((id) => `screen.${id}.description`),
         'empty.quickStartTitle',
         'help.step1Title',
         'help.step1Description',
@@ -489,4 +615,30 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
             `removed header help key remains: ${removedKey}`,
         );
     }
+    for (const removedKey of [
+        'nav.secondaryLabel',
+        'nav.prompt',
+        'nav.inspect',
+        'nav.history',
+        'nav.tools',
+    ]) {
+        assert.equal(
+            i18n.includes(`'${removedKey}':`),
+            false,
+            `removed grouped-navigation key remains: ${removedKey}`,
+        );
+    }
+});
+
+test('prompt landing screen starts with one request overview card', async () => {
+    const ui = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    const i18n = await readFile(new URL('../src/i18n.js', import.meta.url), 'utf8');
+
+    assert.match(ui, /renderExplorerOverview\(snapshot\)/);
+    assert.match(ui, /className:\s*'st-devtools-overview-card'/);
+    assert.match(ui, /progress\.setAttribute\('role', 'progressbar'\)/);
+    assert.match(ui, /page\.append\(this\.renderExplorerOverview\(snapshot\)\)/);
+    assert.match(css, /\.st-devtools-overview-card\s*\{[\s\S]*?linear-gradient/);
+    assert.match(i18n, /'explorer\.overviewTitle':\s*'[^']+'/);
 });
