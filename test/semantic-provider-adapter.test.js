@@ -5,6 +5,7 @@ import { SemanticCaptureGate } from '../src/semantic-capture-gate.js';
 import {
     SEMANTIC_PROVIDER_ERROR_CODES,
     SemanticProviderAdapter,
+    SemanticProviderError,
     readSemanticProviderIdentity,
 } from '../src/semantic-provider-adapter.js';
 
@@ -29,11 +30,11 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
-function chatContext(generateRaw) {
+function chatContext(generateRaw, provider = 'openrouter') {
     return {
         mainApi: 'openai',
         chatCompletionSettings: {
-            chat_completion_source: 'openrouter',
+            chat_completion_source: provider,
         },
         getChatCompletionModel: () => 'semantic-model',
         generateRaw,
@@ -174,6 +175,288 @@ test('prefill is combined only with a continuation, not a complete JSON response
         prefill: '{"version":1,"suggestions":',
         responseTokenCap: 512,
     }), '{"version":1,"suggestions":[]}');
+});
+
+test('known OpenAI, Anthropic, and Google response envelopes normalize to text', async () => {
+    const expected = '{"version":1,"suggestions":[]}';
+    const cases = [
+        {
+            provider: 'openai',
+            response: {
+                choices: [{ message: { content: expected } }],
+            },
+        },
+        {
+            provider: 'anthropic',
+            response: {
+                content: [
+                    { type: 'thinking', thinking: 'not returned' },
+                    { type: 'text', text: expected },
+                ],
+            },
+        },
+        {
+            provider: 'makersuite',
+            response: {
+                candidates: [{
+                    content: {
+                        parts: [{ text: expected }],
+                    },
+                }],
+            },
+        },
+    ];
+
+    for (const { provider, response } of cases) {
+        const { adapter } = adapterFor(chatContext(
+            async () => response,
+            provider,
+        ));
+        assert.equal(
+            await adapter.generate({ prompt: `inspect through ${provider}` }),
+            expected,
+        );
+    }
+});
+
+test('only bounded known response envelopes are accepted', async () => {
+    const unknown = adapterFor(chatContext(async () => ({
+        privatePayload: '{"version":1,"suggestions":[]}',
+    }), 'openai')).adapter;
+    await assert.rejects(
+        unknown.generate({ prompt: 'unknown response envelope' }),
+        (value) => (
+            value.code === SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE
+            && value.reason === 'provider-response-shape'
+            && !value.message.includes('privatePayload')
+        ),
+    );
+
+    const structured = adapterFor(chatContext(async () => ({
+        version: 1,
+        suggestions: [],
+    }), 'openai')).adapter;
+    assert.equal(
+        await structured.generate({ prompt: 'structured semantic object' }),
+        '{"version":1,"suggestions":[]}',
+    );
+
+    let toJsonCalls = 0;
+    const inert = { version: 1, suggestions: [] };
+    Object.defineProperty(inert, 'toJSON', {
+        value() {
+            toJsonCalls += 1;
+            return { privatePayload: true };
+        },
+    });
+    const inertAdapter = adapterFor(chatContext(async () => inert, 'openai')).adapter;
+    assert.equal(
+        await inertAdapter.generate({ prompt: 'inert structured object' }),
+        '{"version":1,"suggestions":[]}',
+    );
+    assert.equal(toJsonCalls, 0);
+});
+
+test('response node limits count primitive entries and reject huge sparse arrays', async () => {
+    // Root object + version + suggestions array consume three of 4,096 nodes.
+    const boundaryResponse = {
+        version: 1,
+        suggestions: new Array(4_093).fill(null),
+    };
+    const boundary = adapterFor(chatContext(
+        async () => boundaryResponse,
+        'openai',
+    )).adapter;
+    const normalized = JSON.parse(await boundary.generate({ prompt: 'node boundary' }));
+    assert.equal(normalized.suggestions.length, 4_093);
+
+    const overLimit = adapterFor(chatContext(async () => ({
+        version: 1,
+        suggestions: new Array(4_094).fill(null),
+    }), 'openai')).adapter;
+    await assert.rejects(
+        overLimit.generate({ prompt: 'primitive node overflow' }),
+        (value) => (
+            value.code === SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE
+            && value.reason === 'provider-response-shape'
+            && !value.message.includes('primitive node overflow')
+        ),
+    );
+
+    const sparse = [];
+    sparse.length = 4_294_967_295;
+    const sparseAdapter = adapterFor(chatContext(async () => ({
+        version: 1,
+        suggestions: sparse,
+    }), 'openai')).adapter;
+    await assert.rejects(
+        sparseAdapter.generate({ prompt: 'sparse response secret' }),
+        (value) => (
+            value.code === SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE
+            && value.reason === 'provider-response-shape'
+            && !value.message.includes('sparse response secret')
+        ),
+    );
+});
+
+test('response arrays never invoke custom iterators, accessors, or slice methods', async () => {
+    const expected = '{"version":1,"suggestions":[]}';
+    let iteratorCalls = 0;
+    const iteratorParts = [{ type: 'text', text: expected }];
+    Object.defineProperty(iteratorParts, Symbol.iterator, {
+        value() {
+            iteratorCalls += 1;
+            return Array.prototype[Symbol.iterator].call(this);
+        },
+    });
+
+    let indexGetterCalls = 0;
+    const accessorParts = [];
+    accessorParts.length = 1;
+    Object.defineProperty(accessorParts, '0', {
+        enumerable: true,
+        get() {
+            indexGetterCalls += 1;
+            return { type: 'text', text: expected };
+        },
+    });
+
+    let sliceCalls = 0;
+    const output = [{ content: [{ type: 'output_text', text: expected }] }];
+    Object.defineProperty(output, 'slice', {
+        value() {
+            sliceCalls += 1;
+            return [];
+        },
+    });
+
+    const cases = [
+        {
+            provider: 'anthropic',
+            response: { content: iteratorParts },
+        },
+        {
+            provider: 'anthropic',
+            response: { content: accessorParts },
+        },
+        {
+            provider: 'openai',
+            response: { output },
+        },
+    ];
+    for (const { provider, response } of cases) {
+        const { adapter } = adapterFor(chatContext(async () => response, provider));
+        await assert.rejects(
+            adapter.generate({ prompt: 'hostile response array' }),
+            (value) => (
+                value.code === SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE
+                && value.reason === 'provider-response-shape'
+                && !value.message.includes('hostile response array')
+            ),
+        );
+    }
+    assert.equal(iteratorCalls, 0);
+    assert.equal(indexGetterCalls, 0);
+    assert.equal(sliceCalls, 0);
+});
+
+test('hostile resolved proxies settle with a bounded invalid-response error', async () => {
+    const throwing = new Proxy({}, {
+        getPrototypeOf() {
+            throw new Error('private response prototype trap');
+        },
+    });
+    const revocable = Proxy.revocable({ choices: [] }, {});
+    revocable.revoke();
+
+    for (const response of [throwing, revocable.proxy]) {
+        const { adapter } = adapterFor(chatContext(async () => response, 'openai'));
+        let timeout;
+        const outcome = await Promise.race([
+            adapter.generate({ prompt: 'private proxy response' }).then(
+                (value) => ({ value }),
+                (failure) => ({ failure }),
+            ),
+            new Promise((resolve) => {
+                timeout = setTimeout(() => resolve({ timedOut: true }), 100);
+            }),
+        ]);
+        clearTimeout(timeout);
+        assert.equal(outcome.timedOut, undefined);
+        assert.equal(outcome.value, undefined);
+        assert.equal([
+            [
+                SEMANTIC_PROVIDER_ERROR_CODES.INVALID_RESPONSE,
+                'provider-response-shape',
+            ],
+            [
+                SEMANTIC_PROVIDER_ERROR_CODES.PROVIDER_ERROR,
+                'provider-rejected',
+            ],
+        ].some(([code, reason]) => (
+            outcome.failure?.code === code
+            && outcome.failure?.reason === reason
+        )), true);
+        assert.equal(outcome.failure?.message.includes('private'), false);
+    }
+});
+
+test('structured safety refusals are provider rejections, not malformed responses', async () => {
+    const validText = '{"version":1,"suggestions":[]}';
+    const cases = [
+        {
+            provider: 'openai',
+            response: {
+                choices: [{
+                    finish_reason: 'content_filter',
+                    message: { content: validText },
+                }],
+            },
+        },
+        {
+            provider: 'openai',
+            response: {
+                choices: [{
+                    finish_reason: 'stop',
+                    message: {
+                        content: validText,
+                        refusal: 'private refusal text',
+                    },
+                }],
+            },
+        },
+        {
+            provider: 'openai',
+            response: {
+                output: [{
+                    type: 'message',
+                    content: [
+                        { type: 'refusal', refusal: 'private policy refusal' },
+                        { type: 'output_text', text: validText },
+                    ],
+                }],
+            },
+        },
+        {
+            provider: 'makersuite',
+            response: {
+                promptFeedback: { blockReason: 'SAFETY' },
+                candidates: [],
+            },
+        },
+    ];
+
+    for (const { provider, response } of cases) {
+        const { adapter } = adapterFor(chatContext(async () => response, provider));
+        await assert.rejects(
+            adapter.generate({ prompt: 'provider refusal' }),
+            (value) => (
+                value.code === SEMANTIC_PROVIDER_ERROR_CODES.PROVIDER_ERROR
+                && value.reason === 'provider-rejected'
+                && !value.message.includes('private refusal')
+            ),
+        );
+    }
 });
 
 test('selected Connection Manager profile is listed, identified, and called without changing the current connection', async () => {
@@ -371,6 +654,112 @@ test('profile request failure is never retried through the current connection', 
     );
     assert.equal(profileCalls, 1);
     assert.equal(currentCalls, 0);
+});
+
+test('structured provider failures map to stable retry-safe codes without message leakage', async () => {
+    const cases = [
+        {
+            failure: Object.assign(new Error('private authentication response'), {
+                status: 401,
+            }),
+            code: SEMANTIC_PROVIDER_ERROR_CODES.AUTHENTICATION_ERROR,
+            reason: 'provider-authentication',
+        },
+        {
+            failure: Object.assign(new Error('private quota response'), {
+                response: { status: 429 },
+            }),
+            code: SEMANTIC_PROVIDER_ERROR_CODES.RATE_LIMITED,
+            reason: 'provider-rate-limited',
+        },
+        {
+            failure: Object.assign(new Error('private network response'), {
+                code: 'ECONNRESET',
+            }),
+            code: SEMANTIC_PROVIDER_ERROR_CODES.NETWORK_ERROR,
+            reason: 'provider-network',
+        },
+        {
+            failure: Object.assign(new Error('private unavailable response'), {
+                statusCode: 503,
+            }),
+            code: SEMANTIC_PROVIDER_ERROR_CODES.PROVIDER_UNAVAILABLE,
+            reason: 'provider-unavailable',
+        },
+        {
+            failure: Object.assign(new Error('private timeout response'), {
+                code: 'ETIMEDOUT',
+            }),
+            code: SEMANTIC_PROVIDER_ERROR_CODES.TIMEOUT,
+            reason: 'provider-timeout',
+        },
+    ];
+
+    for (const { failure, code, reason } of cases) {
+        const { adapter } = adapterFor(chatContext(async () => {
+            throw failure;
+        }));
+        await assert.rejects(
+            adapter.generate({ prompt: 'bounded classification' }),
+            (value) => (
+                value.code === code
+                && value.reason === reason
+                && value.message === code
+                && !value.message.includes('private')
+            ),
+        );
+    }
+});
+
+test('provider-thrown semantic errors are rebuilt without arbitrary private fields', async () => {
+    const providerFailure = new SemanticProviderError(
+        SEMANTIC_PROVIDER_ERROR_CODES.NETWORK_ERROR,
+        'provider-network',
+    );
+    providerFailure.privateBody = 'private raw provider response';
+    providerFailure.request = { prompt: 'private original prompt' };
+    const { adapter } = adapterFor(chatContext(async () => {
+        throw providerFailure;
+    }));
+
+    await assert.rejects(
+        adapter.generate({ prompt: 'private semantic request' }),
+        (value) => (
+            value instanceof SemanticProviderError
+            && value !== providerFailure
+            && value.code === SEMANTIC_PROVIDER_ERROR_CODES.NETWORK_ERROR
+            && value.reason === 'provider-network'
+            && value.message === SEMANTIC_PROVIDER_ERROR_CODES.NETWORK_ERROR
+            && !('privateBody' in value)
+            && !('request' in value)
+            && !JSON.stringify(value).includes('private')
+        ),
+    );
+});
+
+test('a hostile proxy rejection still fails closed with a bounded generic error', async () => {
+    const hostile = new Proxy({}, {
+        getOwnPropertyDescriptor() {
+            throw new Error('private descriptor trap');
+        },
+        getPrototypeOf() {
+            throw new Error('private prototype trap');
+        },
+    });
+    const { adapter } = adapterFor(chatContext(async () => {
+        throw hostile;
+    }));
+
+    await assert.rejects(
+        adapter.generate({ prompt: 'hostile rejection' }),
+        (value) => (
+            value instanceof Error
+            && value.code === SEMANTIC_PROVIDER_ERROR_CODES.PROVIDER_ERROR
+            && value.reason === 'provider-rejected'
+            && value.message === SEMANTIC_PROVIDER_ERROR_CODES.PROVIDER_ERROR
+            && !value.message.includes('private')
+        ),
+    );
 });
 
 test('missing generateRaw is explicitly unsupported without legacy fallback access', async () => {

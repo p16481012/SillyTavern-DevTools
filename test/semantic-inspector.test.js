@@ -684,6 +684,66 @@ test('adapter failures are bounded and never expose provider error text', async 
     );
 });
 
+test('provider compatibility codes and fixed reasons cross the inspector boundary', async () => {
+    const data = fixture();
+    const cases = [
+        ['SEMANTIC_AUTHENTICATION_ERROR', 'provider-authentication'],
+        ['SEMANTIC_RATE_LIMITED', 'provider-rate-limited'],
+        ['SEMANTIC_NETWORK_ERROR', 'provider-network'],
+        ['SEMANTIC_PROVIDER_UNAVAILABLE', 'provider-unavailable'],
+    ];
+
+    for (const [code, reason] of cases) {
+        const adapter = new FakeAdapter();
+        const inspector = new SemanticInspector({ adapter });
+        const prepared = await inspector.prepare({
+            snapshot: data.snapshot,
+            analysis: data.analysis,
+            targetIds: [data.ids.finding],
+        });
+        adapter.generate = async () => {
+            throw Object.assign(new Error('private provider body'), {
+                code,
+                reason,
+            });
+        };
+        await assert.rejects(
+            inspector.inspect(prepared),
+            (value) => (
+                value instanceof SemanticInspectorError
+                && value.code === code
+                && value.reason === reason
+                && value.message === code
+                && !JSON.stringify(value).includes('private provider')
+            ),
+        );
+    }
+});
+
+test('an injected adapter cannot promote an arbitrary reason into UI state', async () => {
+    const data = fixture();
+    const adapter = new FakeAdapter();
+    const inspector = new SemanticInspector({ adapter });
+    const prepared = await inspector.prepare({
+        snapshot: data.snapshot,
+        analysis: data.analysis,
+        targetIds: [data.ids.finding],
+    });
+    adapter.generate = async () => {
+        throw Object.assign(new Error('private provider body'), {
+            code: 'SEMANTIC_PROVIDER_ERROR',
+            reason: 'private-provider-token',
+        });
+    };
+    await assert.rejects(
+        inspector.inspect(prepared),
+        (value) => (
+            value.code === 'SEMANTIC_PROVIDER_ERROR'
+            && value.reason === null
+        ),
+    );
+});
+
 test('connection profile discovery is exposed as an optional UI-safe capability', () => {
     const profileList = Object.freeze({
         status: 'available',

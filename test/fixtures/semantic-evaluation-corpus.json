@@ -1,0 +1,200 @@
+{
+  "kind": "st-devtools-semantic-evaluation-corpus",
+  "version": 1,
+  "provenance": "purpose-written-synthetic",
+  "privacy": {
+    "synthetic": true,
+    "containsUserContent": false,
+    "containsSecrets": false
+  },
+  "thresholds": {
+    "minimumUsefulnessRate": 0.8,
+    "maximumFalsePositiveRate": 0.1,
+    "minimumEvidenceAccuracy": 0.8
+  },
+  "cases": [
+    {
+      "id": "language-conflict",
+      "requestDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-language" }],
+        "sources": [
+          { "id": "source:language-a", "content": "한국어로만 답변하세요." },
+          { "id": "source:language-b", "content": "영어로만 답변하세요." },
+          { "id": "source:language-context", "content": "제목은 짧게 쓰세요." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:language-conflict",
+          "targetIds": ["finding:eval-language"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:language-a", "source:language-b"],
+          "evidence": [
+            { "sourceId": "source:language-a", "start": 0, "end": 12 },
+            { "sourceId": "source:language-b", "start": 0, "end": 11 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-language"],
+            "category": "conflict",
+            "severity": "critical",
+            "title": "Two exclusive language rules are active",
+            "summary": "The selected rules require different output languages.",
+            "rationale": "Both rules apply to the same response and cannot both be satisfied.",
+            "confidence": 0.98,
+            "sourceIds": ["source:language-a", "source:language-b"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:language-a", "start": 0, "end": 12, "quote": "한국어로만 답변하세요." },
+              { "sourceId": "source:language-b", "start": 0, "end": 11, "quote": "영어로만 답변하세요." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "detail-ambiguity",
+      "requestDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-detail" }],
+        "sources": [
+          { "id": "source:detail-a", "content": "Return a short answer." },
+          { "id": "source:detail-b", "content": "Return a detailed answer." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:detail-ambiguity",
+          "targetIds": ["finding:eval-detail"],
+          "categories": ["ambiguity", "conflict"],
+          "sourceIds": ["source:detail-a", "source:detail-b"],
+          "evidence": [
+            { "sourceId": "source:detail-a", "start": 0, "end": 22 },
+            { "sourceId": "source:detail-b", "start": 0, "end": 25 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-detail"],
+            "category": "ambiguity",
+            "severity": "warning",
+            "title": "Answer length is underspecified",
+            "summary": "The requested answer length has two incompatible descriptions.",
+            "rationale": "A short answer and a detailed answer do not establish one clear length target.",
+            "confidence": 0.9,
+            "sourceIds": ["source:detail-a", "source:detail-b"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:detail-a", "start": 0, "end": 22, "quote": "Return a short answer." },
+              { "sourceId": "source:detail-b", "start": 0, "end": 25, "quote": "Return a detailed answer." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "priority-collision",
+      "requestDigest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-priority" }],
+        "sources": [
+          { "id": "source:priority-a", "content": "Apply ALPHA before BETA." },
+          { "id": "source:priority-b", "content": "Apply BETA before ALPHA." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:priority-collision",
+          "targetIds": ["cluster:eval-priority"],
+          "categories": ["priority"],
+          "sourceIds": ["source:priority-a", "source:priority-b"],
+          "evidence": [
+            { "sourceId": "source:priority-a", "start": 0, "end": 24 },
+            { "sourceId": "source:priority-b", "start": 0, "end": 24 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["cluster:eval-priority"],
+            "category": "priority",
+            "severity": "warning",
+            "title": "Priority order forms a cycle",
+            "summary": "Each rule requires itself to run before the other rule.",
+            "rationale": "The two ordering constraints create a cycle with no valid first rule.",
+            "confidence": 0.97,
+            "sourceIds": ["source:priority-a", "source:priority-b"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:priority-a", "start": 0, "end": 24, "quote": "Apply ALPHA before BETA." },
+              { "sourceId": "source:priority-b", "start": 0, "end": 24, "quote": "Apply BETA before ALPHA." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "compatible-style",
+      "requestDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-style" }],
+        "sources": [
+          { "id": "source:style-a", "content": "Use clear headings." },
+          { "id": "source:style-b", "content": "Keep paragraphs concise." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    },
+    {
+      "id": "alternative-language-options",
+      "requestDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-alternatives" }],
+        "sources": [
+          {
+            "id": "source:option-a",
+            "content": "Use Korean only.",
+            "policy": [{ "mode": "alternative", "group": "language", "option": "option-a" }]
+          },
+          {
+            "id": "source:option-b",
+            "content": "Use English only.",
+            "policy": [{ "mode": "alternative", "group": "language", "option": "option-b" }]
+          }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    }
+  ]
+}

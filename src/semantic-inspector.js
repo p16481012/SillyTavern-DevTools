@@ -16,19 +16,17 @@ import {
 import { normalizeProviderId } from './provider-capabilities.js';
 import { sanitizePromptPayload } from './request.js';
 import { normalizeSemanticConnectionProfileId } from './semantic-connection-profiles.js';
+import {
+    SEMANTIC_PROVIDER_ERROR_CODES,
+    normalizeSemanticProviderErrorReason,
+} from './semantic-provider-adapter.js';
 import { canonicalJson, sha256Hex } from './snapshot-privacy.js';
 
 export const SEMANTIC_INSPECTOR_PROTOCOL_VERSION = 1;
 
-export const SEMANTIC_INSPECTOR_ERROR_CODES = Object.freeze([
-    'SEMANTIC_UNSUPPORTED',
-    'SEMANTIC_BUSY',
-    'SEMANTIC_INVALID_INPUT',
-    'SEMANTIC_TIMEOUT',
-    'SEMANTIC_ABORTED',
-    'SEMANTIC_PROVIDER_ERROR',
-    'SEMANTIC_INVALID_RESPONSE',
-]);
+export const SEMANTIC_INSPECTOR_ERROR_CODES = Object.freeze(
+    Object.values(SEMANTIC_PROVIDER_ERROR_CODES),
+);
 
 export const SEMANTIC_INSPECTOR_LIMITS = Object.freeze({
     inputSources: 1_000,
@@ -1736,7 +1734,10 @@ function adapterError(error, signal) {
         return new SemanticInspectorError('SEMANTIC_ABORTED', 'aborted');
     }
     if (SEMANTIC_INSPECTOR_ERROR_CODES.includes(error?.code)) {
-        return new SemanticInspectorError(error.code, error?.reason ?? null);
+        return new SemanticInspectorError(
+            error.code,
+            normalizeSemanticProviderErrorReason(error?.reason),
+        );
     }
     return new SemanticInspectorError('SEMANTIC_PROVIDER_ERROR', 'adapter-failed');
 }

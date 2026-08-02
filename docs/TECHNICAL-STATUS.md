@@ -1,4 +1,12 @@
-# v0.12.4 기술 구현 현황
+# v0.13.0 기술 구현 현황
+
+## v0.13.0 AI 품질·provider 호환성 보강
+
+- `semantic-evaluation.js`가 합성·익명 corpus의 검증된 AI 제안을 기대 issue와 일대일 대응해 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 계산합니다. 누락 사례·안전 provenance 위반·bounded 상한 초과는 실패로 닫고 보고서에는 원문과 quote를 넣지 않습니다.
+- OpenAI 계열의 choices·Responses 출력, Anthropic content block, Google candidates parts와 공개 Connection Manager profile의 알려진 content 형식을 배열 prototype·길이·own key·data descriptor를 확인하는 bounded 절차로 정규화하고 알 수 없는 envelope는 거부합니다. 정규화 중 응답 객체가 제공한 iterator·slice·toJSON·accessor는 호출하지 않습니다.
+- 이 검증은 SillyTavern 공개 API가 반환한 plain data를 다루는 경계이며, 같은 페이지 realm에 이미 삽입된 hostile Proxy의 meta trap 자체를 별도 process처럼 sandbox하지는 않습니다.
+- HTTP 상태와 구조화된 공개 code만으로 인증·요청 한도·네트워크·timeout·일시 장애·기타 거부를 안정된 `SEMANTIC_*` code와 고정 reason으로 분류하며 원래 provider 오류 문구는 전달하지 않습니다.
+- 구조화된 content filter·safety 거부와 지원하지 않는 응답 구조를 구분합니다. UI에는 한국어 설명, 공유 가능한 진단 code·reason, 사람이 읽는 근거 source 이름을 표시하고 검사 상태에 live status와 `aria-busy`를 제공합니다.
 
 ## v0.12.4 규칙·설정 UI 패치
 
@@ -277,19 +285,21 @@
 - v0.11.1 gate는 최대 2MiB·8,192개 노드·4,096개 문자열을 검사합니다. 기존 256개 문자열 경계를 넘는 일반 장문 채팅은 정상 캡처하고, 새 상한도 넘어 exact nonce를 확인할 수 없으면 AI 원문 저장을 피하기 위해 prompt 단계에서 `skipped-safety`로 닫습니다.
 - AI 결과와 선택은 메모리 전용이며 새로고침하면 사라집니다. cache는 전체 raw prompt·provider response와 전용 `source.content`·`evidence.quote` 필드를 저장하지 않지만 title·summary·rationale 같은 정규화 제안 텍스트는 TTL 동안 유지하고 모델이 반복한 원문 표현을 포함할 수 있습니다. 영구 결과 이력·감사 로그 또는 익명화 경계가 아닙니다.
 - strict schema와 evidence offset 검증은 응답이 준비된 원문을 정확히 인용했는지 확인하는 경계입니다. 제안의 사실성·유용성·안전성 또는 자연어 의미 판단의 정확도를 보증하지 않습니다.
+- v0.13.0 provider envelope 정규화는 공개 API에서 알려진 bounded 응답 구조만 지원합니다. 알 수 없는 wrapper를 재귀적으로 추측하거나 provider 오류 메시지·response body를 진단에 노출하지 않습니다.
+- 합성 평가 corpus는 평가기와 고정 reference 결과의 결정성을 검증합니다. CI에서 실제 provider를 호출하지 않으므로 특정 model의 현재 품질·호환성·과금·안전성을 보증하지 않습니다.
 
 ## 아직 미구현
 
-### v0.13.0 방향
+### v0.13.x·v0.14.0 방향
 
-- 익명화 corpus를 이용한 AI 제안 유용성·오탐·근거 정확성 평가와 회귀 기준
-- 실제 provider 호환성·오류 설명·성능·모바일·키보드·screen reader 품질 보강
-- v0.12.4의 다섯 기능 하단 탐색·위치 이동·AI 연속성·모바일 앱 셸·성장 그래프에 대한 실사용 피드백 수집과 UI/UX 보완
+- 실제 SillyTavern 연결 프로필별 추가 envelope와 오류 구조는 사용자 재현 또는 공식 공개 계약이 확보될 때 v0.13.x fixture로 보강
+- 조건·예외·말투·정체성·안전 의미를 포함하는 합성 corpus 확대와 provider별 수동 품질 평가 절차
+- 다섯 기능을 처음 쓰는 사용자를 위한 선택형 코치마크·워크스루, 재시작·건너뛰기·키보드·screen reader 계약
 
-세부 기능은 v0.12.4 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. 코치마크·워크스루는 이 피드백 뒤 별도로 설계합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator, Extension Debug Panel과 실제 온보딩 튜토리얼은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.13.0 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.12.4의 활성 소스 판정·설정 밀도와 v0.12.3의 위치 이동·AI 검사 연속성·컨텍스트 한도·성장 그래프를 사용자 체크리스트로 확인합니다.
-2. v0.13.0에서 AI 평가 corpus·품질 회귀·provider 호환성과 실사용 UI/UX를 보강합니다.
-3. 각 버전은 자동 테스트와 결정적 샌드박스를 통과한 뒤 다음 버전으로 넘어가고, 실제 provider·IndexedDB 경계는 사용자 검토로 별도 확인합니다.
+1. v0.13.0의 provider별 응답 envelope·안정된 오류 진단·근거 source 이름과 기존 캡처·저장 회귀를 사용자 체크리스트로 확인합니다.
+2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.13.x 패치를 만듭니다.
+3. v0.14.0 후보의 corpus 확대와 선택형 온보딩은 v0.13.0 실사용·접근성 피드백 뒤 범위를 확정합니다.

@@ -1,5 +1,27 @@
 # 변경 기록
 
+## 0.13.0 - 2026-08-02
+
+### AI 품질 평가 기반
+
+- 사용자 원문과 비밀값을 포함하지 않는 합성·익명 AI 의미 검사 corpus 5건 추가
+- 제안 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 범위 pair 적중률을 결정적으로 계산하고 기준 미달·누락 사례를 실패 처리하는 평가 모듈 추가
+- 정확한 target·source 집합만 기대 issue와 대응하고, 평가 결과에는 프롬프트 원문이나 근거 인용문을 포함하지 않으며 corpus·결과·문자열 크기를 제한
+
+### provider 호환성과 오류 진단
+
+- OpenAI 계열·Anthropic·Google 계열과 Connection Manager profile의 알려진 문자열·JSON 응답 envelope를 bounded 형식으로 정규화
+- 인증 실패·요청 한도·네트워크·timeout·일시 장애·기타 provider 거부를 안정된 `SEMANTIC_*` 코드와 고정 사유로 구분
+- provider 오류 원문은 UI·오류 객체에 전달하지 않고, 안전 검사 거부와 지원하지 않는 응답 구조를 별도 설명
+- 구조화된 refusal·content filter는 함께 온 대체 문자열보다 먼저 거부하고, 응답 배열 길이·노드·own key를 제한하며 응답 객체의 iterator·slice·accessor를 호출하지 않음
+
+### AI 검사 UI·접근성
+
+- AI 근거 위치에 내부 source ID 대신 사용자가 보는 프롬프트 이름을 표시
+- 짧은 검사 상태만 전용 live status로 안내하고 긴 결과 영역을 분리하며 준비·동의·실행 중 `aria-busy` 상태 제공
+- 오류 카드에 공유 가능한 안정된 진단 코드와 고정 사유를 작은 보조 텍스트로 표시
+- 샌드박스의 AI 오류 fixture를 요청 한도 진단으로 갱신
+
 ## 0.12.4 - 2026-08-02
 
 ### 규칙 검사 활성 소스 판정

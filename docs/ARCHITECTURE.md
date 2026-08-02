@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.12.4의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.13.0의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 합성 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -167,7 +167,7 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.12.3의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 AI 모드가 opt-in·연결 프로필·응답 상한을 함께 다루지만, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID와 사용자가 직접 입력한 bounded 추가 프롬프트·프리필만 저장하며 프로필 객체나 credential은 기록하지 않습니다. 추가 프롬프트·프리필은 일반 텍스트 저장임을 UI에서 경고합니다.
+v0.13.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 AI 모드가 opt-in·연결 프로필·응답 상한을 함께 다루지만, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID와 사용자가 직접 입력한 bounded 추가 프롬프트·프리필만 저장하며 프로필 객체나 credential은 기록하지 않습니다. 추가 프롬프트·프리필은 일반 텍스트 저장임을 UI에서 경고합니다.
 
 처리 흐름은 다음과 같습니다.
 
@@ -178,8 +178,9 @@ v0.12.3의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 4. closure에 필요한 source는 일부를 조용히 생략하거나 자르지 않습니다. source별·선택 전체·요청 전체 상한을 넘거나 필수 source에서 민감 토큰을 발견하면 준비 전체를 `SEMANTIC_INVALID_INPUT`으로 실패시켜 quote offset을 바꾸는 부분 정제를 금지합니다.
 5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한, 고정 지시·추가 지시·프리필을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
 6. 전송 직전에 adapter identity를 다시 읽어 provider·model·현재 연결/프로필 경로·opaque profile ID 중 하나라도 준비 시점과 달라졌으면 실패로 닫습니다. 이 identity 전체가 요청 digest에 포함되므로 같은 provider/model을 쓰는 다른 프로필의 cache도 재사용하지 않습니다. 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출하며, 선택한 프로필의 `sendRequest()`가 시작된 뒤 실패하면 현재 연결 `generateRaw()`로 자동 재시도하지 않습니다.
-7. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. evidence의 모델 제공 offset이 틀렸더라도 `quote`가 해당 source content에 정확히 존재할 때만 bounded 검색으로 위치를 재정렬합니다. 원문에 없는 quote나 다른 검증 실패가 하나라도 있으면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
-8. 통과한 결과는 `origin: ai`와 요청 digest를 가진 별도 `AI 제안`으로만 반환합니다. UI에는 정적 finding 카드와 다른 영역으로 렌더링하며 정적 finding, 판정·무시, 비교 정책, 원본 프롬프트를 갱신하는 컨트롤을 두지 않습니다.
+7. adapter는 문자열 응답과 bounded JSON object만 허용하고 OpenAI 계열·Anthropic·Google 계열 및 공개 profile의 알려진 envelope에서만 결과 텍스트를 꺼냅니다. 인증·요청 한도·네트워크·timeout·일시 장애·거부는 원래 오류 문구를 버리고 안정된 `SEMANTIC_*` code와 고정 reason으로 분류합니다. 구조화된 안전 거부는 형식 오류와 구분하지만 거부 원문은 전달하지 않습니다.
+8. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. evidence의 모델 제공 offset이 틀렸더라도 `quote`가 해당 source content에 정확히 존재할 때만 bounded 검색으로 위치를 재정렬합니다. 원문에 없는 quote나 다른 검증 실패가 하나라도 있으면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
+9. 통과한 결과는 `origin: ai`와 요청 digest를 가진 별도 `AI 제안`으로만 반환합니다. UI에는 정적 finding 카드와 다른 영역으로 렌더링하며 정적 finding, 판정·무시, 비교 정책, 원본 프롬프트를 갱신하는 컨트롤을 두지 않습니다.
 
 관련 모듈의 경계는 다음과 같습니다.
 
@@ -187,12 +188,17 @@ v0.12.3의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 |---|---|---|
 | `semantic-inspector.js` | target closure, 정확한 전송 preview, bounded prompt, strict JSON/evidence 검증, memory cache | SillyTavern 원본, 정적 finding/review/policy, 전체 raw prompt·provider response의 영구 저장 |
 | `semantic-connection-profiles.js` | 공개 `ConnectionManagerRequestService`의 지원 프로필 목록·해결, bounded ID·name·provider·model·completion type 정제 | API key·URL·비밀번호·proxy·private settings 읽기 또는 저장 |
-| `semantic-provider-adapter.js` | 선택한 공개 profile `sendRequest()` 또는 현재 `getContext().generateRaw()` 단일 경로 호출, identity 판독, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code | 프로필 실패 뒤 현재 연결 재시도, 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
+| `semantic-provider-adapter.js` | 선택한 공개 profile `sendRequest()` 또는 현재 `getContext().generateRaw()` 단일 경로 호출, identity 판독, 알려진 provider envelope 정규화, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code·reason | 프로필 실패 뒤 현재 연결 재시도, 알 수 없는 envelope 추측, provider 오류 원문 전달, 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
+| `semantic-evaluation.js` | 합성 corpus의 제안 유용성·오탐률·같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 bounded·결정적으로 계산하고 원문 없는 집계 보고서 반환 | 실제 provider 호출, 모델 결과 생성, 사용자 스냅샷·프롬프트 원문 저장 |
 | `semantic-capture-gate.js` | 호출별 nonce identity ticket, prompt·prompt type exact match, 같은 semantic 호출의 exact duplicate 억제, TTL·용량·identity-exact 소비·해제 | 모든 생성의 전역 캡처 중단, 모호한 요청의 임의 연결 |
 | `capture.js` 연동 | AI request와 정확히 일치한 settings/data event 및 그 duplicate만 자기 캡처에서 제외 | 동시에 진행되는 일반 사용자 generation의 정상 캡처 |
 | `ui.js` | 기본 OFF 설정, 수동 선택, 매 호출 미리보기·동의, 취소·재시도, 별도 결과 표시 | 동의 저장, 자동 대상 선택·자동 수정·정책 변경 |
 
+Provider 응답 정규화는 배열 prototype·길이·own key·data descriptor를 제한하고 응답 객체의 iterator·slice·toJSON·accessor를 호출하지 않습니다. 이는 공개 SillyTavern API가 반환한 plain data의 해석 경계이며, 같은 JavaScript realm에 이미 주입된 hostile Proxy의 `getPrototypeOf`·descriptor 같은 meta trap 실행 자체를 별도 process처럼 sandbox하는 기능은 아닙니다.
+
 `SemanticInspectorMemoryCache`의 key는 protocol·provider identity·응답 상한·bounded prompt를 포함한 digest입니다. 값에는 전체 raw prompt·전체 raw provider response와 전용 `source.content`·`evidence.quote` 필드를 넣지 않고 검증된 ID·offset과 title·summary·rationale 같은 정규화 제안 텍스트를 제한된 LRU/TTL로 보관합니다. 모델이 제안 텍스트 안에 입력 원문의 표현을 반복할 가능성까지 제거하지는 않으므로 이 cache는 익명화 경계가 아닙니다. cache hit의 evidence quote는 현재 준비 source의 검증된 offset에서 다시 구성하며 새로고침하면 cache 전체가 사라집니다.
+
+v0.13.0 평가 corpus는 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. 이 결정적 회귀는 평가 도구와 고정 예시의 일관성을 검증하며, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
 
 취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 profile `sendRequest()`와 `generateRaw()`에는 provider 계산을 강제로 중단하는 공통 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
 

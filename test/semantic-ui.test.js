@@ -532,6 +532,50 @@ test('retry prepares a new preview and requests a new consent', async () => {
     assert.equal(ui.semanticInspectionState.status, 'complete');
 });
 
+test('semantic UI keeps only stable provider diagnostic codes and bounded reasons', async () => {
+    const ui = createUi({
+        async prepare() {
+            return {
+                preview: {
+                    includedSources: [],
+                    excludedSources: [],
+                },
+            };
+        },
+        async inspect() {
+            throw Object.assign(new Error('private provider response'), {
+                code: 'SEMANTIC_RATE_LIMITED',
+                reason: 'provider-rate-limited',
+            });
+        },
+    }, async () => true);
+
+    await ui.startSemanticInspection(snapshot(), {});
+
+    assert.equal(ui.semanticInspectionState.status, 'error');
+    assert.equal(ui.semanticInspectionState.errorCode, 'SEMANTIC_RATE_LIMITED');
+    assert.equal(
+        ui.semanticInspectionState.errorReason,
+        'provider-rate-limited',
+    );
+
+    const unknown = createUi({
+        async prepare() {
+            return { preview: { includedSources: [], excludedSources: [] } };
+        },
+        async inspect() {
+            throw Object.assign(new Error('private provider response'), {
+                code: 'PRIVATE_PROVIDER_FAILURE',
+            });
+        },
+    }, async () => true);
+    await unknown.startSemanticInspection(snapshot(), {});
+    assert.equal(
+        unknown.semanticInspectionState.errorCode,
+        'SEMANTIC_PROVIDER_ERROR',
+    );
+});
+
 test('logical cancellation aborts an in-flight semantic inspection', async () => {
     let started;
     const startedPromise = new Promise((resolve) => {
@@ -619,6 +663,13 @@ test('v0.11 semantic UI keeps consent, results, and persistence boundaries expli
     assert.match(semanticMethods, /text:\s*typeof item\?\.quote === 'string'/);
     assert.match(i18n, /AI 제안 — 자동 적용되지 않음/);
     assert.match(i18n, /이번 1회 전송에 동의합니다/);
+    assert.match(ui, /SEMANTIC_INSPECTOR_ERROR_CODES\.includes\(errorCode\)/);
+    assert.match(ui, /semantic\.errorDiagnosticWithReason/);
+    assert.match(i18n, /진단 코드: \{code\}/u);
+    assert.match(i18n, /SEMANTIC_AUTHENTICATION_ERROR/u);
+    assert.match(i18n, /SEMANTIC_RATE_LIMITED/u);
+    assert.match(i18n, /SEMANTIC_NETWORK_ERROR/u);
+    assert.match(i18n, /SEMANTIC_PROVIDER_UNAVAILABLE/u);
     assert.match(css, /@media \(max-width: 430px\)[\s\S]*?st-devtools-semantic-consent-panel/);
     assert.match(css, /\.st-devtools-semantic-results/);
     assert.match(css, /\.st-devtools-semantic-enable-card/);

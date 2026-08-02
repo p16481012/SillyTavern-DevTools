@@ -119,6 +119,7 @@ import {
     normalizeUsageRecord,
 } from './provider-usage.js';
 import { normalizeSemanticConnectionProfileId } from './semantic-connection-profiles.js';
+import { SEMANTIC_INSPECTOR_ERROR_CODES } from './semantic-inspector.js';
 import {
     DEFAULT_SEMANTIC_PROMPT_SETTINGS,
     MAX_SEMANTIC_PREFILL_LENGTH,
@@ -9783,7 +9784,7 @@ export class DevToolsWindow {
                 state.errorReason = null;
             } else {
                 state.status = 'error';
-                state.errorCode = /^[A-Z0-9_]{1,64}$/u.test(errorCode)
+                state.errorCode = SEMANTIC_INSPECTOR_ERROR_CODES.includes(errorCode)
                     ? errorCode
                     : 'SEMANTIC_PROVIDER_ERROR';
                 state.errorReason = /^[a-z0-9-]{1,80}$/u.test(String(error?.reason ?? ''))
@@ -9796,10 +9797,15 @@ export class DevToolsWindow {
         }
     }
 
-    renderSemanticSuggestions(result) {
+    renderSemanticSuggestions(result, snapshot = null) {
         const section = element('section', {
             className: 'st-devtools-semantic-results',
         });
+        const sourceLabels = new Map(
+            (Array.isArray(snapshot?.sources) ? snapshot.sources : [])
+                .filter((source) => typeof source?.id === 'string')
+                .map((source) => [source.id, sourceDisplayLabel(source)]),
+        );
         section.append(
             element('h3', { text: t('semantic.resultTitle') }),
             proseElement('p', t('semantic.resultDescription')),
@@ -9896,7 +9902,8 @@ export class DevToolsWindow {
                     evidenceCard.append(
                         element('small', {
                             text: t('semantic.evidenceLocation', {
-                                source: item?.sourceId ?? t('common.unknown'),
+                                source: sourceLabels.get(item?.sourceId)
+                                    ?? t('common.unknown'),
                                 start: normalizedCount(item?.start),
                                 end: normalizedCount(item?.end),
                             }),
@@ -10116,38 +10123,44 @@ export class DevToolsWindow {
             void this.startSemanticInspection(snapshot, analysis);
         });
         controls.append(selectedCount, run);
+        const announcement = element('div', {
+            className: 'st-devtools-semantic-announcement',
+        });
+        announcement.setAttribute('role', 'status');
+        announcement.setAttribute('aria-live', 'polite');
         const dynamic = element('div', {
             className: 'st-devtools-semantic-state',
         });
-        dynamic.setAttribute('aria-live', 'polite');
-        section.append(selection, controls, dynamic);
+        section.append(selection, controls, announcement, dynamic);
 
         const refresh = () => {
             const busy = ['preparing', 'awaiting-consent', 'running']
                 .includes(state.status);
+            section.setAttribute('aria-busy', String(busy));
             for (const input of inputs) input.disabled = busy;
             selectedCount.textContent = t('semantic.selectedCount', {
                 count: state.targetIds.size,
             });
             run.disabled = busy || state.targetIds.size === 0;
+            announcement.replaceChildren();
             dynamic.replaceChildren();
             if (state.status === 'preparing') {
-                dynamic.appendChild(proseElement(
+                announcement.appendChild(proseElement(
                     'p',
                     t('semantic.preparing'),
                 ));
             } else if (state.status === 'awaiting-consent') {
-                dynamic.appendChild(proseElement(
+                announcement.appendChild(proseElement(
                     'p',
                     t('semantic.awaitingConsent'),
                 ));
             } else if (state.status === 'running') {
-                dynamic.appendChild(proseElement(
+                announcement.appendChild(proseElement(
                     'p',
                     t('semantic.running'),
                 ));
             } else if (state.status === 'cancelled') {
-                dynamic.appendChild(proseElement(
+                announcement.appendChild(proseElement(
                     'p',
                     t('semantic.cancelled'),
                 ));
@@ -10160,6 +10173,17 @@ export class DevToolsWindow {
                     className: 'is-error',
                 });
                 error.setAttribute('role', 'alert');
+                const diagnostic = element('small', {
+                    className: 'st-devtools-semantic-error-diagnostic',
+                    text: state.errorReason
+                        ? t('semantic.errorDiagnosticWithReason', {
+                            code: state.errorCode,
+                            reason: state.errorReason,
+                        })
+                        : t('semantic.errorDiagnostic', {
+                            code: state.errorCode,
+                        }),
+                });
                 const errorReason = state.errorReason
                     ? proseElement('small', translatedValue(
                         `semantic.errorReason.${state.errorReason}`,
@@ -10178,15 +10202,23 @@ export class DevToolsWindow {
                 retry.addEventListener('click', () => {
                     void this.startSemanticInspection(snapshot, analysis);
                 });
-                dynamic.append(error);
+                dynamic.append(error, diagnostic);
                 if (errorReason) dynamic.appendChild(errorReason);
                 dynamic.appendChild(retry);
             } else if (state.status === 'complete') {
+                announcement.appendChild(proseElement(
+                    'p',
+                    t('semantic.complete', {
+                        count: Array.isArray(state.result?.suggestions)
+                            ? state.result.suggestions.length
+                            : 0,
+                    }),
+                ));
                 dynamic.appendChild(
-                    this.renderSemanticSuggestions(state.result),
+                    this.renderSemanticSuggestions(state.result, snapshot),
                 );
             } else {
-                dynamic.appendChild(proseElement(
+                announcement.appendChild(proseElement(
                     'p',
                     t('semantic.ready'),
                 ));

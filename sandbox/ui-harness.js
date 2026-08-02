@@ -62,7 +62,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.12.4',
+        extensionVersion: '0.13.0',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1310,7 +1310,8 @@ const sandboxSemanticAdapter = {
         );
         if (semanticFixtureMode === 'error') {
             throw Object.assign(new Error('sandbox semantic provider error'), {
-                code: 'SEMANTIC_PROVIDER_ERROR',
+                code: 'SEMANTIC_RATE_LIMITED',
+                reason: 'provider-rate-limited',
             });
         }
         const request = semanticRequestFromPrompt(prompt);
@@ -1398,7 +1399,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.12.4',
+    version: '0.13.0',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1582,7 +1583,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.12.4',
+        extensionVersion: '0.13.0',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1629,7 +1630,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.12.4',
+        version: '0.13.0',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });

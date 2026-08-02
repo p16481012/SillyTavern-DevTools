@@ -4212,6 +4212,7 @@
 }
 
 .st-devtools-semantic-selection > p,
+.st-devtools-semantic-announcement > p,
 .st-devtools-semantic-state > p,
 .st-devtools-semantic-results > p,
 .st-devtools-semantic-result-card > p {
@@ -4268,6 +4269,7 @@
 }
 
 .st-devtools-semantic-controls,
+.st-devtools-semantic-announcement,
 .st-devtools-semantic-state {
     display: flex;
     min-width: 0;
@@ -4283,6 +4285,19 @@
 .st-devtools-semantic-state > .is-error {
     flex-basis: 100%;
     color: var(--st-devtools-status-danger);
+}
+
+.st-devtools-semantic-error-diagnostic,
+.st-devtools-semantic-error-reason {
+    min-width: 0;
+    flex: 1 1 100%;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.76rem;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-semantic-error-diagnostic {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .st-devtools-semantic-results {
