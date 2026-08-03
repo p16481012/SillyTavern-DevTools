@@ -618,6 +618,100 @@ test('unsupported or stale profile selection falls back to the current public co
     }
 });
 
+test('a prepared profile route fails closed if the profile disappears before dispatch', async () => {
+    let profileReads = 0;
+    let profileCalls = 0;
+    let currentCalls = 0;
+    const profile = {
+        id: 'ephemeral-profile',
+        mode: 'cc',
+        name: 'Ephemeral',
+        api: 'openrouter',
+        model: 'profile-model',
+    };
+    const service = {
+        getSupportedProfiles() {
+            profileReads += 1;
+            return profileReads === 1 ? [profile] : [];
+        },
+        async sendRequest() {
+            profileCalls += 1;
+            return { content: { ok: true } };
+        },
+    };
+    const context = {
+        ...chatContext(async () => {
+            currentCalls += 1;
+            return 'must not fall back';
+        }),
+        ConnectionManagerRequestService: service,
+    };
+    const { adapter, captureGate } = adapterFor(context, {
+        getConnectionProfileId: () => 'ephemeral-profile',
+    });
+    const expectedIdentity = adapter.identity();
+
+    assert.equal(expectedIdentity.routeKind, 'profile');
+    await assert.rejects(
+        adapter.generate({
+            prompt: 'bound profile request',
+            expectedIdentity,
+        }),
+        (value) => (
+            value.code === SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT
+            && value.reason === 'provider-identity-changed'
+        ),
+    );
+    assert.equal(profileCalls, 0);
+    assert.equal(currentCalls, 0);
+    assert.equal(captureGate.activeCount, 0);
+    assert.equal(adapter.activeCallCount(), 0);
+});
+
+test('a prepared current route cannot switch to a newly selected profile', async () => {
+    let selectedProfileId = null;
+    let profileCalls = 0;
+    let currentCalls = 0;
+    const service = {
+        getSupportedProfiles: () => [{
+            id: 'new-profile',
+            mode: 'cc',
+            name: 'New profile',
+            api: 'openrouter',
+            model: 'profile-model',
+        }],
+        async sendRequest() {
+            profileCalls += 1;
+            return { content: { ok: true } };
+        },
+    };
+    const context = {
+        ...chatContext(async () => {
+            currentCalls += 1;
+            return 'must not run';
+        }),
+        ConnectionManagerRequestService: service,
+    };
+    const { adapter } = adapterFor(context, {
+        getConnectionProfileId: () => selectedProfileId,
+    });
+    const expectedIdentity = adapter.identity();
+    selectedProfileId = 'new-profile';
+
+    await assert.rejects(
+        adapter.generate({
+            prompt: 'bound current request',
+            expectedIdentity,
+        }),
+        (value) => (
+            value.code === SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT
+            && value.reason === 'provider-identity-changed'
+        ),
+    );
+    assert.equal(profileCalls, 0);
+    assert.equal(currentCalls, 0);
+});
+
 test('profile request failure is never retried through the current connection', async () => {
     let currentCalls = 0;
     let profileCalls = 0;
@@ -813,16 +907,24 @@ test('logical timeout discards a late result and never stops concurrent generati
     const result = adapter.generate({
         prompt: 'timeout-sensitive raw prompt',
     });
+    assert.equal(adapter.activeCallCount(), 1);
+    let idleSettled = false;
+    const idle = adapter.whenIdle().then((value) => {
+        assert.equal(value, undefined);
+        idleSettled = true;
+    });
 
     await assert.rejects(
         result,
         (value) => value.code === SEMANTIC_PROVIDER_ERROR_CODES.TIMEOUT,
     );
+    assert.equal(adapter.activeCallCount(), 1);
+    assert.equal(idleSettled, false);
     assert.equal(captureGate.activeCount, 1);
     assert.equal(stopCalls, 0);
     pending.resolve('late raw response must be discarded');
-    await Promise.resolve();
-    await Promise.resolve();
+    await idle;
+    assert.equal(adapter.activeCallCount(), 0);
     assert.equal(captureGate.activeCount, 0);
     assert.equal(stopCalls, 0);
 });
@@ -836,6 +938,7 @@ test('AbortSignal is logical-only and cleanup waits for underlying settlement', 
         prompt: 'abort-sensitive raw prompt',
         signal: abortController.signal,
     });
+    const idle = adapter.whenIdle();
     abortController.abort();
 
     await assert.rejects(
@@ -846,9 +949,10 @@ test('AbortSignal is logical-only and cleanup waits for underlying settlement', 
         ),
     );
     assert.equal(captureGate.activeCount, 1);
+    assert.equal(adapter.activeCallCount(), 1);
     pending.reject(new Error('late provider rejection with private payload'));
-    await Promise.resolve();
-    await Promise.resolve();
+    assert.equal(await idle, undefined);
+    assert.equal(adapter.activeCallCount(), 0);
     assert.equal(captureGate.activeCount, 0);
 });
 
@@ -942,8 +1046,10 @@ test('invalid schemas and responses fail without retaining raw values in errors'
 });
 
 test('capture gate cleanup failures cannot strand a settled generation', async () => {
+    let armedTtlMs = null;
     const captureGate = {
-        arm({ prompt }) {
+        arm({ prompt, ttlMs }) {
+            armedTtlMs = ttlMs;
             return {
                 ticket: Object.freeze({}),
                 prompt: `${prompt}\nnonce`,
@@ -964,6 +1070,7 @@ test('capture gate cleanup failures cannot strand a settled generation', async (
         await adapter.generate({ prompt: 'cleanup-safe prompt' }),
         'settled response',
     );
+    assert.equal(armedTtlMs, 30_100);
 });
 
 test('adapter source excludes internal generation and credential transports', async () => {

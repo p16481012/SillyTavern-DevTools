@@ -800,12 +800,14 @@ export class DevToolsWindow {
         analysisCache = null,
         analysisRuntime = null,
         semanticInspector = null,
+        semanticEvaluationHarness = null,
     }) {
         this.getContext = getContext;
         this.store = store;
         this.capture = capture;
         this.version = version;
         this.semanticInspector = semanticInspector;
+        this.semanticEvaluationHarness = semanticEvaluationHarness;
         this.root = null;
         this.window = null;
         this.content = null;
@@ -933,6 +935,10 @@ export class DevToolsWindow {
         this.refreshIcon = null;
         this.manualRefreshSequence = 0;
         this.semanticInspectorHost = null;
+        this.semanticEvaluationSession = null;
+        this.semanticEvaluationHost = null;
+        this.semanticEvaluationRepetitions = 1;
+        this.semanticEvaluationAdvancePromise = null;
         this.semanticConsentOverlay = null;
         this.semanticConsentPanel = null;
         this.semanticConsentBody = null;
@@ -2973,6 +2979,25 @@ export class DevToolsWindow {
                     .toLocaleString('ko-KR'),
             }),
         );
+        if (preview?.evaluation) {
+            appendMetadata(
+                'semantic.evaluation.previewCase',
+                t('semantic.evaluation.previewCaseValue', {
+                    id: preview.evaluation.caseId,
+                    repetition: preview.evaluation.repetition,
+                    position: preview.evaluation.position,
+                    total: preview.evaluation.totalCalls,
+                }),
+            );
+            appendMetadata(
+                'semantic.evaluation.previewPath',
+                t(`semantic.evaluation.path.${preview.evaluation.pathKind}`),
+            );
+            appendMetadata(
+                'semantic.evaluation.previewDigest',
+                preview.evaluation.requestDigest,
+            );
+        }
         content.appendChild(metadata);
 
         const promptPreview = element('section', {
@@ -3172,6 +3197,7 @@ export class DevToolsWindow {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.closeSemanticConsent(false, { restoreFocus: false });
+        this.cancelSemanticProviderEvaluation();
         this.cancelSemanticInspection();
         this.closeRulesSettings({ restoreFocus: false });
         this.closeSettings({ restoreFocus: false });
@@ -9486,7 +9512,377 @@ export class DevToolsWindow {
         }
     }
 
+    semanticEvaluationStatus() {
+        try {
+            return this.semanticEvaluationSession?.status?.() ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    semanticEvaluationIsActive() {
+        const status = this.semanticEvaluationStatus();
+        return Boolean(
+            this.semanticEvaluationAdvancePromise
+            || status?.providerSettling
+            || ['ready', 'preparing', 'awaiting-consent', 'running'].includes(
+                status?.status,
+            )
+        );
+    }
+
+    refreshSemanticEvaluationHost() {
+        if (
+            this.semanticEvaluationHost?.isConnected
+            && typeof this.semanticEvaluationHost.__stDevToolsEvaluationRefresh
+                === 'function'
+        ) {
+            this.semanticEvaluationHost.__stDevToolsEvaluationRefresh();
+        }
+    }
+
+    cancelSemanticProviderEvaluation() {
+        if (!this.semanticEvaluationSession) return false;
+        this.closeSemanticConsent(false);
+        try {
+            this.semanticEvaluationSession.cancel();
+            void this.semanticEvaluationSession.whenReleased?.().then(() => {
+                this.refreshSemanticEvaluationHost();
+            });
+        } catch {
+            // The UI still discards its reference below.
+        }
+        this.refreshSemanticEvaluationHost();
+        return true;
+    }
+
+    advanceSemanticProviderEvaluation() {
+        if (this.semanticEvaluationAdvancePromise) {
+            return this.semanticEvaluationAdvancePromise;
+        }
+        const operation = this.runSemanticProviderEvaluationStep();
+        this.semanticEvaluationAdvancePromise = operation;
+        this.refreshSemanticEvaluationHost();
+        return operation.finally(() => {
+            if (this.semanticEvaluationAdvancePromise === operation) {
+                this.semanticEvaluationAdvancePromise = null;
+            }
+            this.refreshSemanticEvaluationHost();
+        });
+    }
+
+    async runSemanticProviderEvaluationStep() {
+        if (
+            !this.semanticEvaluationHarness
+            || typeof this.semanticEvaluationHarness.createSession !== 'function'
+        ) {
+            return null;
+        }
+        if (['preparing', 'awaiting-consent', 'running'].includes(
+            this.semanticInspectionState?.status,
+        )) {
+            globalThis.toastr?.warning?.(
+                t('semantic.evaluation.normalInspectionBusy'),
+                'ST DevTools',
+            );
+            return null;
+        }
+        const previous = this.semanticEvaluationStatus();
+        if (!previous || ['complete', 'cancelled', 'failed'].includes(previous.status)) {
+            try {
+                this.semanticEvaluationSession = this.semanticEvaluationHarness.createSession({
+                    repetitions: this.semanticEvaluationRepetitions,
+                    responseTokenCap: this.preferences.semanticResponseTokenCap,
+                    requiredRouteKind: this.preferences.semanticConnectionProfileId
+                        ? 'profile'
+                        : 'current',
+                });
+            } catch {
+                globalThis.toastr?.error?.(
+                    t('semantic.evaluation.startFailed'),
+                    'ST DevTools',
+                );
+                return null;
+            }
+        }
+        this.refreshSemanticEvaluationHost();
+        let result;
+        try {
+            result = await this.semanticEvaluationSession.runNext({
+                requestConsent: async ({
+                    preview,
+                    caseId,
+                    pathKind,
+                    repetition,
+                    position,
+                    totalCalls,
+                    requestDigest,
+                }) => {
+                    this.refreshSemanticEvaluationHost();
+                    return this.requestSemanticConsent({
+                        ...preview,
+                        evaluation: {
+                            caseId,
+                            pathKind,
+                            repetition,
+                            position,
+                            totalCalls,
+                            requestDigest,
+                        },
+                    });
+                },
+            });
+        } catch {
+            globalThis.toastr?.error?.(
+                t('semantic.evaluation.failedToast'),
+                'ST DevTools',
+            );
+            return null;
+        }
+        this.refreshSemanticEvaluationHost();
+        void this.semanticEvaluationSession.whenReleased?.().then(() => {
+            this.refreshSemanticEvaluationHost();
+        });
+        if (result?.status === 'complete') {
+            globalThis.toastr?.success?.(
+                t('semantic.evaluation.completedToast'),
+                'ST DevTools',
+            );
+        } else if (result?.status === 'failed') {
+            globalThis.toastr?.error?.(
+                t('semantic.evaluation.failedToast'),
+                'ST DevTools',
+            );
+        }
+        return result;
+    }
+
+    renderSemanticProviderEvaluationControls() {
+        if (!this.semanticEvaluationHarness) return null;
+        const details = element('details', {
+            className: 'st-devtools-semantic-evaluation st-devtools-disclosure',
+        });
+        const summary = element('summary');
+        summary.appendChild(explainedTitle(
+            t('semantic.evaluation.title'),
+            t('semantic.evaluation.description'),
+        ));
+        const body = element('div', {
+            className: 'st-devtools-semantic-evaluation-body',
+        });
+        const dynamic = element('div', {
+            className: 'st-devtools-semantic-evaluation-dynamic',
+        });
+        const repetitionField = element('label', {
+            className: 'st-devtools-semantic-evaluation-repetitions',
+        });
+        repetitionField.appendChild(element('strong', {
+            text: t('semantic.evaluation.repetitions'),
+        }));
+        const repetitions = element('select');
+        for (const value of [1, 3]) {
+            const option = element('option', {
+                text: t('semantic.evaluation.repetitionOption', { count: value }),
+                value: String(value),
+            });
+            option.selected = value === this.semanticEvaluationRepetitions;
+            repetitions.appendChild(option);
+        }
+        repetitions.addEventListener('change', () => {
+            this.semanticEvaluationRepetitions = Number(repetitions.value) === 3 ? 3 : 1;
+            refresh();
+        });
+        repetitionField.append(
+            repetitions,
+            proseElement('small', t('semantic.evaluation.repetitionHint')),
+        );
+        body.append(
+            proseElement('p', t('semantic.evaluation.warning'), {
+                className: 'st-devtools-semantic-evaluation-warning',
+            }),
+            repetitionField,
+            dynamic,
+        );
+        const refresh = () => {
+            const status = this.semanticEvaluationStatus();
+            const active = this.semanticEvaluationIsActive();
+            repetitions.disabled = active;
+            const manifest = this.semanticEvaluationHarness.manifest?.() ?? null;
+            const totalCalls = status?.totalCalls
+                ?? ((manifest?.caseCount ?? 0) * this.semanticEvaluationRepetitions);
+            const completedCalls = status?.completedCalls ?? 0;
+            const statusCard = element('section', {
+                className: `st-devtools-semantic-evaluation-status is-${
+                    status?.status ?? 'idle'
+                }`,
+            });
+            statusCard.append(
+                element('strong', {
+                    text: t(`semantic.evaluation.status.${status?.status ?? 'idle'}`),
+                }),
+                proseElement('p', t('semantic.evaluation.progress', {
+                    completed: completedCalls,
+                    total: totalCalls,
+                })),
+                proseElement('small', t('semantic.evaluation.attemptProgress', {
+                    attempts: status?.sendAttempts ?? 0,
+                    consented: status?.consentedCalls ?? 0,
+                })),
+                proseElement('small', t('semantic.evaluation.maximumTokens', {
+                    count: status?.maximumResponseTokens
+                        ?? (totalCalls * this.preferences.semanticResponseTokenCap),
+                })),
+                proseElement('small', t('semantic.evaluation.pathCoverage', {
+                    relations: status?.pathCoverage?.structuredRelation
+                        ?? manifest?.pathCoverage?.structuredRelation
+                        ?? 0,
+                    atoms: status?.pathCoverage?.structuredAtomBridge
+                        ?? manifest?.pathCoverage?.structuredAtomBridge
+                        ?? 0,
+                    bridges: status?.pathCoverage?.sourceBridge
+                        ?? manifest?.pathCoverage?.sourceBridge
+                        ?? 0,
+                })),
+            );
+            const pinnedManifest = status?.manifest ?? manifest;
+            if (pinnedManifest) {
+                statusCard.appendChild(proseElement('small', t(
+                    'semantic.evaluation.corpusPin',
+                    {
+                        version: pinnedManifest.corpusVersion,
+                        count: pinnedManifest.caseCount,
+                        digest: String(pinnedManifest.digest ?? '').slice(0, 12),
+                    },
+                )));
+            }
+            if (status?.providerSettling) {
+                statusCard.appendChild(proseElement(
+                    'small',
+                    t('semantic.evaluation.providerSettling'),
+                    { className: 'is-warning' },
+                ));
+            }
+            if (status?.identity) {
+                statusCard.appendChild(proseElement('small', t(
+                    'semantic.evaluation.identityScope',
+                    {
+                        provider: status.identity.provider ?? t('common.unknown'),
+                        model: status.identity.model ?? t('common.unknown'),
+                        route: status.identity.routeKind ?? t('common.unknown'),
+                    },
+                )));
+            }
+            if (status?.nextCase) {
+                statusCard.appendChild(proseElement('small', t(
+                    'semantic.evaluation.nextCase',
+                    {
+                        id: status.nextCase.id,
+                        repetition: status.nextCase.repetition,
+                        path: t(`semantic.evaluation.path.${status.nextCase.pathKind}`),
+                    },
+                )));
+            }
+            if (status?.failure) {
+                statusCard.appendChild(proseElement('p', t(
+                    'semantic.evaluation.failure',
+                    {
+                        code: status.failure.code,
+                        reason: status.failure.reason,
+                    },
+                ), { className: 'is-error' }));
+            }
+            if (status?.aggregate) {
+                const metrics = element('dl', {
+                    className: 'st-devtools-semantic-evaluation-metrics',
+                });
+                const appendMetric = (key, value) => {
+                    metrics.append(
+                        element('dt', { text: t(key) }),
+                        element('dd', {
+                            text: `${Math.round(value * 1_000) / 10}%`,
+                        }),
+                    );
+                };
+                appendMetric(
+                    'semantic.evaluation.usefulness',
+                    status.aggregate.worstMetrics.usefulnessRate,
+                );
+                appendMetric(
+                    'semantic.evaluation.falsePositive',
+                    status.aggregate.worstMetrics.falsePositiveRate,
+                );
+                appendMetric(
+                    'semantic.evaluation.evidenceAccuracy',
+                    status.aggregate.worstMetrics.evidenceAccuracy,
+                );
+                statusCard.append(
+                    proseElement('small', t(
+                        status.structuralTransportPassed
+                            ? 'semantic.evaluation.structurePassed'
+                            : 'semantic.evaluation.structureNotPassed',
+                        {
+                            completed: status.structuralChecksPassed ?? 0,
+                            total: status.totalCalls ?? 0,
+                        },
+                    )),
+                    element('strong', {
+                        text: t(
+                            status.aggregate.qualityEligible
+                                ? (status.aggregate.passed
+                                    ? 'semantic.evaluation.passed'
+                                    : 'semantic.evaluation.notPassed')
+                                : (status.aggregate.smokePassed
+                                    ? 'semantic.evaluation.smokePassed'
+                                    : 'semantic.evaluation.smokeNotPassed'),
+                        ),
+                    }),
+                    metrics,
+                );
+            }
+            const actions = element('div', {
+                className: 'st-devtools-semantic-evaluation-actions',
+            });
+            const run = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: t(status && active
+                    ? 'semantic.evaluation.next'
+                    : 'semantic.evaluation.start'),
+                type: 'button',
+            });
+            run.disabled = ['preparing', 'awaiting-consent', 'running'].includes(
+                status?.status,
+            ) || Boolean(this.semanticEvaluationAdvancePromise)
+                || Boolean(status?.providerSettling);
+            run.setAttribute('aria-busy', String(Boolean(
+                this.semanticEvaluationAdvancePromise
+                || status?.providerSettling
+            )));
+            run.addEventListener('click', () => {
+                void this.advanceSemanticProviderEvaluation();
+            });
+            actions.appendChild(run);
+            if (active) {
+                const cancel = element('button', {
+                    className: 'menu_button',
+                    text: t('semantic.evaluation.cancel'),
+                    type: 'button',
+                });
+                cancel.addEventListener('click', () => {
+                    this.cancelSemanticProviderEvaluation();
+                });
+                actions.appendChild(cancel);
+            }
+            dynamic.replaceChildren(statusCard, actions);
+        };
+        details.__stDevToolsEvaluationRefresh = refresh;
+        this.semanticEvaluationHost = details;
+        refresh();
+        details.append(summary, body);
+        return details;
+    }
+
     resetSemanticInspectionForSettingsChange(preferences = this.preferences) {
+        this.cancelSemanticProviderEvaluation();
         this.cancelSemanticInspection();
         this.resetSemanticInspectionState();
         if (!preferences?.semanticInspectorEnabled) {
@@ -9697,10 +10093,12 @@ export class DevToolsWindow {
             promptActions,
         );
         promptDetails.append(promptSummary, promptBody);
+        const evaluation = this.renderSemanticProviderEvaluationControls();
         section.append(
             profileField,
             capField,
             promptDetails,
+            ...(evaluation ? [evaluation] : []),
             proseElement('small', t('settings.semanticPrivacyWarning'), {
                 className: 'st-devtools-settings-privacy-note',
             }),
@@ -9787,6 +10185,8 @@ export class DevToolsWindow {
     async startSemanticInspection(snapshot, analysis) {
         const state = this.ensureSemanticInspectionSnapshot(snapshot);
         if (
+            this.semanticEvaluationIsActive()
+            ||
             !this.preferences.semanticInspectorEnabled
             || !this.semanticSnapshotSupportsInspection(snapshot)
             || typeof this.semanticInspector?.prepare !== 'function'

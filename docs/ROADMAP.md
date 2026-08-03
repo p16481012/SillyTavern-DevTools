@@ -1,10 +1,24 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.14.0 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.14.1 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.14.0은 기존 읽기 전용 탐색·복사 경계를 유지하면서 합성 의미 평가를 조건·예외·말투·역할·안전의 충돌/비충돌까지 넓힙니다. 실제 provider 호출은 CI나 자동 테스트에서 실행하지 않고, 현재 UI로 가능한 연결 적합성 평가와 향후 공식 harness가 필요한 전체 corpus 품질 평가를 명확히 분리합니다.
+v0.14.1은 기존 읽기 전용 탐색·복사 경계를 유지하면서 같은 inspector·adapter·capture gate를 공유하는 공식 합성 Provider 평가 harness와 구조 atom·relation 제품 경로 자동 평가를 추가합니다. 실제 provider 호출은 CI나 자동 테스트에서 실행하지 않으며, 특정 모델의 품질 판정은 사용자가 명시적으로 16건 또는 48건을 사례별 동의로 완료한 세션에만 붙입니다.
+
+## v0.14.1 — 공식 Provider harness·구조 경로 평가 · 완료
+
+- 제품에 포함된 고정 합성 corpus만 받는 in-process 평가 세션과 사례별 미리보기·초기화된 1회 동의
+- 동일 inspector/adapter/capture gate 공유, 직렬 1건, 최대 48회, 자동 retry·route fallback 없음
+- cache 전후 초기화와 `cached:false`, provider/model/route/profile identity 고정, selected profile의 current fallback 차단
+- prepared identity와 실제 dispatch route 결속, underlying settlement까지 inspector 단위 중복 세션 차단
+- 동의 수·전송 시도·검증 완료 수 분리, 빠른 연속 실행 단일화, 1회 smoke와 3회 공식 품질 판정 구분
+- corpus v2·16 case SHA-256 manifest와 실제 relation 제품 target 2건·atom bridge 1건·source bridge 13건 표시
+- structural gate의 target/source/atom/relation exact closure 및 구조 양성 응답의 atom/relation 귀속 검사
+- raw prompt·response·quote·제안 설명·opaque profile ID 없이 반복별 집계와 최악 지표만 메모리에 표시
+- 조건·예외·역할·지시·포맷의 실제 `analyzeSnapshotDetailed → atom/relation → prepare` closure 6건과 음성 경계 4건 자동 평가
+- 말투·안전 정적 atom 분류 부재를 남은 구조 기능 공백으로 고정
+- 공식 gate에서 provider evidence offset 보정 불허, timeout보다 30초 긴 capture gate ticket
 
 ## v0.14.0 — 의미 평가 corpus·실제 provider 절차 · 완료
 
@@ -14,7 +28,7 @@ v0.14.0은 기존 읽기 전용 탐색·복사 경계를 유지하면서 합성 
 - 동일 분류의 복수 issue에서도 근거 pair 적중을 최대화하는 결정적 일대일 대응과 gate 없는 legacy v1 명시 호환
 - 적용 범위·예외·양립 가능한 말투·역할 분리·안전 우회를 구분하는 AI 고정 지침
 - OpenAI·Anthropic·Google × 현재 연결·Connection Manager 수동 평가 행렬, 개인정보·동의·비용·중단·기록 절차
-- 전체 corpus live 평가는 공식 in-process harness 전까지 `incomplete`로 남기는 정직한 판정 경계
+- v0.14.0에서는 전체 corpus live 평가를 당시 미구현이던 공식 in-process harness 전까지 `incomplete`로 남긴 판정 경계
 
 ## v0.13.1 — 읽기 전용 복사·캐릭터/페르소나 구조 오탐 패치 · 완료
 
@@ -27,7 +41,7 @@ v0.14.0은 기존 읽기 전용 탐색·복사 경계를 유지하면서 합성 
 
 저장은 기간·채팅별 개수·전체 대략적 용량 정책과 무결성 진단을 지원합니다. 대형 목록은 가상 렌더링하고 검색·diff·규칙 분석은 Worker와 메모리 cache를 사용합니다. 새 캡처는 전체 원문·원문 제거본·메타데이터 모드를 선택할 수 있으며, 안전 공유·혼합 privacy archive 병합/교체·진단 보고서 비교가 추가되었습니다.
 
-선택적 AI Semantic Inspector는 사용자가 직접 고른 정적 finding·cluster의 로컬 근거만 매 호출 동의 후 선택한 SillyTavern Connection Manager 프로필 또는 현재 provider에 보냅니다. 설정에는 불투명 profile ID만 남기며 API 키·URL·연결 비밀값을 저장하지 않습니다. v0.12.3의 추가 프롬프트와 프리필은 로컬 일반 텍스트로 저장되고 고정 안전 계약과 분리됩니다. 엄격한 JSON·근거 검증을 통과한 제안도 정적 결과와 분리하며 자동 수정·판정·정책 변경에는 사용하지 않습니다. 규칙 검사 화면의 AI 모드는 사용 여부·연결 프로필·응답 상한을 한곳에서 다루지만 켜는 것만으로 전송하지 않습니다. 따라서 v0.14.0도 자연어 의미 전체나 프롬프트 품질을 보증하지 않습니다.
+선택적 AI Semantic Inspector는 사용자가 직접 고른 정적 finding·cluster의 로컬 근거만 매 호출 동의 후 선택한 SillyTavern Connection Manager 프로필 또는 현재 provider에 보냅니다. 설정에는 불투명 profile ID만 남기며 API 키·URL·연결 비밀값을 저장하지 않습니다. v0.12.3의 추가 프롬프트와 프리필은 로컬 일반 텍스트로 저장되고 고정 안전 계약과 분리됩니다. 엄격한 JSON·근거 검증을 통과한 제안도 정적 결과와 분리하며 자동 수정·판정·정책 변경에는 사용하지 않습니다. 규칙 검사 화면의 AI 모드는 사용 여부·연결 프로필·응답 상한을 한곳에서 다루지만 켜는 것만으로 전송하지 않습니다. 따라서 v0.14.1도 자연어 의미 전체나 프롬프트 품질을 보증하지 않습니다.
 
 v0.13.0은 합성·익명 평가 corpus와 유용성·오탐률·근거 범위 pair 적중률 기준을 추가하고, 알려진 OpenAI 계열·Anthropic·Google 계열 응답 envelope를 bounded 문자열로 정규화합니다. 인증·요청 한도·네트워크·timeout·일시 장애·거부는 provider 원문을 노출하지 않는 안정된 진단 코드로 구분합니다. 고정 corpus 회귀는 평가 기반의 일관성을 확인하지만 실제 provider·model 품질을 보증하지 않습니다.
 
@@ -289,12 +303,12 @@ v0.12.0의 4개 그룹과 조건부 하위 탭은 실제 기능을 다시 숨기
 - 실제 SillyTavern 연결 프로필에서 재현되는 추가 envelope·공개 오류 필드만 fixture와 함께 보강
 - 원문 오류·credential을 수집하지 않고 안정된 코드와 provider family·route 종류만으로 문제 보고
 
-## v0.14.x 후보 — 공식 평가 harness·구조 경로 보강
+## v0.14.x 후속 후보 — 의미 판정 범위 보강
 
-- 확장의 `SemanticInspector`·adapter·capture gate 인스턴스를 그대로 공유하는 명시적 opt-in 수동 평가 harness
-- corpus 요청의 구조 atom·relation과 실제 `prepare()` 제품 경로를 포함하는 통합 fixture
 - title·summary·rationale의 의미 정확성을 사람이 판정하는 bounded rubric
-- raw prompt·raw response 없이 case ID·정규화 집계·안정된 code/reason만 남기는 실행 기록
+- 말투와 안전 의미를 과잉 탐지하지 않는 정적 atom·relation 분류와 제품 경로 양성/음성 fixture
+- 실제 OpenAI·Anthropic·Google × current/profile 세션에서 확인된 bounded envelope 호환 패치
+- provider 평가 세션의 원문 없는 로컬 내보내기는 실제 사용 필요가 확인될 때만 별도 설계
 
 ## v0.15.0 후보 — 선택형 온보딩
 

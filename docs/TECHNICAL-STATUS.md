@@ -1,4 +1,18 @@
-# v0.14.0 기술 구현 현황
+# v0.14.1 기술 구현 현황
+
+## v0.14.1 공식 Provider harness·구조 경로 평가
+
+- 규칙 검사 AI 연결 설정의 접힌 고급 도구에서 고정 합성 corpus 16건을 현재 연결 또는 선택 프로필로 한 건씩 실행합니다. 1회 smoke와 3회 품질 판정을 구분하며 자동 일괄 실행은 없습니다.
+- harness는 `index.js`가 만든 동일 `SemanticInspector`만 주입받아 기존 adapter와 `SemanticCaptureGate`를 공유합니다. 별도 adapter·gate·fetch·SDK·API key 입력 경로는 없습니다.
+- 각 사례는 `prepare → 구조 closure exact gate → 합성 원문/identity/digest 미리보기 → 초기화된 1회 동의 → cache 초기화 → inspect` 순서를 따릅니다. provider/model/route/profile identity 변경, 선택 profile의 current fallback, cache hit, 보정된 evidence offset과 구조 양성 응답의 atom/relation 귀속 누락은 실패로 중단합니다.
+- 준비 identity는 adapter의 실제 전송 route에 결속됩니다. profile이 전송 직전에 사라지거나 current route가 profile로 바뀌면 capture gate를 열거나 provider를 호출하기 전에 실패합니다.
+- 결과는 즉시 target/category/source/atom/relation/evidence offset만 평가기에 투영하고 원문·raw response·quote·제안 설명·opaque profile ID를 상태나 영구 저장소에 남기지 않습니다. 최대 48회, 응답 상한 2,048, 직렬 1건, 자동 retry 없음입니다.
+- 동의 완료·전송 시도·검증 완료 수를 별도로 표시합니다. 논리 취소나 timeout 뒤에도 underlying provider 요청이 끝날 때까지 inspector 단위 lease를 유지해 새 일반 검사·평가 세션이 겹치지 않게 합니다.
+- 1회 결과는 smoke일 뿐 공식 통과가 아니며, 같은 public provider/model/route 조합에서 3회 모두 통과해야 해당 단일 연결 셀의 품질 통과로 표시합니다. 다른 provider family나 모델로 일반화하지 않습니다.
+- corpus version·16개 case ID·SHA-256 manifest를 고정합니다. 공식 suite의 구조 경로 분포는 실제 relation 제품 target 2건, 실제 atom을 운반하는 평가 bridge 1건, 구조가 없는 source bridge 13건입니다.
+- 구조 제품 경로 fixture는 10건입니다. 조건·예외·역할·지시문·포맷의 실제 분석 relation 6건과 동일 언어·호환 역할·말투·안전 음성 경계 4건을 거쳐 `prepare()`의 source/atom/relation closure와 ID를 검사합니다.
+- 확인된 공백: 말투와 안전 의미는 현재 정적 atom 분류가 없어 실제 relation-backed 일반 AI target을 만들지 못합니다. canonical provider corpus의 해당 사례는 source bridge를 사용하므로 이 결과를 구조 경로 통과로 표기하지 않습니다.
+- provider timeout보다 gate ticket이 먼저 만료되지 않도록 호출별 ticket TTL은 timeout에 30초 여유를 둡니다.
 
 ## v0.14.0 합성 의미 평가·실제 provider 절차
 
@@ -9,7 +23,7 @@
 - category·target·source가 같은 복수 issue는 최대 issue 적중 수를 우선하고 그 안에서 근거 pair 적중 수가 최대가 되는 bounded 일대일 대응을 사용합니다.
 - AI 고정 지침은 적용 범위·조건·예외를 먼저 비교하고, 양립 가능한 말투·서로 다른 참가자 역할·안전한 대안과 실제 금지 우회를 구분하도록 보강했습니다.
 - 실제 provider 평가는 OpenAI·Anthropic·Google 계열과 현재 연결·Connection Manager 경로의 행렬, 개인정보 모드·매회 동의·identity·self-capture·비용·중단 기준을 갖춘 수동 절차로 분리했습니다.
-- 현재 UI에서 로컬 target이 없는 음성 사례는 전체 live 평가가 불가능합니다. 같은 `SemanticCaptureGate`를 공유하는 공식 in-process harness 전까지 해당 셀을 `pass`가 아닌 `incomplete`로 기록합니다.
+- v0.14.0 당시 로컬 target 없는 음성 사례의 live 평가 공백은 v0.14.1 공식 harness로 해소했습니다. 다만 특정 provider/model의 실제 결과는 CI에서 호출하지 않으므로 사용자가 3회 세션을 끝내기 전까지 `미평가`입니다.
 
 ## v0.13.1 읽기 전용 복사·캐릭터/페르소나 구조 오탐 패치
 
@@ -310,14 +324,14 @@
 
 ### v0.14.x·v0.15.0 방향
 
-- 확장과 동일한 inspector·adapter·capture gate를 사용하는 명시적 opt-in 실제 provider 수동 평가 harness
-- corpus의 구조 atom·relation과 실제 `prepare()` 제품 경로 통합 평가, title·summary·rationale의 의미 정확성을 다루는 사람 검토 rubric
+- 말투·안전 의미의 정적 atom·relation 양성/음성 경계를 과잉 탐지 없이 추가하는 분류 설계
+- title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
 - 다섯 기능을 처음 쓰는 사용자를 위한 선택형 코치마크·워크스루, 재시작·건너뛰기·키보드·screen reader 계약
 
 선택형 온보딩의 세부 기능은 사용자가 기능 개발 뒤 한 번에 수행할 최종 검토 결과로 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. 확장의 inspector·adapter·capture gate를 공유하는 공식 in-process 수동 평가 harness를 분리 설계합니다.
+1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
 3. 선택형 온보딩은 현재 개발 흐름을 방해하지 않고 건너뛰기·재시작·접근성을 보장하는 별도 버전으로 계획합니다.

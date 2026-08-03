@@ -2,20 +2,24 @@
 
 이 문서는 합성 semantic corpus를 OpenAI·Anthropic·Google 계열의 실제 모델에서 평가하고, SillyTavern의 `현재 채팅 연결` 경로와 공개 Connection Manager 프로필 경로가 같은 안전 경계를 지키는지 확인하기 위한 릴리스 절차다. 자동 테스트를 대체하지 않으며 실제 사용자 프롬프트로 품질을 시험하는 절차도 아니다.
 
-기준 corpus는 [`test/fixtures/semantic-evaluation-corpus.json`](../test/fixtures/semantic-evaluation-corpus.json), 집계 규칙은 [`src/semantic-evaluation.js`](../src/semantic-evaluation.js)에 있다. 평가자는 corpus와 동일하게 목적에 맞게 작성한 합성 데이터만 사용해야 한다.
+기준 corpus는 [`src/semantic-provider-evaluation-corpus.js`](../src/semantic-provider-evaluation-corpus.js), 집계 규칙은 [`src/semantic-evaluation.js`](../src/semantic-evaluation.js), 실행 경계는 [`src/semantic-provider-evaluation-harness.js`](../src/semantic-provider-evaluation-harness.js)에 있다. 평가자는 제품에 포함된 고정 합성 corpus만 사용해야 한다.
 
-## 먼저 알아둘 현재 한계
+## v0.14.1의 공식 평가 경계
 
-일반 UI는 로컬 Rule Inspector가 만든 finding 또는 cluster를 사용자가 선택한 경우에만 AI 검사를 시작한다. 따라서 정적 finding이 없는 `문제 없음` corpus 사례를 UI만으로 그대로 재생할 수는 없다. 또한 확장 내부의 capture gate와 별도로 콘솔에서 provider adapter를 새로 만들면 자기 AI 요청을 일반 스냅샷으로 오인할 수 있다.
+일반 AI 의미 검사는 로컬 Rule Inspector가 만든 finding 또는 cluster를 사용자가 선택한 경우에만 실행한다. 공식 합성 평가 harness는 이 일반 기능과 분리되어 `규칙 검사 → AI로 더 자세히 보기 → AI 연결 설정 → 고급: 공식 합성 Provider 평가`에서 연다. harness는 확장 시작 시 만든 동일 `SemanticInspector`와 동일 adapter·capture gate를 사용하며 브라우저 콘솔, 직접 `fetch`, provider SDK, 별도 API key 입력 경로를 제공하지 않는다.
 
-따라서 현재 버전에서 안전하게 실행할 수 있는 평가는 다음 두 범위로 나눈다.
+평가는 다음 두 범위로 구분한다.
 
-1. 설치된 확장 UI에서 실제 provider 경로·미리보기·1회 동의·오류 정규화·자기 캡처 제외를 확인하는 연결 적합성 평가
-2. UI에서 선택 가능한 합성 충돌 사례에 대한 제한된 의미 품질 평가
+1. 16건 canonical 합성 corpus 전체를 실제 provider에서 실행하는 의미 품질 평가
+2. 합성 snapshot이 실제 `analyzeSnapshotDetailed → finding/cluster → SemanticInspector.prepare`를 거치는 구조 atom·relation 제품 경로 평가
 
-모든 corpus 사례, 특히 기대 제안이 0개인 음성 사례까지 실제 provider로 일괄 평가했다고 표기하려면 확장과 같은 `SemanticCaptureGate` 인스턴스를 사용하는 공식 수동 평가 harness가 먼저 필요하다. 그 전에는 해당 항목을 `통과`가 아닌 `미평가`로 기록한다. 브라우저 콘솔, 직접 `fetch`, provider SDK 또는 API key를 넣은 임시 스크립트로 이 경계를 우회하지 않는다.
+canonical corpus에는 정적 relation이 없는 사례도 있으므로, harness는 먼저 실제 로컬 분석을 실행한다. 실제 relation과 제품 finding/cluster가 모두 만들어진 2건은 제품 target을 그대로 사용하고, atom만 만들어진 1건은 `structured-atom-bridge`, 구조가 없는 13건은 `source-bridge`로 평가 target을 연결한다. 따라서 전체 provider 품질 점수는 자연어 의미 품질을 평가할 수 있지만 모든 사례의 구조 atom 생성 능력을 증명하지 않는다.
 
-향후 공식 harness는 `SemanticInspector`와 `SemanticProviderAdapter`의 기존 검증 경로를 그대로 사용하고, 일반 캡처와 같은 gate 인스턴스를 공유해야 한다. 각 유료 반복은 새 inspector를 만들거나 memory cache를 명시적으로 비워 실제 fresh 호출임을 보장해야 하며, 디스크에는 raw prompt·raw response 대신 case ID, 정규화된 제안 집계와 안정된 code/reason만 남겨야 한다.
+구조 제품 경로는 [`test/semantic-product-path.test.js`](../test/semantic-product-path.test.js)가 별도로 검증한다. 조건·예외·역할·지시문·포맷의 실제 source/atom/relation ID와 closure는 통과하지만, 말투·안전 의미는 아직 정적 atom 분류가 없어 bridge 없이 일반 제품 target으로 들어가지 못한다. 이 둘을 합쳐 `구조 경로 전체 통과`라고 표기하지 않는다.
+
+harness는 각 사례 직전과 직후 memory cache를 비우고 `cached: false`만 인정한다. corpus v2·case ID 목록은 SHA-256 manifest로 고정한다. raw prompt·raw response·quote·제안 설명은 provider 처리에 필요한 동안만 존재하며 반환 상태나 디스크에 저장하지 않는다. 상태에는 case ID, 동의 수, 전송 시도 수, 평가 완료 수, 구조 경로 수, public provider/model/route, 집계 지표와 안정된 code/reason만 남는다.
+
+준비된 identity는 실제 adapter 전송 route에 결속한다. 선택 profile이 사라지거나 다른 route로 바뀌면 current 연결로 fallback하지 않고 전송 전에 실패한다. 취소와 timeout은 논리 취소이므로 underlying provider 호출이 끝날 때까지 같은 inspector의 새 평가 세션을 잠그며, UI의 빠른 연속 실행도 하나의 작업으로 합친다.
 
 ## 평가 원칙
 
@@ -78,7 +82,7 @@ Chat Completion 프로필과 Text Completion 프로필을 모두 지원하는 �
 10. 실행 전후 현재 채팅의 스냅샷 수를 비교한다. AI 요청 자체가 일반 요청 스냅샷으로 추가되지 않아야 한다.
 11. 캐릭터 카드, 페르소나, preset, 비교 정책과 검토 판정이 실행 전후 동일한지 확인한다.
 
-## 현재 UI에서 가능한 제한적 의미 smoke
+## 일반 AI UI의 선택 대상 smoke
 
 연결 적합성을 통과한 셀에서만 수행한다. 이 절차는 provider가 합성 충돌을 유용하게 설명할 수 있는지 살펴보는 smoke이며 corpus release gate 통과 판정이 아니다.
 
@@ -86,23 +90,29 @@ Chat Completion 프로필과 Text Completion 프로필을 모두 지원하는 �
 2. UI에서 실제 로컬 finding 또는 cluster가 생기고 같은 source closure를 안전하게 선택할 수 있는 사례만 실행한다. 만들 수 없는 사례에 임의의 가짜 finding을 넣지 않는다.
 3. UI가 만든 target/source ID는 corpus fixture의 canonical ID와 다를 수 있다. 화면 결과를 `semantic-evaluation.js`에 넣거나 exact ID 적중으로 기록하지 말고, category 방향·선택한 로컬 source 범위·원문에 실제 존재하는 evidence·사람이 읽은 판단 이유만 별도의 `ui-smoke`로 기록한다.
 4. 한 번의 실행은 연결·응답 형태 smoke일 뿐 품질 통과가 아니다. 변동을 참고하려면 페이지 새로고침, 새 미리보기, 새 동의를 거쳐 최대 3회 반복하되 비용 한도를 먼저 지킨다.
-5. 로컬 finding이 없는 음성 사례는 UI에서 재생하지 못하므로 `blocked-no-harness`로 남긴다. UI 양성 smoke가 성공해도 전체 corpus나 해당 provider family를 `pass`로 승격하지 않는다.
+5. 로컬 finding이 없는 음성 사례는 일반 AI UI에서 억지 target을 만들지 않는다. 전체 corpus 품질은 아래 공식 harness에서 별도로 실행한다.
 
-## 공식 harness 이후 전체 corpus 품질 평가
+## 공식 harness 전체 corpus 품질 평가
 
-확장과 같은 inspector·adapter·capture gate 인스턴스를 공유하는 공식 in-process harness가 구현된 뒤에만 아래 순서로 전체 품질을 판정한다.
+아래 실행은 실제 provider 비용이 들 수 있다. 자동 테스트나 Codex 샌드박스는 실제 provider를 호출하지 않으므로 특정 provider/model의 통과 판정은 평가자가 SillyTavern 안에서 직접 완료한 세션에만 붙인다.
 
-1. canonical corpus v2 request와 target/source ID를 변경 없이 사용하고 각 사례를 독립 실행한다. raw prompt·raw response는 저장하지 않는다.
-2. 각 provider/route 셀에서 corpus 전체를 3회 반복한다. 매 반복은 새 inspector 또는 명시적 memory cache 초기화, 새 미리보기와 새 동의를 사용한다.
-3. 기대 issue가 있는 사례는 category가 허용 목록 중 하나인지, target ID 집합과 source ID 집합이 정확히 같은지 확인한다. 관련 없는 source를 하나라도 추가하면 적중이 아니다.
-4. evidence는 같은 source에서 기대 범위와 intersection-over-union 0.5 이상일 때만 맞은 것으로 센다. quote도 합성 원문의 정확한 slice여야 한다.
-5. 기대 issue가 없는 사례의 모든 제안은 false positive다. 그럴듯한 설명이어도 예외로 인정하지 않는다.
-6. 집계는 `semantic-evaluation.js`와 동일하게 계산한다.
+1. 규칙 검사에서 AI 모드를 켜고 사용할 현재 연결 또는 Connection Manager 프로필과 응답 상한을 정한다. 사용자 추가 검사 프롬프트와 prefill은 harness에 전달되지 않는다.
+2. `고급: 공식 합성 Provider 평가`를 열고 연결 확인은 `1회`, 품질 판정은 `3회`를 선택한다. 시작 전 16회 또는 48회 호출과 최대 응답 상한 합계를 확인한다.
+3. `새 평가 시작` 또는 `다음 사례 미리보기`를 한 번 누를 때 정확히 한 사례만 준비한다. 자동으로 다음 사례를 실행하는 버튼은 없다.
+4. 미리보기에서 case ID·반복 번호·순서, request digest, provider/model, 응답 상한, 포함된 합성 원문을 확인한다. 동의 체크는 매번 비어 있어야 한다.
+5. 이번 1회만 동의한다. 취소, Escape, 패널 닫기, identity/route 변경, 오류가 발생하면 세션은 종료되며 자동 retry나 current 경로 fallback이 없어야 한다.
+6. 각 사례가 끝난 뒤 다음 버튼을 다시 눌러 새 미리보기와 새 동의를 반복한다. 3회 모드는 48번 모두 독립 동의한다.
+7. 완료 화면의 manifest digest, public provider/model/route, relation/atom/source bridge 분포, 구조 운반 gate, 동의·전송 시도·평가 완료 수와 반복별 지표·최악값을 기록한다. raw prompt·raw response·quote·title·summary·rationale·opaque profile ID는 내보내거나 기록하지 않는다.
+8. 각 provider/route 셀에서 corpus 전체를 3회 반복한다. 각 반복은 memory cache를 사례 전후 초기화하고 `cached: false`인 결과만 평가한다.
+9. 기대 issue가 있는 사례는 category가 허용 목록 중 하나인지, target ID 집합과 source ID 집합이 정확히 같은지 확인한다. 관련 없는 source를 하나라도 추가하면 적중이 아니다.
+10. evidence는 같은 source에서 기대 범위와 intersection-over-union 0.5 이상일 때만 맞은 것으로 센다. quote도 합성 원문의 정확한 slice여야 하며 provider offset을 재정렬한 evidence는 공식 gate에서 실패다.
+11. 기대 issue가 없는 사례의 모든 제안은 false positive다. 그럴듯한 설명이어도 예외로 인정하지 않는다.
+12. 집계는 `semantic-evaluation.js`와 동일하게 계산한다.
    - 유용성 = 적중 issue 수 / 기대 issue 수
    - 오탐률 = 매칭되지 않은 제안 수 / 전체 제안 수
    - 근거 정확도 = 맞은 evidence 수 / `max(기대 evidence 수, 반환 evidence 수)`
-7. corpus의 `thresholds`와 `releaseGates`를 함께 사용한다. 현재 전체 기준은 유용성 0.8 이상, 오탐률 0.1 이하, 근거 정확도 0.8 이상이다. 이 평균을 넘더라도 조건·예외·말투·역할·안전 각 축의 양성 사례가 exact issue match가 아니거나 기대 근거 pair가 하나라도 빠지거나 추가 근거가 있거나, 음성 사례가 제안 0건이 아니면 실패다.
-8. 같은 case ID의 세 결과를 하나의 result map에 합치지 않는다. 세 반복을 각각 평가해 모두 전체 기준과 축별 gate를 통과해야 품질 통과로 기록하고 최악값과 중앙값을 함께 남긴다.
+13. corpus의 `thresholds`와 `releaseGates`를 함께 사용한다. 현재 전체 기준은 유용성 0.8 이상, 오탐률 0.1 이하, 근거 정확도 0.8 이상이다. 이 평균을 넘더라도 조건·예외·말투·역할·안전 각 축의 양성 사례가 exact issue match가 아니거나 기대 근거 pair가 하나라도 빠지거나 추가 근거가 있거나, 음성 사례가 제안 0건이 아니면 실패다.
+14. 같은 case ID의 세 결과를 하나의 result map에 합치지 않는다. 세 반복을 각각 평가해 모두 전체 기준과 축별 gate를 통과해야 해당 provider/model/route 한 셀의 품질 통과로 기록하고 최악값을 함께 남긴다. 1회 결과는 기준을 만족해도 smoke 통과일 뿐 공식 품질 통과로 기록하지 않는다.
 
 ## 개인정보·동의·안전 경계 시험
 
@@ -199,7 +209,7 @@ redacted/metadata 차단: pass | fail | not-run
 
 [사례 결과]
 case ID / 반복 번호:
-실행 상태: ui-smoke | success | empty | stable-error | blocked-no-harness
+실행 상태: ui-smoke | success | empty | stable-error | cancelled
 예상 issue 수 / 반환 suggestion 수 / 적중 수 / 오탐 수:
 기대 evidence 수 / 반환 evidence 수 / 정확 evidence 수:
 진단 code / bounded reason: (성공이면 none)
@@ -216,8 +226,8 @@ corpus threshold 통과: pass | fail | incomplete
 
 ## 최종 판정 규칙
 
-- `pass`: 자동 테스트, 연결 적합성 경계, 해당 provider/route의 실행 가능한 corpus 품질, threshold를 모두 통과했고 공식 harness가 필요한 사례가 없다.
-- `incomplete`: 보안 경계는 통과했지만 공식 harness 부재, provider quota, 공개 Connection Manager API 부재 등으로 하나 이상의 필수 사례나 셀을 평가하지 못했다.
+- `pass`: 자동 테스트, 연결 적합성 경계, 해당 provider/route의 3회 corpus 품질과 threshold·축별 release gate를 모두 통과했다.
+- `incomplete`: 보안 경계는 통과했지만 provider quota, 공개 Connection Manager API 부재, 평가 중단 등으로 하나 이상의 필수 사례나 셀을 평가하지 못했다.
 - `fail`: 개인정보·동의·identity·경로 격리·엄격한 응답 검증 중 하나가 실패했거나 corpus threshold를 넘지 못했다.
 
 `incomplete`를 `pass`로 바꾸지 않는다. 특정 model의 통과는 같은 family의 다른 model, 다른 날짜의 model revision, OpenRouter 같은 중계 경로의 품질을 보증하지 않는다.

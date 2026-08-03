@@ -8,6 +8,7 @@ const PHASES = new Set([
 ]);
 
 const DEFAULT_TTL_MS = 30_000;
+const MAX_TTL_MS = 6 * 60_000;
 const DEFAULT_MAX_ACTIVE = 4;
 const MAX_ACTIVE_LIMIT = 16;
 const MAX_PROMPT_CHARS = 512 * 1024;
@@ -195,7 +196,7 @@ export class SemanticCaptureGate {
         this.#ttlMs = boundedInteger(
             ttlMs,
             1,
-            5 * 60_000,
+            MAX_TTL_MS,
             'SEMANTIC_GATE_INVALID_CONFIG',
         );
         this.#maxActive = boundedInteger(
@@ -233,7 +234,7 @@ export class SemanticCaptureGate {
         fail('SEMANTIC_GATE_NONCE_FAILED');
     }
 
-    arm({ prompt, promptType }) {
+    arm({ prompt, promptType, ttlMs = this.#ttlMs }) {
         this.purgeExpired();
         const normalizedType = normalizePromptType(promptType);
         if (
@@ -252,6 +253,12 @@ export class SemanticCaptureGate {
         if (!Number.isFinite(issuedAt)) {
             fail('SEMANTIC_GATE_INVALID_CONFIG');
         }
+        const lifetimeMs = boundedInteger(
+            ttlMs,
+            1,
+            MAX_TTL_MS,
+            'SEMANTIC_GATE_INVALID_INPUT',
+        );
         const nonce = this.createNonce(prompt);
         const marker = `\n\n<!-- ST_DEVTOOLS_SEMANTIC:${nonce} -->`;
         const expectedPrompt = `${prompt}${marker}`;
@@ -260,7 +267,7 @@ export class SemanticCaptureGate {
             promptType: normalizedType,
             nonce,
             expectedPrompt,
-            expiresAt: issuedAt + this.#ttlMs,
+            expiresAt: issuedAt + lifetimeMs,
             expiryTimer: null,
             consumed: {
                 prompt: false,
@@ -272,7 +279,7 @@ export class SemanticCaptureGate {
             if (this.#active.get(ticket) === record) {
                 this.#delete(ticket);
             }
-        }, this.#ttlMs);
+        }, lifetimeMs);
         record.expiryTimer?.unref?.();
         return Object.freeze({
             ticket,

@@ -9,6 +9,16 @@ import {
     validateSemanticResponse,
 } from '../src/semantic-inspector.js';
 
+function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
 function fixture() {
     const english = {
         id: 'source:english',
@@ -361,6 +371,7 @@ test('inspect calls the injected adapter contract and keeps AI suggestions separ
 
     assert.equal(adapter.calls.length, 1);
     assert.deepEqual(Object.keys(adapter.calls[0]).sort(), [
+        'expectedIdentity',
         'jsonSchema',
         'prefill',
         'prompt',
@@ -368,6 +379,10 @@ test('inspect calls the injected adapter contract and keeps AI suggestions separ
         'signal',
         'systemPrompt',
     ]);
+    assert.deepEqual(
+        adapter.calls[0].expectedIdentity,
+        prepared.preview.providerIdentity,
+    );
     assert.equal(result.kind, 'ai-semantic-suggestions');
     assert.equal(result.cached, false);
     assert.equal(result.suggestions[0].origin, 'ai');
@@ -468,6 +483,7 @@ test('evidence offsets are safely realigned only when the exact quote exists', a
     assert.equal(result.suggestions[0].evidence[0].start, 0);
     assert.equal(result.suggestions[0].evidence[0].end, 6);
     assert.equal(result.suggestions[0].evidence[0].quote, 'Always');
+    assert.equal(result.suggestions[0].evidence[0].realigned, true);
 });
 
 test('selected inactive source and over-limit input fail closed without truncation', async () => {
@@ -805,4 +821,31 @@ test('connection profile discovery is exposed as an optional UI-safe capability'
         status: 'unavailable',
         profiles: [],
     });
+});
+
+test('provider settlement lease is delegated without exposing provider data', async () => {
+    const pending = deferred();
+    let active = 1;
+    const adapter = new FakeAdapter();
+    adapter.activeCallCount = () => active;
+    adapter.whenIdle = () => pending.promise;
+    const inspector = new SemanticInspector({ adapter });
+
+    assert.equal(inspector.activeCallCount(), 1);
+    assert.equal(inspector.activeProviderCallCount(), 1);
+    const idle = inspector.whenIdle();
+    const providerIdle = inspector.whenProviderIdle();
+    active = 0;
+    pending.resolve({ rawResponse: 'must not cross the lease boundary' });
+    assert.equal(await idle, undefined);
+    assert.equal(await providerIdle, undefined);
+    assert.equal(inspector.activeCallCount(), 0);
+    assert.equal(inspector.activeProviderCallCount(), 0);
+
+    adapter.activeCallCount = () => {
+        throw new Error('private provider state');
+    };
+    adapter.whenIdle = () => Promise.reject(new Error('private provider failure'));
+    assert.equal(inspector.activeCallCount(), 0);
+    assert.equal(await inspector.whenIdle(), undefined);
 });

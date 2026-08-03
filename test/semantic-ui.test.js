@@ -57,6 +57,7 @@ function createUi(semanticInspector, requestConsent = async () => false) {
         controller: null,
     };
     ui.semanticInspectorHost = null;
+    ui.semanticEvaluationAdvancePromise = null;
     ui.semanticConsentOverlay = null;
     ui.semanticConsentPanel = null;
     ui.semanticConsentResolve = null;
@@ -182,6 +183,201 @@ test('cancelling the consent preview never calls the semantic provider', async (
     assert.equal(prepareCount, 1);
     assert.equal(inspectCount, 0);
     assert.equal(ui.semanticInspectionState.status, 'cancelled');
+});
+
+test('official provider evaluation uses one UI consent preview and the configured route per step', async () => {
+    const ui = createUi(null);
+    ui.preferences = normalizeUiPreferences({
+        ...ui.preferences,
+        semanticConnectionProfileId: 'profile-for-test',
+        semanticResponseTokenCap: 768,
+    });
+    ui.semanticEvaluationRepetitions = 3;
+    ui.semanticEvaluationSession = null;
+    ui.semanticEvaluationHost = null;
+    let createOptions = null;
+    let consentPreview = null;
+    const completed = {
+        status: 'complete',
+        completedCalls: 48,
+        totalCalls: 48,
+    };
+    const session = {
+        status() {
+            return this.current ?? {
+                status: 'ready',
+                completedCalls: 0,
+                totalCalls: 48,
+            };
+        },
+        async runNext({ requestConsent }) {
+            const approved = await requestConsent({
+                preview: {
+                    providerIdentity: { status: 'available' },
+                    includedSources: [{ content: '합성 원문' }],
+                },
+                caseId: 'language-conflict',
+                pathKind: 'structured-relation',
+                repetition: 1,
+                position: 1,
+                totalCalls: 48,
+                requestDigest: 'a'.repeat(64),
+            });
+            assert.equal(approved, true);
+            this.current = completed;
+            return completed;
+        },
+    };
+    ui.semanticEvaluationHarness = {
+        createSession(options) {
+            createOptions = options;
+            return session;
+        },
+    };
+    ui.requestSemanticConsent = async (preview) => {
+        consentPreview = preview;
+        return true;
+    };
+
+    const result = await ui.advanceSemanticProviderEvaluation();
+
+    assert.equal(result.status, 'complete');
+    assert.deepEqual(createOptions, {
+        repetitions: 3,
+        responseTokenCap: 768,
+        requiredRouteKind: 'profile',
+    });
+    assert.deepEqual(consentPreview.evaluation, {
+        caseId: 'language-conflict',
+        pathKind: 'structured-relation',
+        repetition: 1,
+        position: 1,
+        totalCalls: 48,
+        requestDigest: 'a'.repeat(64),
+    });
+});
+
+test('rapid provider evaluation activation shares one in-flight UI operation', async () => {
+    const ui = createUi(null);
+    let resolveStep;
+    const step = new Promise((resolve) => {
+        resolveStep = resolve;
+    });
+    let runCount = 0;
+    const session = {
+        status() {
+            return { status: 'ready', totalCalls: 16 };
+        },
+        async runNext() {
+            runCount += 1;
+            await step;
+            return { status: 'ready', totalCalls: 16 };
+        },
+    };
+    ui.semanticEvaluationHarness = {
+        createSession() {
+            return session;
+        },
+    };
+
+    const first = ui.advanceSemanticProviderEvaluation();
+    const second = ui.advanceSemanticProviderEvaluation();
+    await Promise.resolve();
+    assert.equal(runCount, 1);
+    resolveStep();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    assert.equal(firstResult.status, 'ready');
+    assert.equal(secondResult.status, 'ready');
+    assert.equal(runCount, 1);
+    assert.equal(ui.semanticEvaluationAdvancePromise, null);
+});
+
+test('ordinary semantic inspection cannot overlap an active provider evaluation session', async () => {
+    let prepareCount = 0;
+    const ui = createUi({
+        async prepare() {
+            prepareCount += 1;
+        },
+        async inspect() {},
+    });
+    ui.semanticEvaluationSession = {
+        status() {
+            return { status: 'ready' };
+        },
+    };
+
+    const result = await ui.startSemanticInspection(snapshot(), {
+        findings: [{ id: 'finding-1' }],
+    });
+
+    assert.equal(result, null);
+    assert.equal(prepareCount, 0);
+});
+
+test('settings reset keeps ordinary inspection blocked until a cancelled provider call settles', async () => {
+    let prepareCount = 0;
+    const ui = createUi({
+        async prepare() {
+            prepareCount += 1;
+            return {
+                preview: {
+                    includedSources: [],
+                    excludedSources: [],
+                },
+            };
+        },
+        async inspect() {
+            throw new Error('consent is declined before provider use');
+        },
+    });
+    let cancelled = false;
+    let providerSettling = false;
+    let releaseProvider;
+    const released = new Promise((resolve) => {
+        releaseProvider = () => {
+            providerSettling = false;
+            resolve();
+        };
+    });
+    const session = {
+        status() {
+            return {
+                status: cancelled ? 'cancelled' : 'running',
+                providerSettling,
+            };
+        },
+        cancel() {
+            cancelled = true;
+            providerSettling = true;
+            return this.status();
+        },
+        whenReleased() {
+            return released;
+        },
+    };
+    ui.semanticEvaluationSession = session;
+
+    ui.resetSemanticInspectionForSettingsChange({
+        semanticInspectorEnabled: true,
+    });
+    ui.semanticInspectionState.snapshotId = 'semantic-snapshot';
+    ui.semanticInspectionState.targetIds.add('finding:finding-1');
+
+    assert.equal(ui.semanticEvaluationSession, session);
+    assert.equal(ui.semanticEvaluationIsActive(), true);
+    assert.equal(await ui.startSemanticInspection(snapshot(), {
+        findings: [{ id: 'finding-1' }],
+    }), null);
+    assert.equal(prepareCount, 0);
+
+    releaseProvider();
+    await released;
+    assert.equal(ui.semanticEvaluationIsActive(), false);
+    assert.equal(await ui.startSemanticInspection(snapshot(), {
+        findings: [{ id: 'finding-1' }],
+    }), null);
+    assert.equal(prepareCount, 1);
 });
 
 test('protected and invalid-version snapshots never enter semantic preparation', async () => {

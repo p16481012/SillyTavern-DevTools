@@ -13,11 +13,12 @@ import { applyAutomaticRetentionMaintenance } from './src/retention-maintenance.
 import { SemanticCaptureGate } from './src/semantic-capture-gate.js';
 import { SemanticInspector } from './src/semantic-inspector.js';
 import { SemanticProviderAdapter } from './src/semantic-provider-adapter.js';
+import { SemanticProviderEvaluationHarness } from './src/semantic-provider-evaluation-harness.js';
 import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.14.0';
+const VERSION = '0.14.1';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',
@@ -147,6 +148,7 @@ async function initialize() {
 
     let semanticCaptureGate = null;
     let semanticInspector = null;
+    let semanticEvaluationHarness = null;
     try {
         semanticCaptureGate = new SemanticCaptureGate();
         const semanticProviderAdapter = new SemanticProviderAdapter({
@@ -158,6 +160,9 @@ async function initialize() {
         });
         semanticInspector = new SemanticInspector({
             adapter: semanticProviderAdapter,
+        });
+        semanticEvaluationHarness = new SemanticProviderEvaluationHarness({
+            inspector: semanticInspector,
         });
     } catch {
         console.warn('[ST DevTools] Optional semantic inspector is unavailable.');
@@ -199,6 +204,7 @@ async function initialize() {
         capture,
         version: VERSION,
         semanticInspector,
+        semanticEvaluationHarness,
     });
 
     capture.start();

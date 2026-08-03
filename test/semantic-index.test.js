@@ -8,8 +8,10 @@ test('v0.11 wires the optional semantic service without making startup depend on
     assert.match(source, /new SemanticCaptureGate\(\)/u);
     assert.match(source, /new SemanticProviderAdapter\(\{/u);
     assert.match(source, /new SemanticInspector\(\{/u);
+    assert.match(source, /new SemanticProviderEvaluationHarness\(\{/u);
     assert.match(source, /semanticCaptureGate,/u);
     assert.match(source, /semanticInspector,/u);
+    assert.match(source, /semanticEvaluationHarness,/u);
     assert.match(
         source,
         /catch \{\s*console\.warn\('\[ST DevTools\] Optional semantic inspector is unavailable\.'\);\s*\}/u,

@@ -328,10 +328,16 @@ function cacheResult(result) {
             sourceIds: [...suggestion.sourceIds],
             atomIds: [...suggestion.atomIds],
             relationIds: [...suggestion.relationIds],
-            evidence: suggestion.evidence.map(({ sourceId, start, end }) => ({
+            evidence: suggestion.evidence.map(({
                 sourceId,
                 start,
                 end,
+                realigned,
+            }) => ({
+                sourceId,
+                start,
+                end,
+                realigned: realigned === true,
             })),
         })),
     };
@@ -1644,6 +1650,7 @@ export function validateSemanticResponse(rawResponse, prepared) {
                 const quote = responseString(entry.quote, 8_192, 'invalid-evidence-quote');
                 let start = Number.isSafeInteger(entry.start) ? entry.start : -1;
                 let end = Number.isSafeInteger(entry.end) ? entry.end : -1;
+                let realigned = false;
                 if (
                     start < 0
                     || end <= start
@@ -1669,12 +1676,14 @@ export function validateSemanticResponse(rawResponse, prepared) {
                     if (best < 0) responseError('evidence-quote-not-found');
                     start = best;
                     end = best + quote.length;
+                    realigned = true;
                 }
                 return {
                     sourceId: entry.sourceId,
                     start,
                     end,
                     quote,
+                    realigned,
                 };
             });
             return {
@@ -1840,6 +1849,7 @@ export class SemanticInspector {
                 jsonSchema: prepared.jsonSchema,
                 responseTokenCap: prepared.responseTokenCap,
                 signal,
+                expectedIdentity: prepared.preview.providerIdentity,
             });
         } catch (error) {
             throw adapterError(error, signal);
@@ -1854,6 +1864,36 @@ export class SemanticInspector {
         return typeof this.cache.status === 'function'
             ? this.cache.status()
             : Object.freeze({ storage: 'memory-only' });
+    }
+
+    activeCallCount() {
+        if (typeof this.adapter.activeCallCount !== 'function') return 0;
+        try {
+            const count = this.adapter.activeCallCount();
+            return Number.isSafeInteger(count) && count >= 0 ? count : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    activeProviderCallCount() {
+        return this.activeCallCount();
+    }
+
+    whenIdle() {
+        if (typeof this.adapter.whenIdle !== 'function') return Promise.resolve();
+        try {
+            return Promise.resolve(this.adapter.whenIdle()).then(
+                () => undefined,
+                () => undefined,
+            );
+        } catch {
+            return Promise.resolve();
+        }
+    }
+
+    whenProviderIdle() {
+        return this.whenIdle();
     }
 
     connectionProfiles() {

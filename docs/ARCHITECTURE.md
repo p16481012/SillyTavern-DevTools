@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.14.0의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 합성 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.14.1의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -179,7 +179,7 @@ v0.13.1의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 3. `semantic-inspector.js`가 target을 실제 로컬 finding/cluster에 연결하고 source·atom·relation closure를 계산합니다. 활성 상태·실제 요청 포함·대안 제외·분석 capability·금지된 final/chat-history 유형을 검사하며, closure 밖 소스는 정확한 label과 제외 이유만 미리보기에 남깁니다.
 4. closure에 필요한 source는 일부를 조용히 생략하거나 자르지 않습니다. source별·선택 전체·요청 전체 상한을 넘거나 필수 source에서 민감 토큰을 발견하면 준비 전체를 `SEMANTIC_INVALID_INPUT`으로 실패시켜 quote offset을 바꾸는 부분 정제를 금지합니다.
 5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한, 고정 지시·추가 지시·프리필을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
-6. 전송 직전에 adapter identity를 다시 읽어 provider·model·현재 연결/프로필 경로·opaque profile ID 중 하나라도 준비 시점과 달라졌으면 실패로 닫습니다. 이 identity 전체가 요청 digest에 포함되므로 같은 provider/model을 쓰는 다른 프로필의 cache도 재사용하지 않습니다. 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출하며, 선택한 프로필의 `sendRequest()`가 시작된 뒤 실패하면 현재 연결 `generateRaw()`로 자동 재시도하지 않습니다.
+6. 전송 직전에 adapter identity를 다시 읽어 provider·model·현재 연결/프로필 경로·opaque profile ID 중 하나라도 준비 시점과 달라졌으면 실패로 닫습니다. 준비 identity는 `generate()`의 expected route binding으로 전달되고 adapter가 실제 경로를 한 번 resolve해 호출 함수와 함께 고정합니다. 이 사이에 선택 profile이 사라지거나 current route가 profile로 바뀌면 capture gate를 열기 전에 실패하므로 current 연결로 잘못 전송하지 않습니다. identity 전체가 요청 digest에 포함되므로 같은 provider/model을 쓰는 다른 프로필의 cache도 재사용하지 않습니다. 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출하며, 선택한 프로필의 `sendRequest()`가 시작된 뒤 실패하면 현재 연결 `generateRaw()`로 자동 재시도하지 않습니다.
 7. adapter는 문자열 응답과 bounded JSON object만 허용하고 OpenAI 계열·Anthropic·Google 계열 및 공개 profile의 알려진 envelope에서만 결과 텍스트를 꺼냅니다. 인증·요청 한도·네트워크·timeout·일시 장애·거부는 원래 오류 문구를 버리고 안정된 `SEMANTIC_*` code와 고정 reason으로 분류합니다. 구조화된 안전 거부는 형식 오류와 구분하지만 거부 원문은 전달하지 않습니다.
 8. 응답은 버전이 지정된 JSON object 한 개만 허용합니다. 정확한 root/suggestion/evidence 필드, 배열·문자열·깊이·노드·바이트 상한, 허용 category/severity, 준비 요청에 실제로 존재하는 target/source/atom/relation ID를 검사합니다. evidence의 모델 제공 offset이 틀렸더라도 `quote`가 해당 source content에 정확히 존재할 때만 bounded 검색으로 위치를 재정렬합니다. 원문에 없는 quote나 다른 검증 실패가 하나라도 있으면 전체 응답을 `SEMANTIC_INVALID_RESPONSE`로 폐기합니다.
 9. 통과한 결과는 `origin: ai`와 요청 digest를 가진 별도 `AI 제안`으로만 반환합니다. UI에는 정적 finding 카드와 다른 영역으로 렌더링하며 정적 finding, 판정·무시, 비교 정책, 원본 프롬프트를 갱신하는 컨트롤을 두지 않습니다.
@@ -190,8 +190,10 @@ v0.13.1의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 |---|---|---|
 | `semantic-inspector.js` | target closure, 정확한 전송 preview, bounded prompt, strict JSON/evidence 검증, memory cache | SillyTavern 원본, 정적 finding/review/policy, 전체 raw prompt·provider response의 영구 저장 |
 | `semantic-connection-profiles.js` | 공개 `ConnectionManagerRequestService`의 지원 프로필 목록·해결, bounded ID·name·provider·model·completion type 정제 | API key·URL·비밀번호·proxy·private settings 읽기 또는 저장 |
-| `semantic-provider-adapter.js` | 선택한 공개 profile `sendRequest()` 또는 현재 `getContext().generateRaw()` 단일 경로 호출, identity 판독, 알려진 provider envelope 정규화, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code·reason | 프로필 실패 뒤 현재 연결 재시도, 알 수 없는 envelope 추측, provider 오류 원문 전달, 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
+| `semantic-provider-adapter.js` | 선택한 공개 profile `sendRequest()` 또는 현재 `getContext().generateRaw()` 단일 경로 호출, prepared identity와 실제 route의 원자적 결속, underlying settlement lease, 알려진 provider envelope 정규화, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code·reason | 프로필 실패 뒤 현재 연결 재시도, 알 수 없는 envelope 추측, provider 오류 원문 전달, 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
 | `semantic-evaluation.js` | 합성 corpus의 제안 유용성·오탐률·같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 bounded·결정적으로 계산하고 원문 없는 집계 보고서 반환 | 실제 provider 호출, 모델 결과 생성, 사용자 스냅샷·프롬프트 원문 저장 |
+| `semantic-provider-evaluation-corpus.js` | 제품에 포함된 고정 합성 16건과 실제 로컬 분석 후 canonical target closure 구성, 구조 relation/atom/source-bridge 경로 표시 | 사용자 snapshot·파일·clipboard·사용자 prompt/prefill 입력 |
+| `semantic-provider-evaluation-harness.js` | 동일 inspector를 사용한 사례별 prepare·구조 closure gate·동의·fresh inspect, identity/route/cache 고정, inspector 단위 mutex·settlement lease, 1회 smoke/3회 공식 판정과 원문 없는 집계 | 자동 일괄 호출·retry·별도 adapter/gate·raw prompt/response/quote 저장 |
 | `semantic-capture-gate.js` | 호출별 nonce identity ticket, prompt·prompt type exact match, 같은 semantic 호출의 exact duplicate 억제, TTL·용량·identity-exact 소비·해제 | 모든 생성의 전역 캡처 중단, 모호한 요청의 임의 연결 |
 | `capture.js` 연동 | AI request와 정확히 일치한 settings/data event 및 그 duplicate만 자기 캡처에서 제외 | 동시에 진행되는 일반 사용자 generation의 정상 캡처 |
 | `ui.js` | 기본 OFF 설정, 수동 선택, 매 호출 미리보기·동의, 취소·재시도, 별도 결과 표시 | 동의 저장, 자동 대상 선택·자동 수정·정책 변경 |
@@ -204,11 +206,11 @@ v0.14.0 평가 corpus v2 16건은 목적에 맞게 새로 쓴 합성 사례만 �
 
 corpus v2의 `releaseGates`는 전체 비율과 별도로 각 의미 축의 양성 exact issue match·모든 기대 근거 pair 적중·추가 근거 없음과 음성 제안 0건을 필수 조건으로 만듭니다. 구 평가기는 v2 fixture를 지원 버전으로 받아들이지 않으며, 현 평가기는 `releaseGates`가 없는 legacy v1만 종전 집계 방식으로 명시 지원합니다. v1에 gate를 붙이거나 v2에서 gate를 빼면 실패로 닫습니다.
 
-이 corpus의 `atoms`·`relations`가 비어 있는 사례는 source text 의미 판별 벤치이며 `prepare()` 제품 경로나 구조 atom 생성 자체를 보증하지 않습니다. 현재 점수는 category·target/source 집합·evidence 범위를 평가하지만 severity·confidence와 title·summary·rationale의 의미 정확성까지 자동 채점하지 않습니다. 일반 UI는 로컬 finding/cluster가 없는 음성 사례를 선택할 수 없으므로 전체 corpus를 실제 provider에서 통과했다고 선언하려면 같은 capture gate를 공유하는 공식 in-process harness가 필요합니다. 구체적인 실행·중단·기록 규칙은 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)에 따릅니다.
+이 corpus의 `atoms`·`relations`가 비어 있는 사례는 source text 의미 판별 벤치이며 구조 atom 생성 자체를 보증하지 않습니다. v0.14.1 공식 suite의 16건은 실제 relation과 제품 target 2건, 실제 atom을 운반하는 평가 target bridge 1건, 구조가 없는 source bridge 13건으로 분리 표시합니다. 매 준비 요청의 target/source/atom/relation ID를 SHA-256으로 고정된 structural gate와 exact 비교하고, 구조 양성 provider 응답은 실제 atom/relation ID 귀속까지 요구합니다. 별도 10건 fixture도 source/atom/relation ID와 closure를 검증합니다. 말투·안전은 아직 정적 atom 분류가 없으므로 구조 경로 통과로 표기하지 않습니다. 현재 점수는 category·target/source 집합·evidence 범위를 평가하지만 severity·confidence와 title·summary·rationale의 의미 정확성까지 자동 채점하지 않습니다. 구체적인 실행·중단·기록 규칙은 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)에 따릅니다.
 
 따라서 이 결정적 회귀는 평가 도구와 고정 reference 예시의 일관성을 검증할 뿐, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
 
-취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 profile `sendRequest()`와 `generateRaw()`에는 provider 계산을 강제로 중단하는 공통 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
+취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 profile `sendRequest()`와 `generateRaw()`에는 provider 계산을 강제로 중단하는 공통 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. gate ticket은 underlying 호출이 먼저 끝나면 즉시 해제하고, 그렇지 않으면 요청 timeout보다 30초 긴 bounded TTL까지 유지해 경계 시점의 늦은 self-capture를 막습니다. adapter는 raw 결과를 노출하지 않는 `whenIdle()` lease를 유지하고 공식 harness의 inspector 단위 mutex는 underlying settlement 전까지 새 세션을 거부합니다. 새 시도는 settlement 뒤 새 nonce와 새 준비·미리보기·동의를 사용합니다.
 
 AI 요청은 캐릭터 설명·성격과 페르소나의 구분을 모델이 추측하지 않도록 원본 metadata 전체 대신 제한된 `profileKind`(`character-description`, `character-personality`, `persona`)만 전달합니다. 고정 system prompt는 서로 다른 참가자의 프로필이 같은 항목·제목·문체를 공유한다는 이유만으로 유사·중복·충돌을 제안하지 않도록 지시하되, 같은 응답 행동에 대한 실질적인 지시 충돌 근거가 있으면 계속 보고하게 합니다.
 

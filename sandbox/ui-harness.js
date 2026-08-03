@@ -18,6 +18,7 @@ import {
     SemanticInspector,
     SemanticInspectorMemoryCache,
 } from '../src/semantic-inspector.js';
+import { SemanticProviderEvaluationHarness } from '../src/semantic-provider-evaluation-harness.js';
 
 const fixtureParameters = new URLSearchParams(globalThis.location?.search ?? '');
 
@@ -67,7 +68,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.14.0',
+        extensionVersion: '0.14.1',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1337,6 +1338,8 @@ const sandboxSemanticAdapter = {
             status: 'available',
             provider: 'claude',
             model: 'claude-sonnet-4',
+            routeKind: 'current',
+            connectionProfileId: null,
         };
     },
     async generate({ prompt, signal }) {
@@ -1357,30 +1360,31 @@ const sandboxSemanticAdapter = {
         }
         const request = semanticRequestFromPrompt(prompt);
         const target = request.targets[0];
-        const source = request.sources[0];
-        const quote = source.content.slice(
-            0,
-            Math.min(32, source.content.length),
-        );
         return JSON.stringify({
             version: 1,
             suggestions: [{
                 targetIds: [target.targetId],
-                category: 'interaction',
+                category: 'conflict',
                 severity: 'info',
                 title: '선택 항목의 의미 관계 검토 제안',
                 summary: '선택한 정적 검사 대상을 의미 수준에서 다시 검토했습니다.',
                 rationale: '전송 미리보기에 표시된 원문과 정적 분석 관계만 근거로 사용했습니다.',
                 confidence: 0.93,
-                sourceIds: [source.id],
-                atomIds: [],
-                relationIds: [],
-                evidence: [{
-                    sourceId: source.id,
-                    start: 0,
-                    end: quote.length,
-                    quote,
-                }],
+                sourceIds: request.sources.map(({ id }) => id),
+                atomIds: request.atoms.map(({ id }) => id),
+                relationIds: request.relations.map(({ id }) => id),
+                evidence: request.sources.map((source) => {
+                    const quote = source.content.slice(
+                        0,
+                        Math.min(32, source.content.length),
+                    );
+                    return {
+                        sourceId: source.id,
+                        start: 0,
+                        end: quote.length,
+                        quote,
+                    };
+                }),
             }],
         });
     },
@@ -1428,6 +1432,9 @@ const sandboxSemanticInspector = new SandboxSemanticInspector({
     adapter: sandboxSemanticAdapter,
     cache: sandboxSemanticCache,
 });
+const sandboxSemanticEvaluationHarness = new SemanticProviderEvaluationHarness({
+    inspector: sandboxSemanticInspector,
+});
 localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
     ...DEFAULT_UI_PREFERENCES,
     semanticInspectorEnabled: true,
@@ -1440,8 +1447,9 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.14.0',
+    version: '0.14.1',
     semanticInspector: sandboxSemanticInspector,
+    semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
 });
 document.body.dataset.fixtureSchema = '7';
 document.body.dataset.fixtureSize = String(timeline.length);
@@ -1624,7 +1632,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.14.0',
+        extensionVersion: '0.14.1',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1671,7 +1679,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.14.0',
+        version: '0.14.1',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });

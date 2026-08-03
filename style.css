@@ -2636,6 +2636,88 @@
     border-top: 1px solid var(--st-devtools-border);
 }
 
+.st-devtools-semantic-evaluation {
+    grid-column: 1 / -1;
+    min-width: 0;
+}
+
+.st-devtools-semantic-evaluation-body {
+    display: grid;
+    gap: 0.8rem;
+    padding: 0.85rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-semantic-evaluation-warning {
+    margin: 0;
+    padding: 0.7rem 0.8rem;
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-status-warning-bg);
+    color: var(--st-devtools-text);
+}
+
+.st-devtools-semantic-evaluation-repetitions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(7rem, auto);
+    align-items: center;
+    gap: 0.35rem 0.75rem !important;
+}
+
+.st-devtools-semantic-evaluation-repetitions > select {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.st-devtools-semantic-evaluation-repetitions > small {
+    grid-column: 1 / -1;
+}
+
+.st-devtools-semantic-evaluation-dynamic,
+.st-devtools-semantic-evaluation-status {
+    display: grid;
+    gap: 0.55rem;
+    min-width: 0;
+}
+
+.st-devtools-semantic-evaluation-status {
+    padding: 0.75rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-surface-muted);
+}
+
+.st-devtools-semantic-evaluation-status > :is(p, small) {
+    margin: 0;
+}
+
+.st-devtools-semantic-evaluation-status .is-error {
+    color: var(--st-devtools-status-critical);
+}
+
+.st-devtools-semantic-evaluation-metrics {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.35rem 0.75rem;
+    margin: 0;
+}
+
+.st-devtools-semantic-evaluation-metrics :is(dt, dd) {
+    margin: 0;
+}
+
+.st-devtools-semantic-evaluation-metrics dd {
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    text-align: right;
+}
+
+.st-devtools-semantic-evaluation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.55rem;
+}
+
 .st-devtools-semantic-prompt-settings-body > label {
     display: grid;
     gap: 0.4rem;
@@ -4934,6 +5016,27 @@
 
     .st-devtools-semantic-cap > input {
         width: 100%;
+    }
+
+    .st-devtools-semantic-evaluation-repetitions {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .st-devtools-semantic-evaluation-repetitions > select,
+    .st-devtools-semantic-evaluation-repetitions > small {
+        grid-column: 1;
+        grid-row: auto;
+        width: 100%;
+    }
+
+    .st-devtools-semantic-evaluation-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .st-devtools-semantic-evaluation-actions > .menu_button {
+        width: 100% !important;
+        max-width: 100%;
     }
 
     .st-devtools-semantic-controls > .menu_button,

@@ -11,6 +11,7 @@ const MAX_RESPONSE_TOKEN_CAP = 2_048;
 const DEFAULT_RESPONSE_TOKEN_CAP = 512;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 5 * 60_000;
+const CAPTURE_GATE_GRACE_MS = 30_000;
 const MAX_PROMPT_CHARS = 512 * 1024;
 const MAX_RESPONSE_CHARS = 2 * 1024 * 1024;
 const MAX_RESPONSE_DEPTH = 16;
@@ -47,6 +48,7 @@ export const SEMANTIC_PROVIDER_ERROR_REASONS = Object.freeze([
     'provider-response-shape',
     'provider-timeout',
     'provider-unavailable',
+    'provider-identity-changed',
 ]);
 
 const PROVIDER_ERROR_REASON_SET = new Set(SEMANTIC_PROVIDER_ERROR_REASONS);
@@ -634,6 +636,7 @@ function validatedRequest({
     responseTokenCap,
     timeoutMs,
     signal,
+    expectedIdentity,
 }) {
     if (
         typeof prompt !== 'string'
@@ -661,7 +664,77 @@ function validatedRequest({
         responseTokenCap,
         timeoutMs,
         signal: validatedSignal(signal),
+        expectedIdentity: normalizeExpectedIdentity(expectedIdentity),
     };
+}
+
+function normalizeExpectedIdentity(value) {
+    if (value == null) return null;
+    let prototype;
+    let descriptors;
+    try {
+        prototype = Object.getPrototypeOf(value);
+        descriptors = Object.getOwnPropertyDescriptors(value);
+    } catch {
+        throw error(SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT);
+    }
+    if (
+        (prototype !== Object.prototype && prototype !== null)
+        || Reflect.ownKeys(descriptors).some((key) => (
+            typeof key !== 'string'
+            || ![
+                'status',
+                'provider',
+                'model',
+                'routeKind',
+                'connectionProfileId',
+            ].includes(key)
+            || !('value' in descriptors[key])
+        ))
+    ) {
+        throw error(SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT);
+    }
+    const status = ownDataValue(value, 'status');
+    const routeKind = ownDataValue(value, 'routeKind') ?? 'current';
+    const providerValue = ownDataValue(value, 'provider');
+    const modelValue = ownDataValue(value, 'model');
+    const profileIdValue = ownDataValue(value, 'connectionProfileId');
+    const provider = providerValue == null ? null : safeIdentityString(providerValue);
+    const model = modelValue == null ? null : safeIdentityString(modelValue);
+    const connectionProfileId = routeKind === 'profile'
+        ? normalizeSemanticConnectionProfileId(profileIdValue)
+        : null;
+    if (
+        !['available', 'partial', 'unavailable'].includes(status)
+        || !['current', 'profile'].includes(routeKind)
+        || (routeKind === 'profile' && !connectionProfileId)
+        || (routeKind === 'current' && profileIdValue != null)
+        || (status === 'unavailable' && (providerValue != null || modelValue != null))
+        || (status !== 'unavailable' && !provider)
+        || (status === 'available' && !model)
+        || (status === 'partial' && modelValue != null)
+    ) {
+        throw error(SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT);
+    }
+    return Object.freeze({
+        status,
+        provider: status === 'unavailable' ? null : provider,
+        model: status === 'available' ? model : null,
+        routeKind,
+        connectionProfileId,
+    });
+}
+
+function sameProviderIdentity(left, right) {
+    return left?.status === right?.status
+        && canonicalIdentityString(left?.provider) === canonicalIdentityString(right?.provider)
+        && canonicalIdentityString(left?.model) === canonicalIdentityString(right?.model)
+        && left?.routeKind === right?.routeKind
+        && left?.connectionProfileId === right?.connectionProfileId;
+}
+
+function canonicalIdentityString(value) {
+    return value == null ? null : safeIdentityString(value)?.toLowerCase() ?? null;
 }
 
 function mapGateError(value) {
@@ -877,6 +950,10 @@ export function classifySemanticProviderFailure(value, signal = null) {
 }
 
 export class SemanticProviderAdapter {
+    #activeCalls = 0;
+
+    #idleWaiters = new Set();
+
     constructor({
         getContext,
         captureGate,
@@ -899,6 +976,31 @@ export class SemanticProviderAdapter {
         this.captureGate = captureGate;
         this.getConnectionProfileId = getConnectionProfileId;
         this.defaultTimeoutMs = defaultTimeoutMs;
+    }
+
+    activeCallCount() {
+        return this.#activeCalls;
+    }
+
+    whenIdle() {
+        if (this.#activeCalls === 0) return Promise.resolve();
+        return new Promise((resolve) => {
+            this.#idleWaiters.add(resolve);
+        });
+    }
+
+    #trackUnderlyingCall() {
+        this.#activeCalls += 1;
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            this.#activeCalls -= 1;
+            if (this.#activeCalls !== 0) return;
+            const waiters = [...this.#idleWaiters];
+            this.#idleWaiters.clear();
+            for (const resolve of waiters) resolve();
+        };
     }
 
     selectedConnectionProfileId() {
@@ -945,6 +1047,7 @@ export class SemanticProviderAdapter {
         responseTokenCap = DEFAULT_RESPONSE_TOKEN_CAP,
         signal = null,
         timeoutMs = this.defaultTimeoutMs,
+        expectedIdentity = null,
     }) {
         let request;
         try {
@@ -956,6 +1059,7 @@ export class SemanticProviderAdapter {
                 responseTokenCap,
                 timeoutMs,
                 signal,
+                expectedIdentity,
             });
         } catch (validationError) {
             return Promise.reject(validationError);
@@ -979,10 +1083,21 @@ export class SemanticProviderAdapter {
         );
         let route;
         if (connectionProfile) {
+            let sendRequest;
+            try {
+                sendRequest = connectionProfile.service.sendRequest;
+            } catch {
+                return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
+            }
+            if (typeof sendRequest !== 'function') {
+                return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
+            }
             route = {
                 kind: 'profile',
                 service: connectionProfile.service,
+                sendRequest,
                 profile: connectionProfile.profile,
+                identity: connectionProfileIdentity(connectionProfile.profile),
             };
         } else {
             let generateRaw;
@@ -997,7 +1112,17 @@ export class SemanticProviderAdapter {
             route = {
                 kind: 'current',
                 generateRaw,
+                identity: readSemanticProviderIdentity(context),
             };
+        }
+        if (
+            request.expectedIdentity
+            && !sameProviderIdentity(route.identity, request.expectedIdentity)
+        ) {
+            return Promise.reject(error(
+                SEMANTIC_PROVIDER_ERROR_CODES.INVALID_INPUT,
+                'provider-identity-changed',
+            ));
         }
         const promptType = route.kind === 'profile'
             ? route.profile.completionType
@@ -1006,9 +1131,7 @@ export class SemanticProviderAdapter {
             return Promise.reject(error(SEMANTIC_PROVIDER_ERROR_CODES.UNSUPPORTED));
         }
         const responseFamily = providerFamily(
-            route.kind === 'profile'
-                ? route.profile.provider
-                : readSemanticProviderIdentity(context).provider,
+            route.identity.provider,
         );
 
         let armed;
@@ -1016,6 +1139,7 @@ export class SemanticProviderAdapter {
             armed = this.captureGate.arm({
                 prompt: request.prompt,
                 promptType,
+                ttlMs: request.timeoutMs + CAPTURE_GATE_GRACE_MS,
             });
         } catch (gateError) {
             return Promise.reject(mapGateError(gateError));
@@ -1080,6 +1204,7 @@ export class SemanticProviderAdapter {
             }, request.timeoutMs);
 
             let underlying;
+            const releaseUnderlying = this.#trackUnderlyingCall();
             try {
                 if (route.kind === 'profile') {
                     const isTextProfile = (
@@ -1106,7 +1231,8 @@ export class SemanticProviderAdapter {
                     )
                         ? { json_schema: request.jsonSchema }
                         : {};
-                    underlying = Promise.resolve(route.service.sendRequest(
+                    underlying = Promise.resolve(route.sendRequest.call(
+                        route.service,
                         route.profile.id,
                         profilePrompt,
                         request.responseTokenCap,
@@ -1131,6 +1257,7 @@ export class SemanticProviderAdapter {
                 }
             } catch (providerFailure) {
                 safeDisarm();
+                releaseUnderlying();
                 settled = true;
                 cleanupLogicalListeners();
                 reject(classifySemanticProviderFailure(
@@ -1143,6 +1270,7 @@ export class SemanticProviderAdapter {
             underlying.then(
                 (response) => {
                     safeDisarm();
+                    releaseUnderlying();
                     if (logicallyCancelled) return;
                     settled = true;
                     cleanupLogicalListeners();
@@ -1182,6 +1310,7 @@ export class SemanticProviderAdapter {
                 },
                 (providerFailure) => {
                     safeDisarm();
+                    releaseUnderlying();
                     if (logicallyCancelled) return;
                     settled = true;
                     cleanupLogicalListeners();

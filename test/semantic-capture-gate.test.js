@@ -221,6 +221,25 @@ test('TTL expiry frees bounded capacity and expired prompts are not suppressed',
     }));
 });
 
+test('a call can extend its ticket beyond the default TTL within the global bound', () => {
+    let now = 1_000;
+    const gate = new SemanticCaptureGate({
+        crypto: deterministicCrypto(),
+        now: () => now,
+        ttlMs: 20,
+    });
+    gate.arm({
+        prompt: 'long provider request',
+        promptType: 'chat-completion',
+        ttlMs: 80,
+    });
+
+    now += 21;
+    assert.equal(gate.activeCount, 1);
+    now += 60;
+    assert.equal(gate.activeCount, 0);
+});
+
 test('TTL timer releases an active call without another gate operation', async () => {
     const gate = new SemanticCaptureGate({
         crypto: deterministicCrypto(),

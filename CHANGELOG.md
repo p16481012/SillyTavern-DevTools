@@ -1,5 +1,30 @@
 # 변경 기록
 
+## 0.14.1 - 2026-08-03
+
+### 공식 합성 Provider 평가 harness
+
+- 규칙 검사의 AI 연결 설정 안에 실제 채팅과 분리된 16건 합성 corpus 평가 도구 추가
+- 확장 시작 시 만든 동일 `SemanticInspector`·provider adapter·`SemanticCaptureGate` 인스턴스를 재사용하고 direct fetch·별도 API key·별도 adapter 경로는 추가하지 않음
+- 자동 일괄 실행 없이 사례마다 `준비 → 합성 원문/identity/요청 digest 미리보기 → 초기화된 1회 동의 → 1건 실행`만 허용하고, 1회 연결 smoke 또는 3회 품질 판정을 선택하도록 구성
+- 매 사례 직전과 직후 memory cache를 비우고 `cached: false`가 아닌 결과, provider/model/route/profile identity 변경, 선택 profile의 current 경로 fallback을 실패로 중단
+- 최대 16×3=48회, 응답 상한 64~2,048 tokens, 직렬 1건, 자동 retry·경로 fallback 없음으로 비용 경계를 고정
+- AI 결과는 즉시 target/category/source/evidence offset만 평가기에 투영하고 raw prompt·raw response·quote·title·summary·rationale·opaque profile ID를 상태나 저장소에 남기지 않음
+- 일반 UI에서는 정확한 quote가 존재할 때 offset을 보정할 수 있지만 공식 품질 gate에서는 보정된 evidence를 실패 처리해 잘못된 provider offset이 만점으로 계산되지 않도록 구분
+- 1회 결과는 `연결 smoke`로만 표시하고 공식 품질 통과는 같은 provider·model·route에서 3회 모두 통과한 경우에만 허용
+- 준비 identity를 실제 adapter 전송 route에 결속해 선택 profile이 사라지거나 변경되면 current 연결로 fallback하지 않고 provider 호출 전에 실패 처리
+- 동의 수·전송 시도 수·평가 완료 수를 분리하고, 논리 취소·timeout 뒤 underlying 호출이 끝날 때까지 inspector 단위 lease를 유지해 새 평가와 비용 중첩을 차단
+- corpus v2·16개 case ID를 SHA-256 manifest로 고정하고 실제 relation 제품 target 2건·atom bridge 1건·source bridge 13건을 UI에 분리 표시
+- 매 사례의 준비 요청 target/source/atom/relation closure를 structural gate와 exact 비교하며, 구조 양성 응답이 실제 atom/relation ID를 귀속하지 않으면 공식 평가를 실패 처리
+- 빠른 연속 실행은 하나의 UI 작업으로 합쳐 동의·provider 호출이 중복되지 않도록 보강
+
+### 구조 atom·relation 제품 경로 평가
+
+- 합성 snapshot을 `analyzeSnapshotDetailed → 실제 finding/cluster → SemanticInspector.prepare`로 통과시키는 제품 경로 fixture 10건 추가
+- 조건·예외·역할·지시문·포맷의 실제 source/atom/relation closure와 ID 일치, closure 밖 소스 제외, 동일 언어·호환 역할의 relation 미생성을 검증
+- 말투·안전 의미는 현재 정적 atom 분류가 없어 구조 경로에 진입하지 못한다는 남은 기능 공백을 명시적 회귀 경계로 기록
+- provider timeout보다 capture gate ticket이 먼저 만료되지 않도록 호출별 timeout에 30초 정리 여유를 더한 TTL을 사용
+
 ## 0.14.0 - 2026-08-03
 
 ### 의미 평가 범위 확대
