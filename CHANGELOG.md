@@ -1,5 +1,22 @@
 # 변경 기록
 
+## 0.14.0 - 2026-08-03
+
+### 의미 평가 범위 확대
+
+- 합성·익명 AI 의미 평가 corpus를 6건에서 16건으로 확대하고 조건·예외·말투·역할·안전마다 충돌 1건과 비충돌 1건을 한·영 교차 대조군으로 추가
+- reference evidence가 실제 source의 정확한 문자열 slice와 일치하고 각 의미 축의 양성·음성 사례 및 언어 균형이 유지되는지 회귀 테스트로 고정
+- 전체 평균이 기준을 넘더라도 다섯 의미 축 중 하나의 양성 issue·근거 pair가 완전히 적중하지 않거나 음성 control에 제안이 생기면 실패하는 `releaseGates` 추가
+- gate 의미를 구 평가기가 조용히 무시하지 않도록 corpus를 v2로 올리고, 현 평가기는 gate 없는 legacy v1과 gate 필수 v2를 명시적으로 구분
+- category·target·source가 같은 복수 issue는 최대 적중 수를 유지하면서 근거 pair 적중이 가장 많은 일대일 대응을 선택하도록 평가기 보정
+- AI 고정 지침에 조건·예외의 적용 범위, 함께 만족 가능한 말투, 참가자별 역할, 안전한 대안과 실제 우회 요구의 구분을 추가
+
+### 실제 provider 평가 경계
+
+- OpenAI·Anthropic·Google 계열과 현재 연결·Connection Manager 경로를 분리한 실제 provider 수동 평가 절차 추가
+- 미리보기·매회 동의·개인정보 모드·identity 변경·자기 캡처 제외·비용/호출 상한·중단 기준과 원문 없는 기록 양식 정리
+- 현재 UI에서 정적 target이 없는 음성 사례는 전체 corpus live 통과로 선언하지 않고 공식 in-process harness가 생길 때까지 `incomplete`로 기록
+
 ## 0.13.1 - 2026-08-03
 
 ### 읽기 전용 복사 흐름

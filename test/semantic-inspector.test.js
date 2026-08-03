@@ -261,6 +261,11 @@ test('prepare sends only selected active closure and exposes an exact consent pr
     assert.match(prepared.systemPrompt, /말투 충돌을 우선 검사하세요/u);
     assert.match(prepared.systemPrompt, /profileKind "character-description"/u);
     assert.match(prepared.systemPrompt, /share biography fields, headings, profile structure/u);
+    assert.match(prepared.systemPrompt, /mutually exclusive conditions are compatible/u);
+    assert.match(prepared.systemPrompt, /Literal placeholders and safe alternatives are not bypasses/u);
+    assert.match(prepared.systemPrompt, /Tone traits conflict only/u);
+    assert.match(prepared.systemPrompt, /Role descriptions conflict only/u);
+    assert.match(prepared.systemPrompt, /without generating or expanding the forbidden content/u);
     assert.equal(prepared.preview.userPrompt, '말투 충돌을 우선 검사하세요.');
     assert.equal(prepared.preview.assistantPrefill, '{"version":1,');
     assert.equal(prepared.assistantPrefill, '{"version":1,');

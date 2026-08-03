@@ -1,7 +1,8 @@
 export const SEMANTIC_EVALUATION_CORPUS_KIND = (
     'st-devtools-semantic-evaluation-corpus'
 );
-export const SEMANTIC_EVALUATION_CORPUS_VERSION = 1;
+export const SEMANTIC_EVALUATION_CORPUS_VERSION = 2;
+const SEMANTIC_EVALUATION_LEGACY_CORPUS_VERSION = 1;
 
 export const SEMANTIC_EVALUATION_DEFAULT_THRESHOLDS = Object.freeze({
     minimumUsefulnessRate: 0.8,
@@ -15,6 +16,7 @@ const SEMANTIC_EVALUATION_THRESHOLD_KEYS = Object.freeze(
 
 export const SEMANTIC_EVALUATION_LIMITS = Object.freeze({
     cases: 64,
+    releaseGates: 32,
     expectedIssuesPerCase: 32,
     suggestionsPerCase: 32,
     idsPerRecord: 256,
@@ -135,11 +137,71 @@ function normalizeExpectedIssue(value, caseId) {
     };
 }
 
+function normalizeReleaseGates(value, cases) {
+    if (value === undefined) return [];
+    if (
+        !Array.isArray(value)
+        || value.length === 0
+        || value.length > SEMANTIC_EVALUATION_LIMITS.releaseGates
+    ) {
+        fail('invalid-release-gates');
+    }
+    const casesById = new Map(cases.map((entry) => [entry.id, entry]));
+    const axes = new Set();
+    const gatedCaseIds = new Set();
+    return value.map((entry, index) => {
+        if (
+            !isRecord(entry)
+            || typeof entry.axis !== 'string'
+            || entry.axis.length > 64
+            || !/^[a-z][a-z0-9-]*$/u.test(entry.axis)
+            || typeof entry.positiveCaseId !== 'string'
+            || entry.positiveCaseId.length === 0
+            || entry.positiveCaseId.length > 128
+            || typeof entry.negativeCaseId !== 'string'
+            || entry.negativeCaseId.length === 0
+            || entry.negativeCaseId.length > 128
+            || entry.positiveCaseId === entry.negativeCaseId
+        ) {
+            fail(`invalid-release-gate:${index}`);
+        }
+        if (axes.has(entry.axis)) fail(`duplicate-release-gate-axis:${entry.axis}`);
+        const positiveCase = casesById.get(entry.positiveCaseId);
+        const negativeCase = casesById.get(entry.negativeCaseId);
+        if (!positiveCase || !negativeCase) {
+            fail(`unknown-release-gate-case:${entry.axis}`);
+        }
+        if (positiveCase.expectedIssues.length === 0) {
+            fail(`invalid-release-gate-positive:${entry.axis}`);
+        }
+        if (negativeCase.expectedIssues.length !== 0) {
+            fail(`invalid-release-gate-negative:${entry.axis}`);
+        }
+        if (
+            gatedCaseIds.has(entry.positiveCaseId)
+            || gatedCaseIds.has(entry.negativeCaseId)
+        ) {
+            fail(`duplicate-release-gate-case:${entry.axis}`);
+        }
+        axes.add(entry.axis);
+        gatedCaseIds.add(entry.positiveCaseId);
+        gatedCaseIds.add(entry.negativeCaseId);
+        return {
+            axis: entry.axis,
+            positiveCaseId: entry.positiveCaseId,
+            negativeCaseId: entry.negativeCaseId,
+        };
+    });
+}
+
 function normalizeCorpus(corpus) {
     if (
         !isRecord(corpus)
         || corpus.kind !== SEMANTIC_EVALUATION_CORPUS_KIND
-        || corpus.version !== SEMANTIC_EVALUATION_CORPUS_VERSION
+        || (
+            corpus.version !== SEMANTIC_EVALUATION_CORPUS_VERSION
+            && corpus.version !== SEMANTIC_EVALUATION_LEGACY_CORPUS_VERSION
+        )
         || corpus.provenance !== 'purpose-written-synthetic'
     ) {
         fail('unsupported-corpus');
@@ -158,6 +220,18 @@ function normalizeCorpus(corpus) {
         || corpus.cases.length > SEMANTIC_EVALUATION_LIMITS.cases
     ) {
         fail('invalid-cases');
+    }
+    if (
+        corpus.version === SEMANTIC_EVALUATION_LEGACY_CORPUS_VERSION
+        && corpus.releaseGates !== undefined
+    ) {
+        fail('release-gates-require-v2');
+    }
+    if (
+        corpus.version === SEMANTIC_EVALUATION_CORPUS_VERSION
+        && corpus.releaseGates === undefined
+    ) {
+        fail('missing-release-gates');
     }
     if (
         corpus.thresholds !== undefined
@@ -221,7 +295,12 @@ function normalizeCorpus(corpus) {
         }
         return { id: entry.id, expectedIssues };
     });
-    return { thresholds, cases, caseIds };
+    return {
+        thresholds,
+        cases,
+        caseIds,
+        releaseGates: normalizeReleaseGates(corpus.releaseGates, cases),
+    };
 }
 
 function* resultEntries(resultsByCase, maximumEntries) {
@@ -370,13 +449,92 @@ function maximumPairCount(left, right, predicate) {
     return { count, rightMatches };
 }
 
+function maximumEvidenceAwareIssuePairing(suggestions, expectedIssues) {
+    const sourceNode = 0;
+    const suggestionOffset = 1;
+    const issueOffset = suggestionOffset + suggestions.length;
+    const sinkNode = issueOffset + expectedIssues.length;
+    const graph = Array.from({ length: sinkNode + 1 }, () => []);
+    const candidateEdges = [];
+    const cardinalityWeight = SEMANTIC_EVALUATION_LIMITS.totalEvidence + 1;
+
+    const addEdge = (from, to, capacity, cost) => {
+        const forward = { to, reverse: graph[to].length, capacity, cost };
+        const backward = { to: from, reverse: graph[from].length, capacity: 0, cost: -cost };
+        graph[from].push(forward);
+        graph[to].push(backward);
+        return forward;
+    };
+
+    for (let suggestionIndex = 0; suggestionIndex < suggestions.length; suggestionIndex += 1) {
+        addEdge(sourceNode, suggestionOffset + suggestionIndex, 1, 0);
+    }
+    for (let issueIndex = 0; issueIndex < expectedIssues.length; issueIndex += 1) {
+        addEdge(issueOffset + issueIndex, sinkNode, 1, 0);
+    }
+    for (let suggestionIndex = 0; suggestionIndex < suggestions.length; suggestionIndex += 1) {
+        for (let issueIndex = 0; issueIndex < expectedIssues.length; issueIndex += 1) {
+            const suggestion = suggestions[suggestionIndex];
+            const issue = expectedIssues[issueIndex];
+            if (!suggestionMatchesIssue(suggestion, issue)) continue;
+            const evidenceScore = maximumPairCount(
+                suggestion.evidence,
+                issue.evidence,
+                evidenceMatches,
+            ).count;
+            const edge = addEdge(
+                suggestionOffset + suggestionIndex,
+                issueOffset + issueIndex,
+                1,
+                -(cardinalityWeight + evidenceScore),
+            );
+            candidateEdges.push({ suggestionIndex, issueIndex, edge });
+        }
+    }
+
+    let count = 0;
+    while (true) {
+        const distances = new Array(graph.length).fill(Number.POSITIVE_INFINITY);
+        const previousNodes = new Array(graph.length).fill(-1);
+        const previousEdges = new Array(graph.length).fill(-1);
+        distances[sourceNode] = 0;
+        for (let iteration = 0; iteration < graph.length - 1; iteration += 1) {
+            let changed = false;
+            for (let from = 0; from < graph.length; from += 1) {
+                if (!Number.isFinite(distances[from])) continue;
+                for (let edgeIndex = 0; edgeIndex < graph[from].length; edgeIndex += 1) {
+                    const edge = graph[from][edgeIndex];
+                    if (edge.capacity <= 0) continue;
+                    const nextDistance = distances[from] + edge.cost;
+                    if (nextDistance >= distances[edge.to]) continue;
+                    distances[edge.to] = nextDistance;
+                    previousNodes[edge.to] = from;
+                    previousEdges[edge.to] = edgeIndex;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+        if (previousNodes[sinkNode] < 0) break;
+        for (let node = sinkNode; node !== sourceNode; node = previousNodes[node]) {
+            const previousNode = previousNodes[node];
+            const edge = graph[previousNode][previousEdges[node]];
+            edge.capacity -= 1;
+            graph[node][edge.reverse].capacity += 1;
+        }
+        count += 1;
+    }
+
+    const rightMatches = new Array(expectedIssues.length).fill(-1);
+    for (const { suggestionIndex, issueIndex, edge } of candidateEdges) {
+        if (edge.capacity === 0) rightMatches[issueIndex] = suggestionIndex;
+    }
+    return { count, rightMatches };
+}
+
 function evaluateCase(entry, suggestions, missing) {
     const expectedIssues = entry.expectedIssues;
-    const issueMatches = maximumPairCount(
-        suggestions,
-        expectedIssues,
-        suggestionMatchesIssue,
-    );
+    const issueMatches = maximumEvidenceAwareIssuePairing(suggestions, expectedIssues);
     let correctEvidenceCount = 0;
     for (let issueIndex = 0; issueIndex < expectedIssues.length; issueIndex += 1) {
         const suggestionIndex = issueMatches.rightMatches[issueIndex];
@@ -421,6 +579,62 @@ function evaluateCase(entry, suggestions, missing) {
     };
 }
 
+function evaluateReleaseGates(releaseGates, cases) {
+    const casesById = new Map(cases.map((entry) => [entry.id, entry]));
+    const failures = [];
+    const axes = releaseGates.map((entry) => {
+        const positiveCase = casesById.get(entry.positiveCaseId);
+        const negativeCase = casesById.get(entry.negativeCaseId);
+        const positiveExactIssueMatch = !positiveCase.missing
+            && positiveCase.matchedIssueCount === positiveCase.expectedIssueCount
+            && positiveCase.suggestionCount === positiveCase.expectedIssueCount
+            && positiveCase.falsePositiveCount === 0;
+        const positiveCompleteEvidenceMatch = !positiveCase.missing
+            && positiveCase.correctEvidenceCount === positiveCase.expectedEvidenceCount
+            && positiveCase.evidenceCount === positiveCase.expectedEvidenceCount;
+        const negativeHasNoSuggestions = !negativeCase.missing
+            && negativeCase.suggestionCount === 0;
+        if (!positiveExactIssueMatch) {
+            failures.push(`release-gate-positive-not-exact:${entry.axis}`);
+        }
+        if (positiveExactIssueMatch && !positiveCompleteEvidenceMatch) {
+            failures.push(`release-gate-positive-evidence-not-complete:${entry.axis}`);
+        }
+        if (!negativeHasNoSuggestions) {
+            failures.push(`release-gate-negative-not-empty:${entry.axis}`);
+        }
+        return {
+            axis: entry.axis,
+            passed: positiveExactIssueMatch
+                && positiveCompleteEvidenceMatch
+                && negativeHasNoSuggestions,
+            positive: {
+                caseId: entry.positiveCaseId,
+                expectedIssueCount: positiveCase.expectedIssueCount,
+                suggestionCount: positiveCase.suggestionCount,
+                matchedIssueCount: positiveCase.matchedIssueCount,
+                exactIssueMatch: positiveExactIssueMatch,
+                expectedEvidenceCount: positiveCase.expectedEvidenceCount,
+                evidenceCount: positiveCase.evidenceCount,
+                correctEvidenceCount: positiveCase.correctEvidenceCount,
+                completeEvidenceMatch: positiveCompleteEvidenceMatch,
+            },
+            negative: {
+                caseId: entry.negativeCaseId,
+                suggestionCount: negativeCase.suggestionCount,
+                noSuggestions: negativeHasNoSuggestions,
+            },
+        };
+    });
+    return {
+        configuredCount: axes.length,
+        passedCount: axes.filter((entry) => entry.passed).length,
+        failedCount: axes.filter((entry) => !entry.passed).length,
+        failures,
+        axes,
+    };
+}
+
 export function evaluateSemanticSuggestionCorpus(corpus, resultsByCase) {
     const normalized = normalizeCorpus(corpus);
     const results = normalizeResults(resultsByCase, normalized.caseIds);
@@ -462,6 +676,7 @@ export function evaluateSemanticSuggestionCorpus(corpus, resultsByCase) {
                 counts.evidence,
             ),
     };
+    const releaseGates = evaluateReleaseGates(normalized.releaseGates, cases);
     const failures = [];
     if (counts.missingResults > 0) failures.push('missing-results');
     if (metrics.usefulnessRate < normalized.thresholds.minimumUsefulnessRate) {
@@ -473,6 +688,7 @@ export function evaluateSemanticSuggestionCorpus(corpus, resultsByCase) {
     if (metrics.evidenceAccuracy < normalized.thresholds.minimumEvidenceAccuracy) {
         failures.push('evidence-accuracy-below-threshold');
     }
+    failures.push(...releaseGates.failures);
     return deepFreeze({
         kind: 'st-devtools-semantic-evaluation-report',
         version: SEMANTIC_EVALUATION_CORPUS_VERSION,
@@ -481,6 +697,7 @@ export function evaluateSemanticSuggestionCorpus(corpus, resultsByCase) {
         thresholds: { ...normalized.thresholds },
         metrics,
         counts,
+        releaseGates,
         failures,
         cases,
     });

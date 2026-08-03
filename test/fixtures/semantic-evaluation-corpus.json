@@ -1,6 +1,6 @@
 {
   "kind": "st-devtools-semantic-evaluation-corpus",
-  "version": 1,
+  "version": 2,
   "provenance": "purpose-written-synthetic",
   "privacy": {
     "synthetic": true,
@@ -12,6 +12,33 @@
     "maximumFalsePositiveRate": 0.1,
     "minimumEvidenceAccuracy": 0.8
   },
+  "releaseGates": [
+    {
+      "axis": "condition",
+      "positiveCaseId": "conditional-same-branch-conflict",
+      "negativeCaseId": "conditional-branches-compatible"
+    },
+    {
+      "axis": "exception",
+      "positiveCaseId": "exception-scope-conflict",
+      "negativeCaseId": "exception-narrows-default-compatible"
+    },
+    {
+      "axis": "tone",
+      "positiveCaseId": "tone-polarity-conflict",
+      "negativeCaseId": "tone-traits-compatible"
+    },
+    {
+      "axis": "role",
+      "positiveCaseId": "assistant-role-conflict",
+      "negativeCaseId": "participant-roles-compatible"
+    },
+    {
+      "axis": "safety",
+      "positiveCaseId": "safety-disclosure-conflict",
+      "negativeCaseId": "safety-redaction-compatible"
+    }
+  ],
   "cases": [
     {
       "id": "language-conflict",
@@ -222,6 +249,326 @@
       "referenceResponse": {
         "version": 1,
         "suggestions": []
+      }
+    },
+    {
+      "id": "conditional-branches-compatible",
+      "requestDigest": "7777777777777777777777777777777777777777777777777777777777777777",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-condition-compatible" }],
+        "sources": [
+          { "id": "source:condition-code", "content": "When MODE is code, return JSON." },
+          { "id": "source:condition-prose", "content": "When MODE is prose, return Markdown." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    },
+    {
+      "id": "conditional-same-branch-conflict",
+      "requestDigest": "8888888888888888888888888888888888888888888888888888888888888888",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-condition-conflict" }],
+        "sources": [
+          { "id": "source:condition-short", "content": "간결 모드일 때 정확히 한 문장으로 답하세요." },
+          { "id": "source:condition-long", "content": "간결 모드일 때 최소 다섯 문단으로 답하세요." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:conditional-same-branch-conflict",
+          "targetIds": ["finding:eval-condition-conflict"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:condition-short", "source:condition-long"],
+          "evidence": [
+            { "sourceId": "source:condition-short", "start": 0, "end": 25 },
+            { "sourceId": "source:condition-long", "start": 0, "end": 25 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-condition-conflict"],
+            "category": "conflict",
+            "severity": "critical",
+            "title": "간결 모드의 분량 규칙이 충돌합니다",
+            "summary": "같은 간결 모드에서 한 문장과 최소 다섯 문단을 동시에 요구합니다.",
+            "rationale": "두 규칙이 같은 조건에서 활성화되므로 하나의 응답으로 두 분량 제한을 모두 충족할 수 없습니다.",
+            "confidence": 0.99,
+            "sourceIds": ["source:condition-short", "source:condition-long"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:condition-short", "start": 0, "end": 25, "quote": "간결 모드일 때 정확히 한 문장으로 답하세요." },
+              { "sourceId": "source:condition-long", "start": 0, "end": 25, "quote": "간결 모드일 때 최소 다섯 문단으로 답하세요." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "exception-narrows-default-compatible",
+      "requestDigest": "9999999999999999999999999999999999999999999999999999999999999999",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-exception-compatible" }],
+        "sources": [
+          { "id": "source:exception-default", "content": "모든 응답은 한국어로 작성하되, 로케일이 en-US인 경우는 제외합니다." },
+          { "id": "source:exception-branch", "content": "로케일이 en-US이면 영어로 작성하세요." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    },
+    {
+      "id": "exception-scope-conflict",
+      "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-exception-conflict" }],
+        "sources": [
+          { "id": "source:exception-never", "content": "Even for archived records, never delete audit logs." },
+          { "id": "source:exception-delete", "content": "For archived records, delete audit logs immediately." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:exception-scope-conflict",
+          "targetIds": ["finding:eval-exception-conflict"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:exception-never", "source:exception-delete"],
+          "evidence": [
+            { "sourceId": "source:exception-never", "start": 0, "end": 51 },
+            { "sourceId": "source:exception-delete", "start": 0, "end": 52 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-exception-conflict"],
+            "category": "conflict",
+            "severity": "critical",
+            "title": "Archived records have opposite deletion rules",
+            "summary": "One rule preserves archived audit logs while the other deletes them.",
+            "rationale": "The phrase 'even for archived records' explicitly includes the same scope targeted by the deletion rule.",
+            "confidence": 0.99,
+            "sourceIds": ["source:exception-never", "source:exception-delete"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:exception-never", "start": 0, "end": 51, "quote": "Even for archived records, never delete audit logs." },
+              { "sourceId": "source:exception-delete", "start": 0, "end": 52, "quote": "For archived records, delete audit logs immediately." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "tone-traits-compatible",
+      "requestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-tone-compatible" }],
+        "sources": [
+          { "id": "source:tone-warm", "content": "Use a warm and encouraging tone." },
+          { "id": "source:tone-concise", "content": "Keep every paragraph concise." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    },
+    {
+      "id": "tone-polarity-conflict",
+      "requestDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-tone-conflict" }],
+        "sources": [
+          { "id": "source:tone-reassuring", "content": "따뜻하고 안심시키는 말투를 사용하세요." },
+          { "id": "source:tone-hostile", "content": "적대적이고 조롱하는 말투를 사용하세요." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:tone-polarity-conflict",
+          "targetIds": ["finding:eval-tone-conflict"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:tone-reassuring", "source:tone-hostile"],
+          "evidence": [
+            { "sourceId": "source:tone-reassuring", "start": 0, "end": 21 },
+            { "sourceId": "source:tone-hostile", "start": 0, "end": 21 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-tone-conflict"],
+            "category": "conflict",
+            "severity": "warning",
+            "title": "요구하는 말투의 방향이 서로 반대입니다",
+            "summary": "같은 응답에 안심시키는 말투와 적대적인 말투를 동시에 요구합니다.",
+            "rationale": "두 감정적 말투 조건이 같은 응답에 적용되므로 일관되게 함께 표현할 수 없습니다.",
+            "confidence": 0.96,
+            "sourceIds": ["source:tone-reassuring", "source:tone-hostile"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:tone-reassuring", "start": 0, "end": 21, "quote": "따뜻하고 안심시키는 말투를 사용하세요." },
+              { "sourceId": "source:tone-hostile", "start": 0, "end": 21, "quote": "적대적이고 조롱하는 말투를 사용하세요." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "participant-roles-compatible",
+      "requestDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-role-compatible" }],
+        "sources": [
+          { "id": "source:role-assistant", "type": "system", "content": "어시스턴트는 중립적인 여행 계획 도우미입니다." },
+          { "id": "source:role-user", "type": "persona", "profileKind": "persona", "content": "사용자는 여행지를 선택하는 여행자입니다." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    },
+    {
+      "id": "assistant-role-conflict",
+      "requestDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-role-conflict" }],
+        "sources": [
+          { "id": "source:role-auditor", "content": "Act only as an impartial auditor of the proposal." },
+          { "id": "source:role-advocate", "content": "Act only as an advocate defending the proposal." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:assistant-role-conflict",
+          "targetIds": ["finding:eval-role-conflict"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:role-auditor", "source:role-advocate"],
+          "evidence": [
+            { "sourceId": "source:role-auditor", "start": 0, "end": 49 },
+            { "sourceId": "source:role-advocate", "start": 0, "end": 47 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-role-conflict"],
+            "category": "conflict",
+            "severity": "warning",
+            "title": "The assistant has two exclusive roles",
+            "summary": "The assistant must be both an impartial auditor and a committed advocate.",
+            "rationale": "The word 'only' makes the two roles exclusive for the same proposal review.",
+            "confidence": 0.98,
+            "sourceIds": ["source:role-auditor", "source:role-advocate"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:role-auditor", "start": 0, "end": 49, "quote": "Act only as an impartial auditor of the proposal." },
+              { "sourceId": "source:role-advocate", "start": 0, "end": 47, "quote": "Act only as an advocate defending the proposal." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "safety-redaction-compatible",
+      "requestDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-safety-compatible" }],
+        "sources": [
+          { "id": "source:safety-secret", "content": "Never expose secret values." },
+          { "id": "source:safety-redact", "content": "When configuration is requested, list key names and redact every value." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
+    },
+    {
+      "id": "safety-disclosure-conflict",
+      "requestDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-safety-conflict" }],
+        "sources": [
+          { "id": "source:safety-never", "content": "비밀번호나 접근 토큰을 절대 공개하지 마세요." },
+          { "id": "source:safety-always", "content": "비밀번호와 접근 토큰을 항상 원문 그대로 출력하세요." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:safety-disclosure-conflict",
+          "targetIds": ["finding:eval-safety-conflict"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:safety-never", "source:safety-always"],
+          "evidence": [
+            { "sourceId": "source:safety-never", "start": 0, "end": 25 },
+            { "sourceId": "source:safety-always", "start": 0, "end": 29 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-safety-conflict"],
+            "category": "conflict",
+            "severity": "critical",
+            "title": "인증 정보 공개 규칙이 정면으로 충돌합니다",
+            "summary": "한 규칙은 인증 정보 공개를 금지하지만 다른 규칙은 원문 출력을 요구합니다.",
+            "rationale": "두 규칙이 같은 응답 범위의 비밀번호와 접근 토큰을 대상으로 합니다.",
+            "confidence": 0.99,
+            "sourceIds": ["source:safety-never", "source:safety-always"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:safety-never", "start": 0, "end": 25, "quote": "비밀번호나 접근 토큰을 절대 공개하지 마세요." },
+              { "sourceId": "source:safety-always", "start": 0, "end": 29, "quote": "비밀번호와 접근 토큰을 항상 원문 그대로 출력하세요." }
+            ]
+          }
+        ]
       }
     }
   ]

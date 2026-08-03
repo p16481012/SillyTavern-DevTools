@@ -1,4 +1,15 @@
-# v0.13.1 기술 구현 현황
+# v0.14.0 기술 구현 현황
+
+## v0.14.0 합성 의미 평가·실제 provider 절차
+
+- 합성 평가 corpus는 v2로 올라가며 6건에서 16건으로 늘어났습니다. 조건·예외·말투·역할·안전마다 충돌해야 하는 양성 1건과 충돌하면 안 되는 음성 1건을 추가하고 신규 사례를 한국어 5건·영어 5건으로 교차 배치했습니다.
+- reference evidence의 quote와 source exact slice·기대 범위가 일치하는지, 다섯 의미 축의 양성/음성 쌍과 언어 균형이 유지되는지 자동 검사합니다.
+- corpus `releaseGates`는 전체 평균과 별도로 각 축의 양성 exact issue match·기대 근거 pair 전부 적중·불필요한 근거 없음과 음성 제안 0건을 강제합니다. 한 축의 실패가 다른 축의 성적으로 희석되지 않습니다.
+- corpus v2는 `releaseGates`가 필수라 구 평가기가 새 fixture를 지원 버전으로 오인하지 않습니다. 현 평가기는 gate가 없는 legacy v1만 종전 집계로 명시 지원합니다.
+- category·target·source가 같은 복수 issue는 최대 issue 적중 수를 우선하고 그 안에서 근거 pair 적중 수가 최대가 되는 bounded 일대일 대응을 사용합니다.
+- AI 고정 지침은 적용 범위·조건·예외를 먼저 비교하고, 양립 가능한 말투·서로 다른 참가자 역할·안전한 대안과 실제 금지 우회를 구분하도록 보강했습니다.
+- 실제 provider 평가는 OpenAI·Anthropic·Google 계열과 현재 연결·Connection Manager 경로의 행렬, 개인정보 모드·매회 동의·identity·self-capture·비용·중단 기준을 갖춘 수동 절차로 분리했습니다.
+- 현재 UI에서 로컬 target이 없는 음성 사례는 전체 live 평가가 불가능합니다. 같은 `SemanticCaptureGate`를 공유하는 공식 in-process harness 전까지 해당 셀을 `pass`가 아닌 `incomplete`로 기록합니다.
 
 ## v0.13.1 읽기 전용 복사·캐릭터/페르소나 구조 오탐 패치
 
@@ -297,16 +308,16 @@
 
 ## 아직 미구현
 
-### v0.13.x·v0.14.0 방향
+### v0.14.x·v0.15.0 방향
 
-- 실제 SillyTavern 연결 프로필별 추가 envelope와 오류 구조는 사용자 재현 또는 공식 공개 계약이 확보될 때 v0.13.x fixture로 보강
-- 조건·예외·말투·정체성·안전 의미를 포함하는 합성 corpus 확대와 provider별 수동 품질 평가 절차
+- 확장과 동일한 inspector·adapter·capture gate를 사용하는 명시적 opt-in 실제 provider 수동 평가 harness
+- corpus의 구조 atom·relation과 실제 `prepare()` 제품 경로 통합 평가, title·summary·rationale의 의미 정확성을 다루는 사람 검토 rubric
 - 다섯 기능을 처음 쓰는 사용자를 위한 선택형 코치마크·워크스루, 재시작·건너뛰기·키보드·screen reader 계약
 
-세부 기능은 v0.13.1 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+선택형 온보딩의 세부 기능은 사용자가 기능 개발 뒤 한 번에 수행할 최종 검토 결과로 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.13.1의 원문·payload·AI 제안 복사와 캐릭터/페르소나 프로필 구조 오탐 수정, provider별 응답 envelope와 기존 캡처·저장 회귀를 사용자 체크리스트로 확인합니다.
-2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.13.x 패치를 만듭니다.
-3. v0.14.0 후보의 corpus 확대와 선택형 온보딩은 v0.13.1 실사용·접근성 피드백 뒤 범위를 확정합니다.
+1. 확장의 inspector·adapter·capture gate를 공유하는 공식 in-process 수동 평가 harness를 분리 설계합니다.
+2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
+3. 선택형 온보딩은 현재 개발 흐름을 방해하지 않고 건너뛰기·재시작·접근성을 보장하는 별도 버전으로 계획합니다.

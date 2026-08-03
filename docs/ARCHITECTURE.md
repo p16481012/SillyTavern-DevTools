@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.13.1의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 합성 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.14.0의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 합성 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -200,7 +200,13 @@ Provider 응답 정규화는 배열 prototype·길이·own key·data descriptor�
 
 `SemanticInspectorMemoryCache`의 key는 protocol·provider identity·응답 상한·bounded prompt를 포함한 digest입니다. 값에는 전체 raw prompt·전체 raw provider response와 전용 `source.content`·`evidence.quote` 필드를 넣지 않고 검증된 ID·offset과 title·summary·rationale 같은 정규화 제안 텍스트를 제한된 LRU/TTL로 보관합니다. 모델이 제안 텍스트 안에 입력 원문의 표현을 반복할 가능성까지 제거하지는 않으므로 이 cache는 익명화 경계가 아닙니다. cache hit의 evidence quote는 현재 준비 source의 검증된 offset에서 다시 구성하며 새로고침하면 cache 전체가 사라집니다.
 
-v0.13.1 평가 corpus 6건은 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. 이 결정적 회귀는 평가 도구와 고정 예시의 일관성을 검증하며, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
+v0.14.0 평가 corpus v2 16건은 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 기존 기반 사례에 조건·예외·말투·역할·안전의 충돌/비충돌 한·영 교차 대조군을 더했고, reference evidence가 source의 exact slice인지 검사합니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. category·target·source가 같은 복수 issue는 최대 issue 적중 수 안에서 근거 pair 적중이 최대가 되는 bounded 대응을 선택합니다.
+
+corpus v2의 `releaseGates`는 전체 비율과 별도로 각 의미 축의 양성 exact issue match·모든 기대 근거 pair 적중·추가 근거 없음과 음성 제안 0건을 필수 조건으로 만듭니다. 구 평가기는 v2 fixture를 지원 버전으로 받아들이지 않으며, 현 평가기는 `releaseGates`가 없는 legacy v1만 종전 집계 방식으로 명시 지원합니다. v1에 gate를 붙이거나 v2에서 gate를 빼면 실패로 닫습니다.
+
+이 corpus의 `atoms`·`relations`가 비어 있는 사례는 source text 의미 판별 벤치이며 `prepare()` 제품 경로나 구조 atom 생성 자체를 보증하지 않습니다. 현재 점수는 category·target/source 집합·evidence 범위를 평가하지만 severity·confidence와 title·summary·rationale의 의미 정확성까지 자동 채점하지 않습니다. 일반 UI는 로컬 finding/cluster가 없는 음성 사례를 선택할 수 없으므로 전체 corpus를 실제 provider에서 통과했다고 선언하려면 같은 capture gate를 공유하는 공식 in-process harness가 필요합니다. 구체적인 실행·중단·기록 규칙은 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)에 따릅니다.
+
+따라서 이 결정적 회귀는 평가 도구와 고정 reference 예시의 일관성을 검증할 뿐, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
 
 취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 profile `sendRequest()`와 `generateRaw()`에는 provider 계산을 강제로 중단하는 공통 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
 
