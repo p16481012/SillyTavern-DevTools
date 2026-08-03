@@ -68,7 +68,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.14.1',
+        extensionVersion: '0.15.0',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1447,9 +1447,10 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.14.1',
+    version: '0.15.0',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
+    onboardingAutoStart: false,
 });
 document.body.dataset.fixtureSchema = '7';
 document.body.dataset.fixtureSize = String(timeline.length);
@@ -1516,6 +1517,10 @@ retroThemeToggle?.addEventListener?.('click', () => {
 });
 
 document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
+document.getElementById('sandbox-onboarding')?.addEventListener('click', async () => {
+    await devTools.open();
+    devTools.startOnboarding({ invitation: true, force: true });
+});
 document.getElementById('sandbox-storage-error').addEventListener('click', () => {
     capture.dispatchEvent(new CustomEvent('capture-status', {
         detail: {
@@ -1632,7 +1637,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.14.1',
+        extensionVersion: '0.15.0',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1679,7 +1684,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.14.1',
+        version: '0.15.0',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1791,6 +1796,17 @@ globalThis.devToolsSandboxFixtures = {
     selectPrivacyFixture,
     setRetroThemeConflict,
     setSemanticFixtureMode,
+    onboarding: {
+        start: () => devTools.startOnboarding({ invitation: true, force: true }),
+        next: () => devTools.nextOnboardingStep(),
+        back: () => devTools.previousOnboardingStep(),
+        skip: () => devTools.closeOnboarding({ persist: 'skipped' }),
+        status: () => ({
+            phase: devTools.onboardingPhase,
+            step: devTools.onboardingOverlay?.dataset?.step ?? null,
+            open: devTools.onboardingIsOpen(),
+        }),
+    },
     semantic: {
         inspector: sandboxSemanticInspector,
         adapter: sandboxSemanticAdapter,

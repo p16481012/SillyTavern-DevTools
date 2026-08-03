@@ -1,4 +1,13 @@
-# v0.14.1 기술 구현 현황
+# v0.15.0 기술 구현 현황
+
+## v0.15.0 선택형 온보딩
+
+- 6단계 워크스루가 캡처 상태·전송 프롬프트·규칙 검사·기록·변경 비교·검색의 실제 UI 대상을 순서대로 강조합니다.
+- 각 단계는 실제 사용과 닮은 고정 연습 카드로 provider/model/토큰, 요청 포함 상태, 충돌 근거, 토큰 변화, diff, 검색 일치를 설명합니다. 실제 스냅샷이 없어도 전체 흐름을 볼 수 있습니다.
+- 연습 데이터는 오버레이 DOM 안에서만 렌더링하며 snapshot store·timeline·분석·AI provider·clipboard·export를 호출하지 않고 현재 탭과 선택도 바꾸지 않습니다.
+- 첫 실행 제안은 `new` 상태에서 한 번만 시도하고 건너뛰기·완료만 `st-devtools:onboarding:v1`에 저장합니다. 중간 진행률·시각·내용은 저장하지 않습니다.
+- AI 의미 검사 또는 공식 Provider 평가가 활성 상태면 워크스루를 열지 않으며, 워크스루 중 새 AI 실행도 차단합니다.
+- dialog·focus trap·focus 복원·Escape·screen reader 상태를 제공하고 모바일에서는 하단 내비게이션을 가리지 않는 bottom sheet를 사용합니다.
 
 ## v0.14.1 공식 Provider harness·구조 경로 평가
 
@@ -322,16 +331,16 @@
 
 ## 아직 미구현
 
-### v0.14.x·v0.15.0 방향
+### v0.15.x 이후 방향
 
 - 말투·안전 의미의 정적 atom·relation 양성/음성 경계를 과잉 탐지 없이 추가하는 분류 설계
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
-- 다섯 기능을 처음 쓰는 사용자를 위한 선택형 코치마크·워크스루, 재시작·건너뛰기·키보드·screen reader 계약
+- 실제 초보자 검토에서 확인되는 워크스루 문구·예시 밀도·강조 위치 보정
 
-선택형 온보딩의 세부 기능은 사용자가 기능 개발 뒤 한 번에 수행할 최종 검토 결과로 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+선택형 온보딩의 기본 계약은 v0.15.0에서 완료했습니다. 코치마크는 실제 데이터나 AI 응답을 미리 실행하는 시뮬레이터가 아니며, 고정 연습 데이터로 결과를 읽는 법만 안내합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
 1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
-3. 선택형 온보딩은 현재 개발 흐름을 방해하지 않고 건너뛰기·재시작·접근성을 보장하는 별도 버전으로 계획합니다.
+3. 온보딩은 실제 초보자 검토 뒤 문구와 강조 위치를 보정하되 여섯 단계와 격리 경계를 기본값으로 유지합니다.

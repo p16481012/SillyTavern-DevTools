@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.14.1의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.15.0의 선택형 첫 사용 워크스루와 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -9,6 +9,12 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
+
+### 온보딩 격리 경계
+
+v0.15.0의 워크스루는 `src/onboarding.js`의 고정 단계 정의와 `DevToolsWindow`의 오버레이 DOM만 사용합니다. 연습 데이터는 매 단계에서 정적 문자열로 렌더링하며 `timeline`, snapshot store, 현재 선택, 분석 Worker, provider adapter, Semantic Inspector, 클립보드와 내보내기 경로에 전달하지 않습니다. 배경 탭을 자동 전환하지도 않습니다.
+
+오버레이가 열린 동안 일반 영역은 `inert`·`aria-hidden`으로 비활성화되고 focus는 dialog 안에 갇힙니다. AI 의미 검사와 공식 Provider 평가가 실행 중이면 시작하지 않으며, 워크스루가 열린 동안 새 AI 실행도 거부합니다. 저장하는 상태는 schema/tour version과 `skipped` 또는 `completed`뿐입니다. 진행 단계·시각·연습 데이터·실제 데이터는 저장하지 않습니다.
 
 ## 캡처 파이프라인
 
@@ -293,7 +299,7 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 
 설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼, 바로 보이는 자주 쓰는 설정과 접힌 고급 설정을 유지하고 테마 선택은 해당 preference만 즉시 저장합니다. AI opt-in·연결 프로필·응답 상한은 규칙 검사 화면의 AI 모드에서 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다. 규칙·비교 정책 설정은 제목의 설정 버튼이 여는 별도 dialog에 렌더링합니다. 430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다.
 
-현재 빠른 시작과 tooltip은 완성된 온보딩이 아닙니다. 코치마크·워크스루는 이 정보 구조의 실사용 피드백 뒤 별도 접근성 계약과 함께 설계합니다.
+v0.15.0의 선택형 워크스루는 위 정보 구조를 실제 데이터와 격리된 연습 카드로 안내합니다. 빠른 시작과 tooltip은 워크스루를 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
 
 ## 내부 고대비 테마와 호스트 격리
 

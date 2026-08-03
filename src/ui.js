@@ -128,6 +128,14 @@ import {
     readSemanticPromptSettings,
     saveSemanticPromptSettings,
 } from './semantic-prompt-settings.js';
+import {
+    ONBOARDING_VERSION,
+    ONBOARDING_STEPS,
+    ONBOARDING_STORAGE_KEY,
+    readOnboardingState,
+    saveOnboardingState,
+    shouldAutoStartOnboarding,
+} from './onboarding.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -146,6 +154,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     RULE_AUDIT_LOG_KEY,
     LEGACY_PRICING_OVERRIDES_KEY,
     SEMANTIC_PROMPT_SETTINGS_KEY,
+    ONBOARDING_STORAGE_KEY,
     LAST_TAB_KEY,
     GEOMETRY_KEY,
     UI_PREFERENCES_KEY,
@@ -801,6 +810,7 @@ export class DevToolsWindow {
         analysisRuntime = null,
         semanticInspector = null,
         semanticEvaluationHarness = null,
+        onboardingAutoStart = true,
     }) {
         this.getContext = getContext;
         this.store = store;
@@ -808,6 +818,7 @@ export class DevToolsWindow {
         this.version = version;
         this.semanticInspector = semanticInspector;
         this.semanticEvaluationHarness = semanticEvaluationHarness;
+        this.onboardingAutoStart = Boolean(onboardingAutoStart);
         this.root = null;
         this.window = null;
         this.content = null;
@@ -946,6 +957,21 @@ export class DevToolsWindow {
         this.semanticConsentConfirmButton = null;
         this.semanticConsentPreviouslyFocused = null;
         this.semanticConsentResolve = null;
+        this.onboardingState = readOnboardingState();
+        this.onboardingAutoAttempted = false;
+        this.onboardingPhase = 'idle';
+        this.onboardingStepIndex = 0;
+        this.onboardingOverlay = null;
+        this.onboardingPanel = null;
+        this.onboardingHighlight = null;
+        this.onboardingProgress = null;
+        this.onboardingAnnouncement = null;
+        this.onboardingBody = null;
+        this.onboardingBackButton = null;
+        this.onboardingNextButton = null;
+        this.onboardingLauncher = null;
+        this.onboardingPreviouslyFocused = null;
+        this.onboardingPositionFrame = null;
         this.storageToolsStatus = null;
         this.diagnosticCompareFiles = [];
         this.primaryRegions = [];
@@ -3090,6 +3116,7 @@ export class DevToolsWindow {
     }
 
     requestSemanticConsent(preview) {
+        if (this.onboardingIsOpen()) return Promise.resolve(false);
         if (!this.semanticConsentOverlay || !this.semanticConsentPanel) {
             return Promise.resolve(false);
         }
@@ -3185,6 +3212,7 @@ export class DevToolsWindow {
         this.root.hidden = false;
         await this.refresh();
         this.window?.focus({ preventScroll: true });
+        this.maybeOfferOnboarding();
     }
 
     close() {
@@ -3197,6 +3225,7 @@ export class DevToolsWindow {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.closeSemanticConsent(false, { restoreFocus: false });
+        this.closeOnboarding({ persist: null, restoreFocus: false });
         this.cancelSemanticProviderEvaluation();
         this.cancelSemanticInspection();
         this.closeRulesSettings({ restoreFocus: false });
@@ -3236,6 +3265,19 @@ export class DevToolsWindow {
         );
 
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
+        const onboarding = element('button', {
+            className: 'menu_button st-devtools-icon-button st-devtools-onboarding-launcher',
+            title: t('action.onboarding'),
+            type: 'button',
+        });
+        onboarding.setAttribute('aria-label', t('action.onboarding'));
+        const onboardingIcon = element('i', { className: 'fa-solid fa-compass' });
+        onboardingIcon.setAttribute('aria-hidden', 'true');
+        onboarding.appendChild(onboardingIcon);
+        onboarding.addEventListener('click', () => {
+            this.startOnboarding({ invitation: true, force: true });
+        });
+        this.onboardingLauncher = onboarding;
         const settings = element('button', {
             className: 'menu_button st-devtools-icon-button',
             title: t('action.settings'),
@@ -3258,7 +3300,7 @@ export class DevToolsWindow {
         close.setAttribute('aria-label', t('action.close'));
         close.appendChild(closeIcon());
         close.addEventListener('click', () => this.close());
-        headerActions.append(settings, refresh, close);
+        headerActions.append(onboarding, settings, refresh, close);
         header.append(title, headerActions);
 
         const tabList = element('nav', {
@@ -3305,6 +3347,7 @@ export class DevToolsWindow {
             this.buildSettingsPanel(),
             this.buildRulesSettingsPanel(),
             this.buildSemanticConsentDialog(),
+            this.buildOnboardingLayer(),
         );
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
@@ -3320,6 +3363,615 @@ export class DevToolsWindow {
         this.enableDragging(header);
         this.observeGeometry();
         this.selectTab(this.activeTab);
+    }
+
+    buildOnboardingLayer() {
+        const overlay = element('div', {
+            className: 'st-devtools-onboarding-overlay',
+        });
+        overlay.hidden = true;
+        overlay.addEventListener('pointerdown', (event) => {
+            event.stopPropagation();
+        });
+
+        const highlight = element('div', {
+            className: 'st-devtools-onboarding-highlight',
+        });
+        highlight.setAttribute('aria-hidden', 'true');
+
+        const panel = element('section', {
+            className: 'st-devtools-onboarding-panel',
+        });
+        panel.tabIndex = -1;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'st-devtools-onboarding-title');
+        panel.setAttribute('aria-describedby', 'st-devtools-onboarding-description');
+
+        const header = element('header', {
+            className: 'st-devtools-onboarding-header',
+        });
+        const progress = element('span', {
+            className: 'st-devtools-onboarding-progress',
+        });
+        const announcement = element('span', {
+            className: 'st-devtools-onboarding-announcement',
+        });
+        announcement.setAttribute('role', 'status');
+        announcement.setAttribute('aria-live', 'polite');
+        announcement.setAttribute('aria-atomic', 'true');
+        const skip = element('button', {
+            className: 'menu_button st-devtools-onboarding-skip',
+            text: t('onboarding.skip'),
+            type: 'button',
+        });
+        skip.addEventListener('click', () => {
+            this.closeOnboarding({ persist: 'skipped' });
+        });
+        header.append(progress, announcement, skip);
+
+        const body = element('div', {
+            className: 'st-devtools-onboarding-body',
+        });
+        const actions = element('footer', {
+            className: 'st-devtools-onboarding-actions',
+        });
+        const back = element('button', {
+            className: 'menu_button',
+            text: t('onboarding.back'),
+            type: 'button',
+        });
+        back.addEventListener('click', () => this.previousOnboardingStep());
+        const next = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: t('onboarding.next'),
+            type: 'button',
+        });
+        next.addEventListener('click', () => this.nextOnboardingStep());
+        actions.append(back, next);
+        panel.append(header, body, actions);
+        overlay.append(highlight, panel);
+
+        this.onboardingOverlay = overlay;
+        this.onboardingPanel = panel;
+        this.onboardingHighlight = highlight;
+        this.onboardingProgress = progress;
+        this.onboardingAnnouncement = announcement;
+        this.onboardingBody = body;
+        this.onboardingBackButton = back;
+        this.onboardingNextButton = next;
+        globalThis.addEventListener?.('resize', () => {
+            if (this.onboardingIsOpen()) this.requestOnboardingPosition();
+        });
+        return overlay;
+    }
+
+    onboardingIsOpen() {
+        return Boolean(this.onboardingOverlay && !this.onboardingOverlay.hidden);
+    }
+
+    onboardingCanStart() {
+        const semanticBusy = ['preparing', 'awaiting-consent', 'running']
+            .includes(this.semanticInspectionState?.status);
+        let semanticProviderBusy = false;
+        try {
+            semanticProviderBusy = Number(
+                this.semanticInspector?.activeCallCount?.() ?? 0,
+            ) > 0;
+        } catch {
+            semanticProviderBusy = true;
+        }
+        const anotherDialogOpen = Boolean(
+            (this.settingsOverlay && !this.settingsOverlay.hidden)
+            || (this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden)
+            || (this.semanticConsentOverlay && !this.semanticConsentOverlay.hidden)
+        );
+        return !semanticBusy
+            && !semanticProviderBusy
+            && !this.semanticEvaluationIsActive()
+            && !anotherDialogOpen;
+    }
+
+    maybeOfferOnboarding() {
+        if (
+            this.onboardingAutoAttempted
+            || !this.onboardingAutoStart
+            || !shouldAutoStartOnboarding(this.onboardingState)
+        ) return false;
+        this.onboardingAutoAttempted = true;
+        queueMicrotask(() => {
+            if (!this.startOnboarding({ invitation: true })) {
+                this.onboardingAutoAttempted = false;
+            }
+        });
+        return true;
+    }
+
+    startOnboarding({ invitation = true, force = false } = {}) {
+        if (!this.onboardingOverlay || this.onboardingIsOpen()) return false;
+        if (!force && !shouldAutoStartOnboarding(this.onboardingState)) return false;
+        if (!this.onboardingCanStart()) {
+            if (force) {
+                globalThis.toastr?.warning?.(
+                    t('onboarding.busy'),
+                    'ST DevTools',
+                );
+            }
+            return false;
+        }
+        this.onboardingPreviouslyFocused = document.activeElement;
+        this.onboardingPhase = invitation ? 'invitation' : 'steps';
+        this.onboardingStepIndex = 0;
+        this.window.setAttribute('aria-modal', 'false');
+        for (const region of this.primaryRegions) {
+            region.inert = true;
+            region.setAttribute('aria-hidden', 'true');
+        }
+        this.onboardingOverlay.hidden = false;
+        this.updateOnboardingView();
+        queueMicrotask(() => {
+            if (this.onboardingIsOpen()) {
+                this.onboardingPanel?.focus({ preventScroll: true });
+            }
+        });
+        return true;
+    }
+
+    closeOnboarding({ persist = null, restoreFocus = true } = {}) {
+        if (!this.onboardingIsOpen()) return false;
+        if (this.onboardingPositionFrame != null) {
+            cancelAnimationFrame(this.onboardingPositionFrame);
+            this.onboardingPositionFrame = null;
+        }
+        this.onboardingOverlay.hidden = true;
+        this.onboardingOverlay.classList.remove('is-centered');
+        this.onboardingOverlay.dataset.phase = 'idle';
+        delete this.onboardingOverlay.dataset.step;
+        delete this.onboardingOverlay.dataset.target;
+        this.onboardingPanel?.classList.remove('is-invitation', 'is-fallback');
+        this.onboardingPanel?.removeAttribute('style');
+        if (this.onboardingHighlight) {
+            this.onboardingHighlight.hidden = true;
+            this.onboardingHighlight.removeAttribute('style');
+        }
+        this.onboardingPhase = 'idle';
+        this.onboardingStepIndex = 0;
+        this.window.setAttribute('aria-modal', 'true');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (['skipped', 'completed'].includes(persist)) {
+            this.onboardingState = saveOnboardingState(persist)
+                ?? Object.freeze({
+                    schemaVersion: 1,
+                    tourVersion: ONBOARDING_VERSION,
+                    disposition: persist,
+                });
+        }
+        const focusTarget = this.onboardingPreviouslyFocused?.isConnected
+            ? this.onboardingPreviouslyFocused
+            : this.onboardingLauncher;
+        if (
+            restoreFocus
+            && focusTarget?.isConnected
+            && typeof focusTarget.focus === 'function'
+        ) {
+            focusTarget.focus({ preventScroll: true });
+        }
+        this.onboardingPreviouslyFocused = null;
+        return true;
+    }
+
+    nextOnboardingStep() {
+        if (!this.onboardingIsOpen()) return false;
+        if (this.onboardingPhase === 'invitation') {
+            this.onboardingPhase = 'steps';
+            this.onboardingStepIndex = 0;
+            this.updateOnboardingView();
+            return true;
+        }
+        if (this.onboardingStepIndex >= ONBOARDING_STEPS.length - 1) {
+            return this.closeOnboarding({ persist: 'completed' });
+        }
+        this.onboardingStepIndex += 1;
+        this.updateOnboardingView();
+        return true;
+    }
+
+    previousOnboardingStep() {
+        if (!this.onboardingIsOpen()) return false;
+        if (this.onboardingPhase === 'invitation') return false;
+        if (this.onboardingStepIndex <= 0) {
+            this.onboardingPhase = 'invitation';
+        } else {
+            this.onboardingStepIndex -= 1;
+        }
+        this.updateOnboardingView();
+        return true;
+    }
+
+    updateOnboardingView() {
+        if (!this.onboardingIsOpen()) return;
+        if (this.onboardingPhase === 'invitation') {
+            const focusWasOnBack = document.activeElement === this.onboardingBackButton;
+            this.onboardingOverlay.dataset.phase = 'invitation';
+            delete this.onboardingOverlay.dataset.step;
+            delete this.onboardingOverlay.dataset.target;
+            const progress = t('onboarding.invitationProgress');
+            const title = t('onboarding.invitationTitle');
+            this.onboardingProgress.textContent = progress;
+            this.onboardingAnnouncement.textContent = `${progress}. ${title}`;
+            this.onboardingBackButton.hidden = true;
+            this.onboardingNextButton.textContent = t('onboarding.start');
+            this.onboardingBody.replaceChildren(this.renderOnboardingInvitation());
+            this.onboardingPanel.classList.add('is-invitation');
+            if (focusWasOnBack) {
+                queueMicrotask(() => this.onboardingNextButton?.focus({ preventScroll: true }));
+            }
+        } else {
+            const step = ONBOARDING_STEPS[this.onboardingStepIndex]
+                ?? ONBOARDING_STEPS[0];
+            this.onboardingOverlay.dataset.phase = 'steps';
+            this.onboardingOverlay.dataset.step = step.id;
+            this.onboardingOverlay.dataset.target = step.target;
+            this.onboardingProgress.textContent = t('onboarding.progress', {
+                current: this.onboardingStepIndex + 1,
+                total: ONBOARDING_STEPS.length,
+            });
+            this.onboardingAnnouncement.textContent = `${this.onboardingProgress.textContent}. ${
+                t(`onboarding.step.${step.id}.title`)
+            }`;
+            this.onboardingBackButton.hidden = false;
+            this.onboardingNextButton.textContent = this.onboardingStepIndex
+                === ONBOARDING_STEPS.length - 1
+                ? t('onboarding.finish')
+                : t('onboarding.next');
+            this.onboardingBody.replaceChildren(this.renderOnboardingStep(step));
+            this.onboardingPanel.classList.remove('is-invitation');
+        }
+        this.requestOnboardingPosition();
+    }
+
+    renderOnboardingInvitation() {
+        const content = element('div', {
+            className: 'st-devtools-onboarding-invitation',
+        });
+        const icon = element('span', {
+            className: 'st-devtools-onboarding-invitation-icon',
+        });
+        const iconGlyph = element('i', { className: 'fa-solid fa-compass' });
+        iconGlyph.setAttribute('aria-hidden', 'true');
+        icon.appendChild(iconGlyph);
+        const title = element('h2', { text: t('onboarding.invitationTitle') });
+        title.id = 'st-devtools-onboarding-title';
+        const description = proseElement(
+            'p',
+            t('onboarding.invitationDescription'),
+        );
+        description.id = 'st-devtools-onboarding-description';
+        const promise = element('div', {
+            className: 'st-devtools-onboarding-safety-note',
+        });
+        const promiseIcon = element('i', { className: 'fa-solid fa-flask' });
+        promiseIcon.setAttribute('aria-hidden', 'true');
+        promise.append(
+            promiseIcon,
+            element('span', { text: t('onboarding.invitationSafety') }),
+        );
+        content.append(icon, title, description, promise);
+        return content;
+    }
+
+    renderOnboardingStep(step) {
+        const content = element('div', {
+            className: `st-devtools-onboarding-step is-${step.id}`,
+        });
+        const heading = element('div', {
+            className: 'st-devtools-onboarding-step-heading',
+        });
+        const icon = element('span', {
+            className: 'st-devtools-onboarding-step-icon',
+        });
+        const iconGlyph = element('i', { className: `fa-solid ${step.icon}` });
+        iconGlyph.setAttribute('aria-hidden', 'true');
+        icon.appendChild(iconGlyph);
+        const title = element('h2', {
+            text: t(`onboarding.step.${step.id}.title`),
+        });
+        title.id = 'st-devtools-onboarding-title';
+        heading.append(icon, title);
+        const description = proseElement(
+            'p',
+            t(`onboarding.step.${step.id}.description`),
+        );
+        description.id = 'st-devtools-onboarding-description';
+        const tabLabelKey = TABS.find(([id]) => id === step.tabId)?.[2];
+        const location = element('div', {
+            className: 'st-devtools-onboarding-location',
+            text: step.id === 'capture'
+                ? t('onboarding.location.capture')
+                : t('onboarding.location.tab', {
+                    tab: tabLabelKey ? t(tabLabelKey) : '',
+                }),
+        });
+        const locationIcon = element('i', { className: 'fa-solid fa-location-dot' });
+        locationIcon.setAttribute('aria-hidden', 'true');
+        location.prepend(locationIcon);
+        content.append(
+            heading,
+            location,
+            description,
+            this.renderOnboardingDemo(step.demo),
+        );
+        return content;
+    }
+
+    renderOnboardingDemo(kind) {
+        const demo = element('section', {
+            className: `st-devtools-onboarding-demo is-${kind}`,
+        });
+        demo.setAttribute('aria-label', t('onboarding.demoLabel'));
+        const badge = element('div', {
+            className: 'st-devtools-onboarding-demo-badge',
+        });
+        const badgeIcon = element('i', { className: 'fa-solid fa-flask' });
+        badgeIcon.setAttribute('aria-hidden', 'true');
+        badge.append(
+            badgeIcon,
+            element('strong', { text: t('onboarding.demoLabel') }),
+        );
+        demo.appendChild(badge);
+
+        if (kind === 'capture') {
+            const state = element('div', {
+                className: 'st-devtools-onboarding-demo-capture-state',
+            });
+            const dot = element('span', { className: 'is-saved' });
+            dot.setAttribute('aria-hidden', 'true');
+            state.append(
+                dot,
+                element('strong', { text: t('onboarding.demo.capture.status') }),
+                element('span', { text: t('onboarding.demo.capture.savedDetail') }),
+            );
+            const flow = element('ol', {
+                className: 'st-devtools-onboarding-demo-flow',
+            });
+            for (const key of ['waiting', 'detected', 'saving', 'saved']) {
+                flow.appendChild(element('li', {
+                    text: t(`onboarding.demo.capture.${key}`),
+                }));
+            }
+            demo.append(state, flow);
+        } else if (kind === 'explorer') {
+            const summary = element('div', {
+                className: 'st-devtools-onboarding-demo-request',
+            });
+            summary.append(
+                element('strong', { text: t('onboarding.demo.explorer.request') }),
+                element('span', { text: t('onboarding.demo.explorer.provider') }),
+                element('span', { text: t('onboarding.demo.explorer.model') }),
+                element('span', { text: t('onboarding.demo.explorer.tokens') }),
+            );
+            const sources = element('div', {
+                className: 'st-devtools-onboarding-demo-sources',
+            });
+            for (const source of ['main', 'character', 'persona']) {
+                const row = element('div');
+                row.append(
+                    element('strong', {
+                        text: t(`onboarding.demo.explorer.${source}`),
+                    }),
+                    element('span', {
+                        text: t(`onboarding.demo.explorer.${source}Tokens`),
+                    }),
+                    element('small', {
+                        text: t('onboarding.demo.explorer.included'),
+                    }),
+                );
+                sources.appendChild(row);
+            }
+            demo.append(summary, sources);
+        } else if (kind === 'rules') {
+            const finding = element('article', {
+                className: 'st-devtools-onboarding-demo-finding',
+            });
+            finding.append(
+                element('strong', { text: t('onboarding.demo.rules.title') }),
+                proseElement('p', t('onboarding.demo.rules.summary')),
+            );
+            const evidence = element('div', {
+                className: 'st-devtools-onboarding-demo-evidence',
+            });
+            for (const key of ['first', 'second']) {
+                evidence.appendChild(element('span', {
+                    text: t(`onboarding.demo.rules.${key}`),
+                }));
+            }
+            finding.appendChild(evidence);
+            demo.appendChild(finding);
+        } else if (kind === 'timeline') {
+            const chart = element('div', {
+                className: 'st-devtools-onboarding-demo-chart',
+            });
+            const plot = svgElement('svg', {
+                viewBox: '0 0 300 100',
+                'aria-hidden': 'true',
+            });
+            plot.append(
+                svgElement('line', {
+                    class: 'st-devtools-onboarding-demo-chart-axis',
+                    x1: 24,
+                    y1: 82,
+                    x2: 276,
+                    y2: 82,
+                }),
+                svgElement('polyline', {
+                    class: 'st-devtools-onboarding-demo-chart-line',
+                    points: '24,66 150,45 276,17',
+                }),
+            );
+            chart.appendChild(plot);
+            const detail = element('strong', {
+                className: 'st-devtools-onboarding-demo-chart-detail',
+                text: t('onboarding.demo.timeline.third'),
+            });
+            detail.setAttribute('role', 'status');
+            detail.setAttribute('aria-live', 'polite');
+            const points = [
+                ['first', 8, 66],
+                ['second', 50, 45],
+                ['third', 92, 17],
+            ];
+            for (const [key, left, top] of points) {
+                const label = t(`onboarding.demo.timeline.${key}`);
+                const point = element('button', {
+                    className: `st-devtools-onboarding-demo-chart-point${
+                        key === 'third' ? ' is-selected' : ''
+                    }`,
+                    title: label,
+                    type: 'button',
+                });
+                point.style.left = `${left}%`;
+                point.style.top = `${top}px`;
+                point.setAttribute('aria-label', label);
+                point.setAttribute('aria-pressed', String(key === 'third'));
+                point.addEventListener('click', () => {
+                    for (const sibling of chart.querySelectorAll(
+                        '.st-devtools-onboarding-demo-chart-point',
+                    )) {
+                        const selected = sibling === point;
+                        sibling.classList.toggle('is-selected', selected);
+                        sibling.setAttribute('aria-pressed', String(selected));
+                    }
+                    detail.textContent = label;
+                });
+                chart.appendChild(point);
+            }
+            chart.appendChild(detail);
+            demo.append(
+                chart,
+                proseElement('p', t('onboarding.demo.timeline.hint')),
+            );
+        } else if (kind === 'diff') {
+            const changes = element('div', {
+                className: 'st-devtools-onboarding-demo-changes',
+            });
+            for (const key of ['added', 'changed', 'removed']) {
+                const row = element('div', { className: `is-${key}` });
+                row.append(
+                    element('strong', {
+                        text: t(`onboarding.demo.diff.${key}Label`),
+                    }),
+                    element('span', {
+                        text: t(`onboarding.demo.diff.${key}`),
+                    }),
+                );
+                changes.appendChild(row);
+            }
+            demo.appendChild(changes);
+        } else {
+            const query = element('div', {
+                className: 'st-devtools-onboarding-demo-query',
+            });
+            const searchIcon = element('i', { className: 'fa-solid fa-magnifying-glass' });
+            searchIcon.setAttribute('aria-hidden', 'true');
+            query.append(
+                searchIcon,
+                element('span', { text: t('onboarding.demo.search.query') }),
+            );
+            const result = element('article', {
+                className: 'st-devtools-onboarding-demo-search-result',
+            });
+            result.append(
+                element('strong', { text: t('onboarding.demo.search.source') }),
+                element('span', { text: t('onboarding.demo.search.before') }),
+                element('mark', { text: t('onboarding.demo.search.match') }),
+                element('span', { text: t('onboarding.demo.search.after') }),
+            );
+            demo.append(query, result);
+        }
+        return demo;
+    }
+
+    requestOnboardingPosition() {
+        if (!this.onboardingIsOpen()) return;
+        if (this.onboardingPositionFrame != null) {
+            cancelAnimationFrame(this.onboardingPositionFrame);
+        }
+        this.onboardingPositionFrame = requestAnimationFrame(() => {
+            this.onboardingPositionFrame = null;
+            this.positionOnboarding();
+        });
+    }
+
+    positionOnboarding() {
+        if (!this.onboardingIsOpen() || !this.onboardingPanel) return;
+        const panel = this.onboardingPanel;
+        panel.removeAttribute('style');
+        panel.classList.remove('is-fallback');
+        if (this.onboardingPhase === 'invitation') {
+            this.onboardingOverlay.classList.add('is-centered');
+            panel.classList.add('is-invitation');
+            this.onboardingHighlight.hidden = true;
+            return;
+        }
+        this.onboardingOverlay.classList.remove('is-centered');
+        const step = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const target = step?.target ? this.window?.querySelector(step.target) : null;
+        const targetRect = target?.getBoundingClientRect?.();
+        const windowRect = this.window?.getBoundingClientRect?.();
+        if (
+            !targetRect
+            || !windowRect
+            || targetRect.width <= 0
+            || targetRect.height <= 0
+        ) {
+            this.onboardingHighlight.hidden = true;
+            panel.classList.add('is-fallback');
+            this.onboardingOverlay.classList.add('is-centered');
+            return;
+        }
+        const padding = 6;
+        const left = Math.max(4, targetRect.left - windowRect.left - padding);
+        const top = Math.max(4, targetRect.top - windowRect.top - padding);
+        const width = Math.min(
+            windowRect.width - left - 4,
+            targetRect.width + (padding * 2),
+        );
+        const height = Math.min(
+            windowRect.height - top - 4,
+            targetRect.height + (padding * 2),
+        );
+        Object.assign(this.onboardingHighlight.style, {
+            left: `${left}px`,
+            top: `${top}px`,
+            width: `${width}px`,
+            height: `${height}px`,
+        });
+        this.onboardingHighlight.hidden = false;
+
+        if (windowRect.width <= 700) return;
+        const panelRect = panel.getBoundingClientRect();
+        const margin = 16;
+        const gap = 14;
+        let panelTop = targetRect.top - windowRect.top - panelRect.height - gap;
+        if (panelTop < margin) {
+            panelTop = targetRect.bottom - windowRect.top + gap;
+        }
+        panelTop = Math.max(
+            margin,
+            Math.min(panelTop, windowRect.height - panelRect.height - margin),
+        );
+        const centeredLeft = targetRect.left - windowRect.left
+            + (targetRect.width / 2)
+            - (panelRect.width / 2);
+        const panelLeft = Math.max(
+            margin,
+            Math.min(centeredLeft, windowRect.width - panelRect.width - margin),
+        );
+        panel.style.left = `${panelLeft}px`;
+        panel.style.top = `${panelTop}px`;
     }
 
     buildCaptureStatus() {
@@ -3950,6 +4602,8 @@ export class DevToolsWindow {
             localStorage.removeItem(key);
             if (exists) deletedCount += 1;
         }
+        this.onboardingState = readOnboardingState();
+        this.onboardingAutoAttempted = false;
         this.ruleSettings = normalizeRuleSettings(DEFAULT_RULE_SETTINGS);
         this.ruleSettingsOpen = false;
         this.comparisonPolicySettings = normalizeComparisonPolicySettings(
@@ -4041,14 +4695,18 @@ export class DevToolsWindow {
 
     focusableElements() {
         if (!this.window) return [];
-        const scope = this.semanticConsentOverlay
-            && !this.semanticConsentOverlay.hidden
-            ? this.semanticConsentPanel
-            : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
-                ? this.rulesSettingsPanel
-            : this.settingsOverlay && !this.settingsOverlay.hidden
-                ? this.settingsPanel
-                : this.window;
+        const scope = this.onboardingIsOpen()
+            ? this.onboardingPanel
+            : (
+                this.semanticConsentOverlay
+                && !this.semanticConsentOverlay.hidden
+            )
+                ? this.semanticConsentPanel
+                : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
+                    ? this.rulesSettingsPanel
+                    : this.settingsOverlay && !this.settingsOverlay.hidden
+                        ? this.settingsPanel
+                        : this.window;
         return [...scope.querySelectorAll(
             'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
             'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
@@ -4065,7 +4723,9 @@ export class DevToolsWindow {
         if (!this.root || this.root.hidden) return;
         if (event.key === 'Escape') {
             event.preventDefault();
-            if (
+            if (this.onboardingIsOpen()) {
+                this.closeOnboarding({ persist: 'skipped' });
+            } else if (
                 this.semanticConsentOverlay
                 && !this.semanticConsentOverlay.hidden
             ) {
@@ -4093,14 +4753,18 @@ export class DevToolsWindow {
         const first = focusable[0];
         const last = focusable.at(-1);
         const active = document.activeElement;
-        const focusScope = this.semanticConsentOverlay
-            && !this.semanticConsentOverlay.hidden
-            ? this.semanticConsentPanel
-            : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
-                ? this.rulesSettingsPanel
-            : this.settingsOverlay && !this.settingsOverlay.hidden
-                ? this.settingsPanel
-                : this.window;
+        const focusScope = this.onboardingIsOpen()
+            ? this.onboardingPanel
+            : (
+                this.semanticConsentOverlay
+                && !this.semanticConsentOverlay.hidden
+            )
+                ? this.semanticConsentPanel
+                : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
+                    ? this.rulesSettingsPanel
+                    : this.settingsOverlay && !this.settingsOverlay.hidden
+                        ? this.settingsPanel
+                        : this.window;
         if (!focusScope.contains(active)) {
             event.preventDefault();
             (event.shiftKey ? last : first).focus();
@@ -9557,6 +10221,7 @@ export class DevToolsWindow {
     }
 
     advanceSemanticProviderEvaluation() {
+        if (this.onboardingIsOpen()) return Promise.resolve(null);
         if (this.semanticEvaluationAdvancePromise) {
             return this.semanticEvaluationAdvancePromise;
         }
@@ -10185,6 +10850,8 @@ export class DevToolsWindow {
     async startSemanticInspection(snapshot, analysis) {
         const state = this.ensureSemanticInspectionSnapshot(snapshot);
         if (
+            this.onboardingIsOpen()
+            ||
             this.semanticEvaluationIsActive()
             ||
             !this.preferences.semanticInspectorEnabled
