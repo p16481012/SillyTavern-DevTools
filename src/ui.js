@@ -709,17 +709,84 @@ function downloadText(filename, content, mimeType) {
     URL.revokeObjectURL(url);
 }
 
-async function copyText(text) {
-    if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return;
+export async function copyText(text) {
+    const value = String(text ?? '');
+    const clipboard = globalThis.navigator?.clipboard;
+    if (typeof clipboard?.writeText === 'function') {
+        try {
+            await clipboard.writeText(value);
+            return 'clipboard-api';
+        } catch {
+            // Fall through for browsers that expose the API but deny it in this context.
+        }
+    }
+    if (
+        typeof globalThis.document?.createElement !== 'function'
+        || typeof globalThis.document?.execCommand !== 'function'
+        || !globalThis.document?.body
+    ) {
+        throw new Error('clipboard-unavailable');
     }
     const textarea = element('textarea');
-    textarea.value = text;
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
     document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    textarea.remove();
+    try {
+        textarea.select();
+        if (document.execCommand('copy') === false) {
+            throw new Error('clipboard-copy-failed');
+        }
+        return 'exec-command';
+    } finally {
+        textarea.remove();
+    }
+}
+
+async function copyWithFeedback(text, successKey) {
+    try {
+        await copyText(text);
+        globalThis.toastr?.success?.(t(successKey), 'ST DevTools');
+        return true;
+    } catch {
+        globalThis.toastr?.error?.(t('action.copyFailed'), 'ST DevTools');
+        return false;
+    }
+}
+
+function copyButton(labelKey, text, successKey) {
+    const button = element('button', {
+        className: 'menu_button st-devtools-copy-button',
+        type: 'button',
+    });
+    button.setAttribute('aria-label', t(labelKey));
+    const icon = element('i', { className: 'fa-solid fa-copy' });
+    icon.setAttribute('aria-hidden', 'true');
+    button.append(
+        icon,
+        element('span', { text: t(labelKey) }),
+    );
+    button.addEventListener('click', () => {
+        void copyWithFeedback(text, successKey);
+    });
+    return button;
+}
+
+function hasRawPromptContent(snapshot) {
+    const mode = snapshot?.privacy?.mode;
+    return mode == null || mode === 'full';
+}
+
+export function semanticSuggestionCopyText(suggestion) {
+    const sections = [
+        suggestion?.title ?? suggestion?.category ?? t('semantic.suggestion'),
+        suggestion?.summary ?? t('semantic.suggestionNoSummary'),
+    ];
+    if (typeof suggestion?.rationale === 'string' && suggestion.rationale.trim()) {
+        sections.push(`${t('semantic.rationale')}\n${suggestion.rationale.trim()}`);
+    }
+    return sections.join('\n\n');
 }
 
 export class DevToolsWindow {
@@ -4900,6 +4967,17 @@ export class DevToolsWindow {
                     if (source.provenance) {
                         body.appendChild(this.renderProvenanceDetails(source));
                     }
+                    if (hasRawPromptContent(snapshot)) {
+                        const actions = element('div', {
+                            className: 'st-devtools-source-actions',
+                        });
+                        actions.appendChild(copyButton(
+                            'action.copySource',
+                            source.content,
+                            'action.sourceCopied',
+                        ));
+                        body.appendChild(actions);
+                    }
                     const pre = source.type === 'final'
                         ? this.renderMappedFinalPrompt(
                             source.content,
@@ -4979,16 +5057,31 @@ export class DevToolsWindow {
                 t(descriptionKey),
             ));
             item.appendChild(itemSummary);
-            attachLazyDetailsContent(item, () => (
-                value == null
-                    ? proseElement('p', t('context.notCaptured'))
-                    : element('pre', {
-                        className: 'st-devtools-context-payload',
-                        text: typeof value === 'string'
-                            ? value
-                            : JSON.stringify(value, null, 2),
-                    })
-            ));
+            attachLazyDetailsContent(item, () => {
+                if (value == null) return proseElement('p', t('context.notCaptured'));
+                const displayText = typeof value === 'string'
+                    ? value
+                    : JSON.stringify(value, null, 2);
+                const content = element('div', {
+                    className: 'st-devtools-copyable-content',
+                });
+                if (hasRawPromptContent(snapshot)) {
+                    const actions = element('div', {
+                        className: 'st-devtools-source-actions',
+                    });
+                    actions.appendChild(copyButton(
+                        'action.copyContent',
+                        displayText,
+                        'action.contentCopied',
+                    ));
+                    content.appendChild(actions);
+                }
+                content.appendChild(element('pre', {
+                    className: 'st-devtools-context-payload',
+                    text: displayText,
+                }));
+                return content;
+            });
             return item;
         };
         const payload = snapshot.promptType === 'chat-completion'
@@ -6989,8 +7082,7 @@ export class DevToolsWindow {
         const copy = element('button', { className: 'menu_button', text: t('action.copy'), type: 'button' });
         copy.addEventListener('click', async () => {
             if (!confirm(t('export.copyConfirm'))) return;
-            await copyText(snapshot.finalText);
-            globalThis.toastr?.info?.(t('action.promptCopied'), 'ST DevTools');
+            await copyWithFeedback(snapshot.finalText, 'action.promptCopied');
         });
         exportActions.append(
             copy,
@@ -9879,6 +9971,15 @@ export class DevToolsWindow {
                 }));
             }
             if (metadata.childElementCount > 0) card.appendChild(metadata);
+            const actions = element('div', {
+                className: 'st-devtools-semantic-result-actions',
+            });
+            actions.appendChild(copyButton(
+                'action.copySuggestion',
+                semanticSuggestionCopyText(suggestion),
+                'action.suggestionCopied',
+            ));
+            card.appendChild(actions);
             const evidenceItems = Array.isArray(suggestion?.evidence)
                 ? suggestion.evidence
                 : [];

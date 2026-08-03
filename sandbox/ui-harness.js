@@ -44,12 +44,17 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     const disabledInstruction = additions.disabledInstruction
         ?? '비활성 상태라 이번 요청에는 포함되지 않습니다.';
     const assistantPrefill = additions.assistantPrefill ?? '답변 초안:';
+    const profileStructure = '프로필 구성은 이름, 나이, 외모, 성격, 취향과 비선호 순서로 작성합니다.';
+    const characterProfile = `${profileStructure}\n캐릭터 이름은 리아입니다.`;
+    const personaProfile = `${profileStructure}\n사용자 이름은 민수입니다.`;
     const finalText = [
         '# 1 SYSTEM',
         koreanInstruction,
         japaneseInstruction,
         englishInstruction,
         ...(addedInstruction ? [addedInstruction] : []),
+        characterProfile,
+        personaProfile,
         '시스템 안전 지시를 따르세요.',
         '사용자 민수에게 친절하게 답하세요.',
         '',
@@ -62,7 +67,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.13.0',
+        extensionVersion: '0.13.1',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -116,6 +121,8 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     japaneseInstruction,
                     englishInstruction,
                     ...(addedInstruction ? [addedInstruction] : []),
+                    characterProfile,
+                    personaProfile,
                 ].join('\n'),
             },
             {
@@ -282,6 +289,40 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
                     start: finalText.indexOf('시스템 안전 지시를 따르세요.'),
                     end: finalText.indexOf('시스템 안전 지시를 따르세요.')
                         + '시스템 안전 지시를 따르세요.'.length,
+                }],
+                provenance: { method: 'request-payload', confidence: 1 },
+            },
+            {
+                id: 'character:profile',
+                type: 'character',
+                label: '캐릭터 설명',
+                labelKey: 'source.characterDescription',
+                content: characterProfile,
+                color: '#0f766e',
+                attribution: 'exact',
+                included: true,
+                tokenCount: 18,
+                metadata: { field: 'description' },
+                ranges: [{
+                    start: finalText.indexOf(characterProfile),
+                    end: finalText.indexOf(characterProfile) + characterProfile.length,
+                }],
+                provenance: { method: 'request-payload', confidence: 1 },
+            },
+            {
+                id: 'persona:profile',
+                type: 'persona',
+                label: '사용자 페르소나',
+                labelKey: 'source.persona',
+                content: personaProfile,
+                color: '#0e7490',
+                attribution: 'exact',
+                included: true,
+                tokenCount: 18,
+                metadata: {},
+                ranges: [{
+                    start: finalText.indexOf(personaProfile),
+                    end: finalText.indexOf(personaProfile) + personaProfile.length,
                 }],
                 provenance: { method: 'request-payload', confidence: 1 },
             },
@@ -1399,7 +1440,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.13.0',
+    version: '0.13.1',
     semanticInspector: sandboxSemanticInspector,
 });
 document.body.dataset.fixtureSchema = '7';
@@ -1583,7 +1624,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.13.0',
+        extensionVersion: '0.13.1',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1630,7 +1671,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.13.0',
+        version: '0.13.1',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });

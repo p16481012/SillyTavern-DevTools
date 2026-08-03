@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sourceDisplayLabel } from '../src/i18n.js';
 import { suppressionKey } from '../src/finding-review.js';
+import { buildSources } from '../src/model.js';
 import {
     DEFAULT_RULE_SETTINGS,
     analyzeSnapshot,
+    analyzeSnapshotDetailed,
     normalizeRuleSettings,
 } from '../src/rules.js';
 
@@ -144,6 +146,121 @@ test('rule inspector detects duplicate sentences across sources', () => {
     assert.equal(duplicate?.severity, 'warning');
     assert.deepEqual(duplicate?.sourceIds, ['a', 'b']);
 });
+
+test('character description and personality do not duplicate the persona profile structure', () => {
+    const descriptionStructure = (
+        '공통 프로필 양식은 이름, 나이, 외모, 성격, 취향과 비선호를 같은 순서로 기록합니다.'
+    );
+    const personalityStructure = (
+        '프로필의 성격 항목은 장점, 단점, 습관과 대화 성향을 차례대로 기록합니다.'
+    );
+    const characterDescription = `${descriptionStructure}\n캐릭터 이름은 리아입니다.`;
+    const characterPersonality = `${personalityStructure}\n차분하고 관찰력이 좋습니다.`;
+    const personaDescription = [
+        descriptionStructure,
+        personalityStructure,
+        '사용자 이름은 민수입니다.',
+    ].join('\n');
+    const payloadText = [
+        characterDescription,
+        characterPersonality,
+        personaDescription,
+    ].join('\n');
+    const sources = buildSources({
+        characterFields: {
+            description: characterDescription,
+            personality: characterPersonality,
+            scenario: '',
+            exampleDialogue: '',
+            firstMessage: '',
+            systemPrompt: '',
+            postHistoryInstructions: '',
+            depthPrompt: '',
+        },
+        personaDescription,
+        authorsNote: '',
+        extensionPrompts: {},
+        configuredPrompts: [],
+    }, [{ role: 'system', content: payloadText }], []);
+    const analysis = analyzeSnapshotDetailed(snapshot({
+        finalText: payloadText,
+        sources,
+    }));
+    const characterIds = new Set(sources
+        .filter(({ type, metadata }) => (
+            type === 'character'
+            && ['description', 'personality'].includes(metadata?.field)
+        ))
+        .map(({ id }) => id));
+    const personaId = sources.find(({ type }) => type === 'persona')?.id;
+
+    assert.ok(personaId);
+    assert.equal(analysis.findings.some(({ ruleId, sourceIds }) => (
+        ruleId === 'duplicates'
+        && sourceIds.includes(personaId)
+        && sourceIds.some((id) => characterIds.has(id))
+    )), false);
+    assert.equal(analysis.comparison.suppressedComparisons.filter(({ reason }) => (
+        reason === 'character-persona-reference-pair'
+    )).length, 2);
+});
+
+for (const [name, comparedSource] of [
+    ['character scenario', {
+        type: 'character',
+        metadata: { field: 'scenario' },
+    }],
+    ['character first message', {
+        type: 'character',
+        metadata: { field: 'first_mes' },
+    }],
+    ['character example dialogue', {
+        type: 'character',
+        metadata: { field: 'mes_example' },
+    }],
+    ['system prompt', {
+        type: 'system',
+        metadata: { field: 'system_prompt' },
+    }],
+    ['configured or extension prompt', {
+        type: 'extension',
+        metadata: { sourceKind: 'configuredPrompt' },
+    }],
+]) {
+    test(`${name} and persona instruction duplicates remain visible`, () => {
+        const repeated = '이 문장은 프로필 구조가 아니라 실제로 반복된 긴 요청 지시입니다.';
+        const analysis = analyzeSnapshotDetailed(snapshot({
+            finalText: repeated,
+            sources: [
+                {
+                    id: 'compared-source',
+                    label: name,
+                    content: repeated,
+                    tokenCount: 20,
+                    attribution: 'exact',
+                    included: true,
+                    ...comparedSource,
+                },
+                {
+                    id: 'persona',
+                    type: 'persona',
+                    label: 'Persona',
+                    content: repeated,
+                    tokenCount: 20,
+                    attribution: 'exact',
+                    included: true,
+                },
+            ],
+        }));
+
+        const duplicate = analysis.findings.find(({ ruleId }) => ruleId === 'duplicates');
+        assert.ok(duplicate);
+        assert.deepEqual(duplicate.sourceIds, ['compared-source', 'persona']);
+        assert.equal(analysis.comparison.suppressedComparisons.some(({ reason }) => (
+            reason === 'character-persona-reference-pair'
+        )), false);
+    });
+}
 
 test('rule inspector flags incompatible output formats and large sources', () => {
     const findings = analyzeSnapshot(snapshot({

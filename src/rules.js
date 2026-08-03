@@ -10,6 +10,7 @@ import { sourceDisplayLabel, t } from './i18n.js';
 import { buildInstructionModel } from './instruction-atoms.js';
 
 const SUPPRESSED_COMPARISON_RECORD_LIMIT = 100;
+const CHARACTER_PROFILE_FIELDS = new Set(['description', 'personality']);
 
 export const RULE_DEFINITIONS = Object.freeze([
     { id: 'context', labelKey: 'rules.setting.context' },
@@ -139,6 +140,37 @@ function sourceRanges(sources, sourceIds) {
         .flatMap(validRanges);
 }
 
+function isCharacterProfileReference(source) {
+    return source?.type === 'character'
+        && CHARACTER_PROFILE_FIELDS.has(source?.metadata?.field);
+}
+
+function isPersonaProfileReference(source) {
+    return source?.type === 'persona';
+}
+
+function builtInSourcePairDecision(left, right, category) {
+    if (
+        category === 'duplicates'
+        && (
+            (isCharacterProfileReference(left) && isPersonaProfileReference(right))
+            || (isPersonaProfileReference(left) && isCharacterProfileReference(right))
+        )
+    ) {
+        return {
+            compare: false,
+            reason: 'character-persona-reference-pair',
+            category,
+            group: null,
+            groupKey: null,
+            groupInstanceKey: null,
+            profileId: null,
+            mode: 'built-in',
+        };
+    }
+    return null;
+}
+
 function suppressionCollector() {
     const records = [];
     const keys = new Set();
@@ -155,7 +187,8 @@ function suppressionCollector() {
         },
         compare(left, right, category) {
             if (left.id === right.id) return true;
-            const decision = compareSourcePair(left, right, category);
+            const decision = builtInSourcePairDecision(left, right, category)
+                ?? compareSourcePair(left, right, category);
             if (decision.compare) return true;
             const sourceIds = [left.id, right.id].sort();
             const key = JSON.stringify([

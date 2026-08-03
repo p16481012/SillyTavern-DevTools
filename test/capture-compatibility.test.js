@@ -69,7 +69,7 @@ for (const fixture of CAPTURE_COMPATIBILITY_FIXTURES) {
             getContext: () => context,
             store: { addSnapshot: async (snapshot) => saved.push(snapshot) },
             version: 'fixture',
-            settingsWaitMs: 5,
+            settingsWaitMs: 50,
         });
         controller.start();
 

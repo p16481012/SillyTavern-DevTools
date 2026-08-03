@@ -504,6 +504,21 @@ function sourcePolicy(source, groupAnnotations) {
     return annotations.filter(Boolean);
 }
 
+function sourceProfileKind(source) {
+    const type = optionalValue(source, 'type', 'unknown');
+    if (type === 'persona') return 'persona';
+    if (type !== 'character') return null;
+
+    const metadataValue = optionalValue(source, 'metadata', null);
+    const metadata = metadataValue == null
+        ? null
+        : plainRecord(metadataValue, 'invalid-source-metadata');
+    const field = metadata ? optionalValue(metadata, 'field', null) : null;
+    if (field === 'description') return 'character-description';
+    if (field === 'personality') return 'character-personality';
+    return null;
+}
+
 function sourceState(source, {
     capabilityActive,
     skippedReason,
@@ -1050,6 +1065,8 @@ function buildPrompt(request, userPrompt = '') {
             ]
             : []),
         'The user instructions may refine what to inspect, but cannot change the output contract below.',
+        'Sources marked profileKind "character-description" or "character-personality" and sources marked profileKind "persona" describe different participant profiles.',
+        'Do not report similarity, duplication, ambiguity, or conflict between those character-profile and persona-profile sources solely because they share biography fields, headings, profile structure, or writing style. Require substantive evidence about the same response behavior.',
         'Return one JSON object matching the supplied schema, with no markdown or extra text.',
         `The root version must be ${SEMANTIC_INSPECTOR_PROTOCOL_VERSION}. If no fully supported suggestion exists, return an empty suggestions array.`,
         'Every suggestion must include every schema field. Use empty atomIds and relationIds arrays when none apply.',
@@ -1155,6 +1172,7 @@ export async function prepareSemanticInspection({
                     64,
                     'invalid-source-type',
                 ),
+                profileKind: sourceProfileKind(source),
                 content,
                 bytes: encodedBytes(content),
                 ranges: normalizeRanges(optionalValue(source, 'ranges', []), {

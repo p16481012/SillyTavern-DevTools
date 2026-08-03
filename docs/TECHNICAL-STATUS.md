@@ -1,4 +1,11 @@
-# v0.13.0 기술 구현 현황
+# v0.13.1 기술 구현 현황
+
+## v0.13.1 읽기 전용 복사·캐릭터/페르소나 구조 오탐 패치
+
+- 프롬프트 원문·생성 설정·payload와 AI 제안을 각각 명확한 이름의 버튼으로 복사하며 SillyTavern 원본이나 정적 검사 상태를 변경하지 않습니다.
+- Clipboard API 권한 거부 시 bounded fallback을 사용하고 성공·실패 알림을 분리합니다. 원문 복사 UI는 `full` 스냅샷에만 표시합니다.
+- 정적 중복 검사는 source type과 character field를 기준으로 캐릭터 설명·성격과 페르소나 사이의 공통 프로필 문장만 제외합니다. 시나리오·첫 메시지·예시 대화·시스템·확장 소스는 기존처럼 비교합니다.
+- AI 요청에는 원본 metadata 대신 제한된 `profileKind`만 전달하며, system prompt와 합성 평가 corpus도 서로 다른 참가자의 평행한 프로필 구조만으로 유사·중복·충돌을 제안하지 않는 음성 경계를 포함합니다.
 
 ## v0.13.0 AI 품질·provider 호환성 보강
 
@@ -296,10 +303,10 @@
 - 조건·예외·말투·정체성·안전 의미를 포함하는 합성 corpus 확대와 provider별 수동 품질 평가 절차
 - 다섯 기능을 처음 쓰는 사용자를 위한 선택형 코치마크·워크스루, 재시작·건너뛰기·키보드·screen reader 계약
 
-세부 기능은 v0.13.0 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+세부 기능은 v0.13.1 사용자 검토 결과 뒤 확정합니다. 현재의 빠른 시작과 필드별 tooltip은 완료된 온보딩 튜토리얼이 아닙니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
-1. v0.13.0의 provider별 응답 envelope·안정된 오류 진단·근거 source 이름과 기존 캡처·저장 회귀를 사용자 체크리스트로 확인합니다.
+1. v0.13.1의 원문·payload·AI 제안 복사와 캐릭터/페르소나 프로필 구조 오탐 수정, provider별 응답 envelope와 기존 캡처·저장 회귀를 사용자 체크리스트로 확인합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.13.x 패치를 만듭니다.
-3. v0.14.0 후보의 corpus 확대와 선택형 온보딩은 v0.13.0 실사용·접근성 피드백 뒤 범위를 확정합니다.
+3. v0.14.0 후보의 corpus 확대와 선택형 온보딩은 v0.13.1 실사용·접근성 피드백 뒤 범위를 확정합니다.

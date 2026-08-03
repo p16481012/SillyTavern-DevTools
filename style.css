@@ -1842,9 +1842,35 @@
 .st-devtools-source-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.4rem;
-    padding: 0 0.75rem 0.65rem;
+    padding: 0.55rem 0.75rem;
     background: var(--st-devtools-surface-muted);
+}
+
+.st-devtools-window .st-devtools-copy-button {
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    min-height: 2rem !important;
+    padding: 0.35rem 0.65rem !important;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    white-space: normal;
+}
+
+.st-devtools-copyable-content {
+    min-width: 0;
+    border-top: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-copyable-content > .st-devtools-context-payload {
+    border: 0;
+    border-radius: 0;
 }
 
 .st-devtools-range-jump {
@@ -4372,6 +4398,14 @@
     flex-wrap: wrap;
     gap: 0.35rem 0.8rem;
     opacity: 0.75;
+}
+
+.st-devtools-semantic-result-actions {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
 }
 
 .st-devtools-semantic-evidence {

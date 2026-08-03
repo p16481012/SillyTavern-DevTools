@@ -195,6 +195,34 @@
         "version": 1,
         "suggestions": []
       }
+    },
+    {
+      "id": "character-persona-profiles-compatible",
+      "requestDigest": "6666666666666666666666666666666666666666666666666666666666666666",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-profiles" }],
+        "sources": [
+          {
+            "id": "source:character-profile",
+            "type": "character",
+            "profileKind": "character-description",
+            "content": "Profile fields: name, age, appearance, personality, likes, and dislikes. Character name: Mina."
+          },
+          {
+            "id": "source:persona-profile",
+            "type": "persona",
+            "profileKind": "persona",
+            "content": "Profile fields: name, age, appearance, personality, likes, and dislikes. User name: Joon."
+          }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
+      }
     }
   ]
 }

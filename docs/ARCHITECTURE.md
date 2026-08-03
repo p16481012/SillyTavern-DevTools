@@ -1,12 +1,14 @@
 # 아키텍처
 
-이 문서는 v0.13.0의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 합성 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.13.1의 다섯 기능 하단 내비게이션·모바일 앱 셸과 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 합성 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
 ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이벤트 payload를 수정하지 않습니다. Prompt-ready 리스너는 캡처 대기 항목을 만들고 즉시 반환합니다. 요청 설정 객체는 같은 이벤트의 동기적 후속 변경이 반영될 수 있도록 리스너 반환 직후 복제하며, 토큰 계산과 IndexedDB 쓰기는 이벤트 처리 흐름 밖에서 실행됩니다.
 
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
+
+v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
 
 ## 캡처 파이프라인
 
@@ -167,7 +169,7 @@ V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecord
 
 ### 선택적 AI Semantic Inspector 경계
 
-v0.13.0의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 AI 모드가 opt-in·연결 프로필·응답 상한을 함께 다루지만, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID와 사용자가 직접 입력한 bounded 추가 프롬프트·프리필만 저장하며 프로필 객체나 credential은 기록하지 않습니다. 추가 프롬프트·프리필은 일반 텍스트 저장임을 UI에서 경고합니다.
+v0.13.1의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입니다. 정적 분석은 AI 설정과 관계없이 기존처럼 로컬에서 실행되고, AI 기능은 `st-devtools:preferences:v5`의 명시적 opt-in이 없으면 UI에서 준비조차 시작하지 않습니다. 규칙 검사 화면의 AI 모드가 opt-in·연결 프로필·응답 상한을 함께 다루지만, 활성화만으로 `prepare()`·`inspect()` 또는 provider adapter를 호출하지 않습니다. V1~V4 설정은 읽을 때 V5 기본값과 합쳐 이전합니다. 선택 대상과 AI 결과는 `DevToolsWindow` 인스턴스 메모리에만 있으며 스냅샷·archive·정책·검토 판정·localStorage에 기록하지 않습니다. 설정에는 선택한 Connection Manager 프로필의 bounded opaque ID와 사용자가 직접 입력한 bounded 추가 프롬프트·프리필만 저장하며 프로필 객체나 credential은 기록하지 않습니다. 추가 프롬프트·프리필은 일반 텍스트 저장임을 UI에서 경고합니다.
 
 처리 흐름은 다음과 같습니다.
 
@@ -198,9 +200,11 @@ Provider 응답 정규화는 배열 prototype·길이·own key·data descriptor�
 
 `SemanticInspectorMemoryCache`의 key는 protocol·provider identity·응답 상한·bounded prompt를 포함한 digest입니다. 값에는 전체 raw prompt·전체 raw provider response와 전용 `source.content`·`evidence.quote` 필드를 넣지 않고 검증된 ID·offset과 title·summary·rationale 같은 정규화 제안 텍스트를 제한된 LRU/TTL로 보관합니다. 모델이 제안 텍스트 안에 입력 원문의 표현을 반복할 가능성까지 제거하지는 않으므로 이 cache는 익명화 경계가 아닙니다. cache hit의 evidence quote는 현재 준비 source의 검증된 offset에서 다시 구성하며 새로고침하면 cache 전체가 사라집니다.
 
-v0.13.0 평가 corpus는 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. 이 결정적 회귀는 평가 도구와 고정 예시의 일관성을 검증하며, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
+v0.13.1 평가 corpus 6건은 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. 이 결정적 회귀는 평가 도구와 고정 예시의 일관성을 검증하며, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
 
 취소와 timeout은 논리적입니다. adapter는 호출자 promise를 `SEMANTIC_ABORTED` 또는 `SEMANTIC_TIMEOUT`으로 종료하고 뒤늦은 결과를 UI·cache에 반영하지 않지만, 공개 profile `sendRequest()`와 `generateRaw()`에는 provider 계산을 강제로 중단하는 공통 계약이 없으므로 이미 시작된 계산·과금을 되돌린다고 보장하지 않습니다. underlying 호출이 끝날 때까지 gate ticket을 안전하게 유지한 뒤 해제해 늦게 발생한 self-capture를 막고, retry는 새 nonce와 새 준비·미리보기·동의를 사용합니다.
+
+AI 요청은 캐릭터 설명·성격과 페르소나의 구분을 모델이 추측하지 않도록 원본 metadata 전체 대신 제한된 `profileKind`(`character-description`, `character-personality`, `persona`)만 전달합니다. 고정 system prompt는 서로 다른 참가자의 프로필이 같은 항목·제목·문체를 공유한다는 이유만으로 유사·중복·충돌을 제안하지 않도록 지시하되, 같은 응답 행동에 대한 실질적인 지시 충돌 근거가 있으면 계속 보고하게 합니다.
 
 AI prompt와 동시에 식별자 없는 일반 사용자 요청이 도착해 어느 요청인지 안전하게 구분할 수 없으면 gate와 기존 generation ledger 모두 임의 FIFO 연결을 하지 않습니다. explicit public ID가 있는 정상 사용자 요청은 그대로 정확 연결합니다. 이 fail-closed 경계는 AI 호출을 숨기기 위해 다른 사용자의 capture를 소비하는 것을 막습니다.
 

@@ -259,6 +259,8 @@ test('prepare sends only selected active closure and exposes an exact consent pr
     assert.equal(prepared.preview.inputTokenEstimate, 1_000);
     assert.equal(prepared.preview.responseTokenCap, 512);
     assert.match(prepared.systemPrompt, /말투 충돌을 우선 검사하세요/u);
+    assert.match(prepared.systemPrompt, /profileKind "character-description"/u);
+    assert.match(prepared.systemPrompt, /share biography fields, headings, profile structure/u);
     assert.equal(prepared.preview.userPrompt, '말투 충돌을 우선 검사하세요.');
     assert.equal(prepared.preview.assistantPrefill, '{"version":1,');
     assert.equal(prepared.assistantPrefill, '{"version":1,');
@@ -285,6 +287,34 @@ test('prepare sends only selected active closure and exposes an exact consent pr
     assert.equal('request' in prepared.request, false);
     assert.equal('payload' in prepared.request, false);
     assert.equal(Object.isFrozen(prepared), true);
+});
+
+test('prepare distinguishes character and persona profiles without forwarding metadata', async () => {
+    const data = fixture();
+    data.snapshot.sources[0].type = 'character';
+    data.snapshot.sources[0].metadata = {
+        field: 'description',
+        privateNote: 'must-never-leave',
+    };
+    data.snapshot.sources[1].type = 'persona';
+    data.snapshot.sources[1].metadata = {
+        privateNote: 'must-never-leave',
+    };
+
+    const prepared = await prepareSemanticInspection({
+        snapshot: data.snapshot,
+        analysis: data.analysis,
+        targetIds: [data.ids.finding],
+        provider: 'openrouter',
+        model: 'example/model',
+    });
+
+    assert.deepEqual(
+        prepared.request.sources.map(({ profileKind }) => profileKind),
+        ['character-description', 'persona'],
+    );
+    assert.equal(prepared.request.sources.some((source) => 'metadata' in source), false);
+    assert.doesNotMatch(prepared.prompt, /privateNote|must-never-leave/u);
 });
 
 test('cluster target syntax resolves only an actually existing local cluster', async () => {
