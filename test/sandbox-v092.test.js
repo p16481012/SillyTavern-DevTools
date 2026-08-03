@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.15.2 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.15.3 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.15.2 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.15\.2'/);
+    assert.match(harness, /extensionVersion:\s*'0\.15\.3'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.15\.2'/);
+    assert.match(harness, /version:\s*'0\.15\.3'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -78,6 +78,9 @@ test('v0.15.2 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /setFocusedGrowthFixture/);
     assert.match(harness, /onboardingAutoStart:\s*false/);
     assert.match(harness, /sandbox-onboarding/);
+    assert.match(harness, /const requestedPanelWidth = fixtureCount\('panelWidth', 280, 1_200\)/);
+    assert.match(harness, /const requestedPanelHeight = fixtureCount\('panelHeight', 360, 900\)/);
+    assert.match(harness, /function applyRequestedPanelGeometry\(\)/);
     assert.match(harness, /onboarding:\s*sandboxOnboardingHook/);
     assert.match(harness, /const sandboxOnboardingHook = Object\.freeze\(\{/);
     assert.match(harness, /async startPractice\(\)/);

@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.15.2의 스크롤 추적·대상 인접 배치 hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.15.3의 guided learning rail hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -12,13 +12,15 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩의 view-session 격리 경계
 
-v0.15.2의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. 각 단계는 먼저 직접 수행할 행동을 보여 주고 `무엇인가요?`·`언제 쓰나요?`는 선택적으로 펼칩니다. 상호작용 단계에는 `이 단계 건너뛰기`가 있으며 예상 시간은 8~12분입니다. 위치 엔진은 내부 scroll·viewport resize·대상 및 패널 resize를 추적하고, 대상 교차 영역과 가용 방향을 기준으로 spotlight와 안내 패널을 다시 배치합니다.
+v0.15.3의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. `답변 형식이 JSON에서 XML로 바뀐 이유 찾기` 한 사건을 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 각 장은 해결할 질문을 먼저 제시하고, 단계는 현재 할 일·완료 기준을 우선 표시하며 기능 정의와 사용 시점은 선택적으로 펼칩니다. 상호작용 단계에는 `이 단계 건너뛰기`가 있으며 예상 시간은 8~12분입니다.
 
 `src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개를 정의합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다. 따라서 실제 제품 renderer·control과 로컬 정적 rules/diff/search 경로를 그대로 사용하면서 live `timeline`·`selectedId`·`activeTab`은 바꾸지 않습니다.
 
 실습 단계는 실제 탭·select·button·details·검색 입력을 click/change/input/toggle하게 하지만 snapshot store의 추가·삭제·보관 API, provider adapter·Semantic Inspector, 클립보드와 export를 호출하지 않습니다. 캡처 연습의 `capturing → processing → saved`도 session 내부 상태 전환이며 실제 요청을 저장하지 않습니다. AI 의미 검사나 공식 Provider 평가가 실행 중이면 시작하지 않고 실습 중 새 AI 실행도 거부합니다.
 
-초대 화면만 modal dialog로 일반 영역을 `inert`·`aria-hidden` 처리합니다. hands-on 단계에서는 제품 control을 사용할 수 있도록 이를 해제하고 현재 단계와 관계없는 control만 일시적으로 비활성화하며 coach panel은 complementary 영역이 됩니다. 종료 시 임시 비활성화·spotlight·session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태를 다시 렌더링합니다. 실습 중 실제 캡처가 도착했다면 live 변경 표시를 보존하고 종료 뒤 refresh합니다. 저장하는 상태는 `st-devtools:onboarding:v2`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·시각·연습 원문·실제 데이터는 저장하지 않습니다.
+초대 화면만 modal dialog로 일반 영역을 `inert`·`aria-hidden` 처리합니다. hands-on 단계가 시작되면 modal을 닫고 실제 콘텐츠와 guided learning rail을 같은 workspace에 둡니다. 데스크톱은 콘텐츠 옆 side rail, 좁은 화면은 콘텐츠 위 top rail을 사용하며 rail은 현재 장·6개 장 여정·전체/장별 진행률·현재 할 일·완료 기준·이전·다음·건너뛰기를 complementary 영역으로 제공합니다. floating overlay·spotlight·대상 주변 자동 배치와 scroll/resize geometry 추적은 실습 경로에 존재하지 않습니다.
+
+hands-on 단계는 현재 단계와 관계없는 제품 control을 비활성화하거나 잘못된 click/focus를 차단하지 않습니다. 단계 완료 감지는 실제 이벤트를 관찰할 뿐이며 사용자는 분리 연습 session 안에서 다른 탭과 control을 탐색할 수 있습니다. 현재 target은 실제 button·input·select 또는 disclosure의 직접 `summary`에 간결한 outline을 적용합니다. rail의 `화면에서 보기`는 필요한 탭을 선택하고 target을 스크롤한 뒤 keyboard focus가 가능한 요소로 이동하며, 전체 카드나 오래된 좌표를 강조하지 않습니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태를 다시 렌더링합니다. 실습 중 실제 캡처가 도착했다면 live 변경 표시를 보존하고 종료 뒤 refresh합니다. 저장하는 상태는 `st-devtools:onboarding:v3`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·시각·연습 원문·실제 데이터는 저장하지 않습니다.
 
 ## 캡처 파이프라인
 
@@ -303,7 +305,7 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 
 설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼, 바로 보이는 자주 쓰는 설정과 접힌 고급 설정을 유지하고 테마 선택은 해당 preference만 즉시 저장합니다. AI opt-in·연결 프로필·응답 상한은 규칙 검사 화면의 AI 모드에서 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다. 규칙·비교 정책 설정은 제목의 설정 버튼이 여는 별도 dialog에 렌더링합니다. 430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다.
 
-v0.15.2의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. spotlight는 스크롤 중 실제 대상의 보이는 영역만 따라가며 대상이 화면 밖이면 복귀 컨트롤로 축소됩니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
+v0.15.3의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. 실습 안내는 floating coachmark 대신 데스크톱 side rail 또는 좁은 화면 top rail에 표시하며, 현재 control이나 disclosure `summary`는 실제 DOM 요소에서 직접 강조합니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
 
 ## 내부 고대비 테마와 호스트 격리
 

@@ -972,48 +972,37 @@ export class DevToolsWindow {
         this.onboardingAutoAttempted = false;
         this.onboardingPhase = 'idle';
         this.onboardingStepIndex = 0;
-        this.onboardingOverlay = null;
-        this.onboardingPanel = null;
-        this.onboardingHighlight = null;
+        this.onboardingInvitationOverlay = null;
+        this.onboardingInvitationPanel = null;
+        this.onboardingInvitationBody = null;
+        this.onboardingInvitationStartButton = null;
+        this.onboardingRail = null;
+        this.onboardingWorkspace = null;
         this.onboardingProgress = null;
+        this.onboardingGroupName = null;
+        this.onboardingGroupProgress = null;
+        this.onboardingProgressBar = null;
+        this.onboardingProgressFill = null;
+        this.onboardingJourneySegments = new Map();
         this.onboardingAnnouncement = null;
         this.onboardingBody = null;
         this.onboardingBackButton = null;
         this.onboardingNextButton = null;
         this.onboardingLauncher = null;
         this.onboardingPreviouslyFocused = null;
-        this.onboardingPositionFrame = null;
         this.onboardingSession = null;
         this.onboardingStepComplete = false;
         this.onboardingStepSkipped = false;
         this.onboardingApplyingSkippedState = false;
         this.onboardingTaskStatus = null;
         this.onboardingStepSkipButton = null;
-        this.onboardingLocateButton = null;
-        this.onboardingTargetStatus = null;
         this.onboardingTarget = null;
         this.onboardingTargetDescriptionId = null;
-        this.onboardingDisabledControls = new Map();
+        this.onboardingTargetAddedTabIndex = false;
+        this.onboardingLocateTimer = null;
         this.onboardingInteractionHandler = (event) => {
             this.handleOnboardingInteraction(event);
         };
-        this.onboardingFocusHandler = (event) => {
-            this.handleOnboardingFocus(event);
-        };
-        this.onboardingResizeHandler = () => {
-            if (this.onboardingIsOpen()) this.requestOnboardingPosition();
-        };
-        this.onboardingResizeListening = false;
-        this.onboardingScrollHandler = (event) => {
-            if (
-                this.onboardingIsOpen()
-                && !this.onboardingPanel?.contains(event.target)
-            ) {
-                this.requestOnboardingPosition();
-            }
-        };
-        this.onboardingScrollListening = false;
-        this.onboardingGeometryObserver = null;
         this.onboardingCaptureTimer = null;
         this.onboardingCaptureWaitResolve = null;
         this.onboardingSessionBadge = null;
@@ -3457,20 +3446,26 @@ export class DevToolsWindow {
 
         this.content = element('main', { className: 'st-devtools-content' });
         this.content.setAttribute('role', 'tabpanel');
+        const rail = this.buildOnboardingRail();
+        const workspace = element('div', {
+            className: 'st-devtools-workspace',
+        });
+        workspace.append(this.content, rail);
+        this.onboardingWorkspace = workspace;
         this.updateCaptureStatus();
         this.primaryRegions = [
             header,
-            this.content,
+            workspace,
             tabList,
         ];
         this.window.append(
             header,
-            this.content,
+            workspace,
             tabList,
             this.buildSettingsPanel(),
             this.buildRulesSettingsPanel(),
             this.buildSemanticConsentDialog(),
-            this.buildOnboardingLayer(),
+            this.buildOnboardingInvitationLayer(),
         );
         this.root.appendChild(this.window);
         document.body.appendChild(this.root);
@@ -3488,69 +3483,129 @@ export class DevToolsWindow {
         this.selectTab(this.activeTab);
     }
 
-    buildOnboardingLayer() {
+    buildOnboardingInvitationLayer() {
         const overlay = element('div', {
-            className: 'st-devtools-onboarding-overlay',
+            className: 'st-devtools-onboarding-invitation-overlay',
         });
         overlay.hidden = true;
-
-        const highlight = element('div', {
-            className: 'st-devtools-onboarding-highlight',
-        });
-        highlight.setAttribute('aria-hidden', 'true');
-
         const panel = element('section', {
-            className: 'st-devtools-onboarding-panel',
+            className: 'st-devtools-onboarding-invitation-panel',
         });
         panel.tabIndex = -1;
         panel.setAttribute('role', 'dialog');
         panel.setAttribute('aria-modal', 'true');
-        panel.setAttribute('aria-labelledby', 'st-devtools-onboarding-title');
-        panel.setAttribute('aria-describedby', 'st-devtools-onboarding-description');
+        panel.setAttribute(
+            'aria-labelledby',
+            'st-devtools-onboarding-invitation-title',
+        );
+        panel.setAttribute(
+            'aria-describedby',
+            'st-devtools-onboarding-invitation-description',
+        );
+        const body = element('div', {
+            className: 'st-devtools-onboarding-invitation-body',
+        });
+        const actions = element('footer', {
+            className: 'st-devtools-onboarding-invitation-actions',
+        });
+        const later = element('button', {
+            className: 'menu_button',
+            text: t('onboarding.invitationLater'),
+            type: 'button',
+        });
+        later.addEventListener('click', () => {
+            this.closeOnboarding({ persist: 'skipped' });
+        });
+        const start = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: t('onboarding.start'),
+            type: 'button',
+        });
+        start.addEventListener('click', () => this.beginOnboardingPractice());
+        actions.append(later, start);
+        panel.append(body, actions);
+        overlay.appendChild(panel);
+        this.onboardingInvitationOverlay = overlay;
+        this.onboardingInvitationPanel = panel;
+        this.onboardingInvitationBody = body;
+        this.onboardingInvitationStartButton = start;
+        return overlay;
+    }
 
+    buildOnboardingRail() {
+        const rail = element('aside', {
+            className: 'st-devtools-onboarding-rail',
+        });
+        rail.hidden = true;
+        rail.tabIndex = -1;
+        rail.setAttribute('role', 'complementary');
+        rail.setAttribute('aria-labelledby', 'st-devtools-onboarding-step-title');
+        rail.setAttribute('aria-describedby', 'st-devtools-onboarding-task');
         const header = element('header', {
-            className: 'st-devtools-onboarding-header',
+            className: 'st-devtools-onboarding-rail-header',
+        });
+        const progressCopy = element('div', {
+            className: 'st-devtools-onboarding-progress-copy',
+        });
+        const groupName = element('strong', {
+            className: 'st-devtools-onboarding-group-name',
+        });
+        const groupProgress = element('span', {
+            className: 'st-devtools-onboarding-group-progress',
         });
         const progress = element('span', {
             className: 'st-devtools-onboarding-progress',
         });
+        progressCopy.append(groupName, groupProgress, progress);
         const announcement = element('span', {
             className: 'st-devtools-onboarding-announcement',
         });
         announcement.setAttribute('role', 'status');
         announcement.setAttribute('aria-live', 'polite');
         announcement.setAttribute('aria-atomic', 'true');
-        const targetStatus = element('span', {
-            className: 'st-devtools-onboarding-target-status',
-            text: t('onboarding.targetOutOfView'),
-        });
-        targetStatus.hidden = true;
-        const headerActions = element('span', {
-            className: 'st-devtools-onboarding-header-actions',
-        });
-        const locate = element('button', {
-            className: 'menu_button st-devtools-onboarding-locate',
-            title: t('onboarding.locateTarget'),
+        const exit = element('button', {
+            className: 'menu_button st-devtools-onboarding-exit',
+            text: t('onboarding.exit'),
             type: 'button',
         });
-        locate.setAttribute('aria-label', t('onboarding.locateTarget'));
-        const locateIcon = element('i', {
-            className: 'fa-solid fa-crosshairs',
-        });
-        locateIcon.setAttribute('aria-hidden', 'true');
-        locate.appendChild(locateIcon);
-        locate.addEventListener('click', () => this.focusOnboardingTarget());
-        const skip = element('button', {
-            className: 'menu_button st-devtools-onboarding-skip',
-            text: t('onboarding.skip'),
-            type: 'button',
-        });
-        skip.addEventListener('click', () => {
+        exit.addEventListener('click', () => {
             this.closeOnboarding({ persist: 'skipped' });
         });
-        headerActions.append(locate, skip);
-        header.append(progress, targetStatus, announcement, headerActions);
+        header.append(progressCopy, announcement, exit);
 
+        const progressBar = element('div', {
+            className: 'st-devtools-onboarding-progressbar',
+        });
+        progressBar.setAttribute('role', 'progressbar');
+        progressBar.setAttribute('aria-label', t('onboarding.progressAriaLabel'));
+        progressBar.setAttribute('aria-valuemin', '1');
+        progressBar.setAttribute('aria-valuemax', String(ONBOARDING_STEPS.length));
+        const progressFill = element('span', {
+            className: 'st-devtools-onboarding-progressbar-fill',
+        });
+        progressFill.setAttribute('aria-hidden', 'true');
+        progressBar.appendChild(progressFill);
+
+        const journey = element('ol', {
+            className: 'st-devtools-onboarding-journey',
+        });
+        journey.setAttribute('aria-label', t('onboarding.journeyLabel'));
+        for (const group of ONBOARDING_GROUPS) {
+            const segment = element('li', {
+                className: 'st-devtools-onboarding-journey-segment',
+            });
+            segment.dataset.group = group.id;
+            const icon = element('i', {
+                className: `fa-solid ${group.icon}`,
+            });
+            icon.setAttribute('aria-hidden', 'true');
+            segment.append(
+                icon,
+                element('span', { text: t(`onboarding.group.${group.id}`) }),
+            );
+            journey.appendChild(segment);
+            this.onboardingJourneySegments.set(group.id, segment);
+        }
         const body = element('div', {
             className: 'st-devtools-onboarding-body',
         });
@@ -3576,25 +3631,23 @@ export class DevToolsWindow {
         });
         next.addEventListener('click', () => this.nextOnboardingStep());
         actions.append(skipStep, back, next);
-        panel.append(header, body, actions);
-        overlay.append(highlight, panel);
-
-        this.onboardingOverlay = overlay;
-        this.onboardingPanel = panel;
-        this.onboardingHighlight = highlight;
+        rail.append(header, progressBar, journey, body, actions);
+        this.onboardingRail = rail;
         this.onboardingProgress = progress;
+        this.onboardingGroupName = groupName;
+        this.onboardingGroupProgress = groupProgress;
+        this.onboardingProgressBar = progressBar;
+        this.onboardingProgressFill = progressFill;
         this.onboardingAnnouncement = announcement;
         this.onboardingBody = body;
         this.onboardingBackButton = back;
         this.onboardingNextButton = next;
         this.onboardingStepSkipButton = skipStep;
-        this.onboardingLocateButton = locate;
-        this.onboardingTargetStatus = targetStatus;
-        return overlay;
+        return rail;
     }
 
     onboardingIsOpen() {
-        return Boolean(this.onboardingOverlay && !this.onboardingOverlay.hidden);
+        return ['invitation', 'steps'].includes(this.onboardingPhase);
     }
 
     onboardingCanStart() {
@@ -3638,7 +3691,11 @@ export class DevToolsWindow {
     }
 
     startOnboarding({ invitation = true, force = false } = {}) {
-        if (!this.onboardingOverlay || this.onboardingIsOpen()) return false;
+        if (
+            !this.onboardingInvitationOverlay
+            || !this.onboardingRail
+            || this.onboardingIsOpen()
+        ) return false;
         if (!force && !shouldAutoStartOnboarding(this.onboardingState)) return false;
         if (!this.onboardingCanStart()) {
             if (force) {
@@ -3651,45 +3708,25 @@ export class DevToolsWindow {
         }
         this.onboardingPreviouslyFocused = document.activeElement;
         this.onboardingStepIndex = 0;
-        this.onboardingPhase = invitation ? 'invitation' : 'idle';
-        this.onboardingOverlay.hidden = false;
-        if (!this.onboardingResizeListening) {
-            globalThis.addEventListener?.('resize', this.onboardingResizeHandler);
-            this.onboardingResizeListening = true;
-        }
-        if (!this.onboardingScrollListening) {
-            this.window.addEventListener(
-                'scroll',
-                this.onboardingScrollHandler,
-                { capture: true, passive: true },
-            );
-            this.onboardingScrollListening = true;
-        }
-        if (
-            !this.onboardingGeometryObserver
-            && typeof globalThis.ResizeObserver === 'function'
-        ) {
-            this.onboardingGeometryObserver = new globalThis.ResizeObserver(
-                this.onboardingResizeHandler,
-            );
-            this.onboardingGeometryObserver.observe(this.onboardingPanel);
-            this.onboardingGeometryObserver.observe(this.content);
-        }
         if (invitation) {
+            this.onboardingPhase = 'invitation';
+            this.onboardingInvitationOverlay.hidden = false;
+            this.onboardingRail.hidden = true;
             this.window.setAttribute('aria-modal', 'false');
             for (const region of this.primaryRegions) {
                 region.inert = true;
                 region.setAttribute('aria-hidden', 'true');
             }
             this.updateOnboardingView();
+            queueMicrotask(() => {
+                if (this.onboardingPhase === 'invitation') {
+                    this.onboardingInvitationStartButton?.focus({ preventScroll: true });
+                }
+            });
         } else {
-            this.beginOnboardingPractice();
+            this.onboardingPhase = 'idle';
+            return this.beginOnboardingPractice();
         }
-        queueMicrotask(() => {
-            if (this.onboardingIsOpen()) {
-                this.onboardingPanel?.focus({ preventScroll: true });
-            }
-        });
         return true;
     }
 
@@ -3705,60 +3742,28 @@ export class DevToolsWindow {
 
     closeOnboarding({ persist = null, restoreFocus = true } = {}) {
         if (!this.onboardingIsOpen()) return false;
-        if (this.onboardingResizeListening) {
-            globalThis.removeEventListener?.('resize', this.onboardingResizeHandler);
-            this.onboardingResizeListening = false;
-        }
-        if (this.onboardingScrollListening) {
-            this.window.removeEventListener(
-                'scroll',
-                this.onboardingScrollHandler,
-                true,
-            );
-            this.onboardingScrollListening = false;
-        }
-        this.onboardingGeometryObserver?.disconnect();
-        this.onboardingGeometryObserver = null;
-        if (this.onboardingPositionFrame != null) {
-            cancelAnimationFrame(this.onboardingPositionFrame);
-            this.onboardingPositionFrame = null;
-        }
         const practiceWasActive = this.tutorialIsActive();
         const liveDataChanged = Boolean(this.onboardingSession?.liveDataChanged);
         const latestLiveCaptureStatus = this.onboardingSession?.latestLiveCaptureStatus ?? null;
         this.cancelOnboardingCaptureWait();
-        this.restoreOnboardingControls();
         this.clearOnboardingTarget();
         this.window?.removeEventListener('click', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('change', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('input', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('toggle', this.onboardingInteractionHandler, true);
-        this.window?.removeEventListener('focusin', this.onboardingFocusHandler, true);
-        this.onboardingOverlay.hidden = true;
-        this.onboardingOverlay.classList.remove('is-centered');
-        this.onboardingOverlay.dataset.phase = 'idle';
-        delete this.onboardingOverlay.dataset.step;
-        delete this.onboardingOverlay.dataset.target;
-        this.onboardingPanel?.classList.remove(
-            'is-invitation',
-            'is-fallback',
-            'is-target-hidden',
-        );
-        this.onboardingPanel?.removeAttribute('style');
-        delete this.onboardingPanel?.dataset.placement;
-        if (this.onboardingTargetStatus) this.onboardingTargetStatus.hidden = true;
-        if (this.onboardingHighlight) {
-            this.onboardingHighlight.hidden = true;
-            this.onboardingHighlight.removeAttribute('style');
-            delete this.onboardingHighlight.dataset.label;
-            this.onboardingHighlight.classList.remove('is-label-below');
-        }
+        this.onboardingInvitationOverlay.hidden = true;
+        this.onboardingRail.hidden = true;
+        delete this.onboardingRail.dataset.step;
+        delete this.onboardingRail.dataset.group;
         this.onboardingPhase = 'idle';
         this.onboardingStepIndex = 0;
         this.onboardingStepComplete = false;
         this.onboardingStepSkipped = false;
         this.onboardingSession = null;
-        this.window?.classList.remove('is-onboarding-practice');
+        this.window?.classList.remove(
+            'is-onboarding-practice',
+            'is-onboarding-context-open',
+        );
         if (this.onboardingSessionBadge) this.onboardingSessionBadge.hidden = true;
         this.window.setAttribute('aria-modal', 'true');
         for (const region of this.primaryRegions) {
@@ -3795,6 +3800,7 @@ export class DevToolsWindow {
     }
 
     beginOnboardingPractice() {
+        if (!this.onboardingRail || this.tutorialIsActive()) return false;
         this.onboardingSession = createOnboardingSession();
         this.onboardingPhase = 'steps';
         this.onboardingStepIndex = 0;
@@ -3802,6 +3808,8 @@ export class DevToolsWindow {
         this.onboardingStepSkipped = false;
         this.window.setAttribute('aria-modal', 'true');
         this.window.classList.add('is-onboarding-practice');
+        this.onboardingInvitationOverlay.hidden = true;
+        this.onboardingRail.hidden = false;
         for (const region of this.primaryRegions) {
             region.inert = false;
             region.removeAttribute('aria-hidden');
@@ -3811,10 +3819,10 @@ export class DevToolsWindow {
         this.window.addEventListener('change', this.onboardingInteractionHandler, true);
         this.window.addEventListener('input', this.onboardingInteractionHandler, true);
         this.window.addEventListener('toggle', this.onboardingInteractionHandler, true);
-        this.window.addEventListener('focusin', this.onboardingFocusHandler, true);
         this.updateCaptureStatus();
         this.render();
         this.updateOnboardingView();
+        queueMicrotask(() => this.onboardingRail?.focus({ preventScroll: true }));
         return true;
     }
 
@@ -3918,27 +3926,13 @@ export class DevToolsWindow {
     updateOnboardingView() {
         if (!this.onboardingIsOpen()) return;
         if (this.onboardingPhase === 'invitation') {
-            const focusWasOnBack = document.activeElement === this.onboardingBackButton;
-            this.onboardingOverlay.dataset.phase = 'invitation';
-            delete this.onboardingOverlay.dataset.step;
-            delete this.onboardingOverlay.dataset.target;
-            const progress = t('onboarding.invitationProgress');
-            const title = t('onboarding.invitationTitle');
-            this.onboardingProgress.textContent = progress;
-            this.onboardingAnnouncement.textContent = `${progress}. ${title}`;
-            this.onboardingBackButton.hidden = true;
-            this.onboardingStepSkipButton.hidden = true;
-            this.onboardingLocateButton.hidden = true;
-            this.onboardingTargetStatus.hidden = true;
-            this.onboardingNextButton.disabled = false;
-            this.onboardingNextButton.textContent = t('onboarding.start');
-            this.onboardingBody.replaceChildren(this.renderOnboardingInvitation());
-            this.onboardingPanel.classList.add('is-invitation');
-            this.onboardingPanel.setAttribute('role', 'dialog');
-            this.onboardingPanel.setAttribute('aria-modal', 'true');
-            if (focusWasOnBack) {
-                queueMicrotask(() => this.onboardingNextButton?.focus({ preventScroll: true }));
-            }
+            this.clearOnboardingTarget();
+            this.onboardingRail.hidden = true;
+            this.onboardingInvitationOverlay.hidden = false;
+            this.onboardingInvitationBody.replaceChildren(
+                this.renderOnboardingInvitation(),
+            );
+            return;
         } else {
             const step = ONBOARDING_STEPS[this.onboardingStepIndex]
                 ?? ONBOARDING_STEPS[0];
@@ -3946,6 +3940,11 @@ export class DevToolsWindow {
                 ?? ONBOARDING_GROUPS[0];
             const groupSteps = ONBOARDING_STEPS.filter(({ group: id }) => id === group.id);
             const groupStepIndex = groupSteps.findIndex(({ id }) => id === step.id);
+            const stepChanged = this.onboardingRail.dataset.step !== step.id;
+            const activeElement = globalThis.document?.activeElement ?? null;
+            const bodyHadFocus = Boolean(
+                activeElement && this.onboardingBody.contains(activeElement),
+            );
             if (
                 !step.id.endsWith('-tab')
                 && step.target
@@ -3956,30 +3955,55 @@ export class DevToolsWindow {
                 this.onboardingSession.tabId = step.tabId;
                 this.render();
             }
-            this.onboardingStepComplete = !step.interaction
-                || this.onboardingSession.completedActions.has(step.id);
-            this.onboardingOverlay.dataset.phase = 'steps';
-            this.onboardingOverlay.dataset.step = step.id;
-            if (step.target) this.onboardingOverlay.dataset.target = step.target;
-            else delete this.onboardingOverlay.dataset.target;
-            this.onboardingProgress.textContent = t('onboarding.progressDetailed', {
-                group: t(`onboarding.group.${group.id}`),
+            this.onboardingStepComplete = Boolean(
+                step.interaction
+                && this.onboardingSession.completedActions.has(step.id),
+            );
+            this.onboardingInvitationOverlay.hidden = true;
+            this.onboardingRail.hidden = false;
+            this.onboardingRail.dataset.step = step.id;
+            this.onboardingRail.dataset.group = group.id;
+            this.onboardingGroupName.textContent = t(`onboarding.group.${group.id}`);
+            this.onboardingGroupProgress.textContent = t('onboarding.groupProgress', {
                 groupCurrent: groupStepIndex + 1,
                 groupTotal: groupSteps.length,
+            });
+            this.onboardingProgress.textContent = t('onboarding.totalProgress', {
                 current: this.onboardingStepIndex + 1,
                 total: ONBOARDING_STEPS.length,
             });
-            this.onboardingAnnouncement.textContent = `${this.onboardingProgress.textContent}. ${
-                t(`onboarding.step.${step.id}.title`)
-            }`;
-            this.onboardingBackButton.hidden = this.onboardingStepIndex === 0;
-            this.onboardingLocateButton.hidden = !step.target;
-            this.onboardingTargetStatus.hidden = true;
-            this.onboardingHighlight.dataset.label = t(
-                step.interaction
-                    ? 'onboarding.targetTry'
-                    : 'onboarding.targetLook',
+            this.onboardingProgressBar.setAttribute(
+                'aria-valuenow',
+                String(this.onboardingStepIndex + 1),
             );
+            this.onboardingProgressBar.setAttribute(
+                'aria-valuetext',
+                this.onboardingProgress.textContent,
+            );
+            this.onboardingProgressFill.style.width = `${(
+                (this.onboardingStepIndex + 1) / ONBOARDING_STEPS.length
+            ) * 100}%`;
+            const activeGroupIndex = ONBOARDING_GROUPS.findIndex(
+                ({ id }) => id === group.id,
+            );
+            for (const [index, journeyGroup] of ONBOARDING_GROUPS.entries()) {
+                const segment = this.onboardingJourneySegments.get(journeyGroup.id);
+                if (!segment) continue;
+                segment.classList.toggle('is-active', index === activeGroupIndex);
+                segment.classList.toggle('is-complete', index < activeGroupIndex);
+                if (index === activeGroupIndex) {
+                    segment.setAttribute('aria-current', 'step');
+                } else {
+                    segment.removeAttribute('aria-current');
+                }
+            }
+            this.onboardingAnnouncement.textContent = [
+                `${this.onboardingProgress.textContent}. ${t(`onboarding.step.${step.id}.title`)}`,
+                this.onboardingStepComplete && step.interaction
+                    ? t('onboarding.taskComplete')
+                    : '',
+            ].filter(Boolean).join(' ');
+            this.onboardingBackButton.hidden = this.onboardingStepIndex === 0;
             this.onboardingStepSkipButton.hidden = !step.interaction
                 || this.onboardingStepComplete;
             this.onboardingNextButton.textContent = this.onboardingStepIndex
@@ -3989,10 +4013,15 @@ export class DevToolsWindow {
             this.onboardingNextButton.disabled = Boolean(
                 step.interaction && !this.onboardingStepComplete,
             );
+            this.window.classList.remove('is-onboarding-context-open');
             this.onboardingBody.replaceChildren(this.renderOnboardingStep(step));
-            this.onboardingPanel.classList.remove('is-invitation');
-            this.onboardingPanel.setAttribute('role', 'complementary');
-            this.onboardingPanel.setAttribute('aria-modal', 'false');
+            if (stepChanged) this.onboardingBody.scrollTop = 0;
+            if (!stepChanged && bodyHadFocus && this.onboardingStepComplete) {
+                queueMicrotask(() => {
+                    if (this.currentOnboardingStep()?.id !== step.id) return;
+                    this.onboardingNextButton.focus({ preventScroll: true });
+                });
+            }
             this.synchronizeOnboardingStepCompletion(step);
         }
         queueMicrotask(() => this.refreshOnboardingTarget());
@@ -4019,44 +4048,27 @@ export class DevToolsWindow {
         const content = element('div', {
             className: 'st-devtools-onboarding-invitation',
         });
-        const icon = element('span', {
-            className: 'st-devtools-onboarding-invitation-icon',
-        });
-        const iconGlyph = element('i', { className: 'fa-solid fa-compass' });
-        iconGlyph.setAttribute('aria-hidden', 'true');
-        icon.appendChild(iconGlyph);
         const title = element('h2', { text: t('onboarding.invitationTitle') });
-        title.id = 'st-devtools-onboarding-title';
+        title.id = 'st-devtools-onboarding-invitation-title';
         const description = proseElement(
             'p',
             t('onboarding.invitationDescription'),
         );
-        description.id = 'st-devtools-onboarding-description';
+        description.id = 'st-devtools-onboarding-invitation-description';
         const topics = element('ol', {
-            className: 'st-devtools-onboarding-topic-list',
+            className: 'st-devtools-onboarding-invitation-journey',
         });
         for (const group of ONBOARDING_GROUPS) {
             const item = element('li');
-            const groupIcon = element('i', {
-                className: `fa-solid ${group.icon}`,
-            });
-            groupIcon.setAttribute('aria-hidden', 'true');
-            item.append(
-                groupIcon,
-                element('span', { text: t(`onboarding.group.${group.id}`) }),
-            );
+            item.appendChild(element('span', {
+                text: t(`onboarding.group.${group.id}`),
+            }));
             topics.appendChild(item);
         }
-        const promise = element('div', {
-            className: 'st-devtools-onboarding-safety-note',
+        const promise = proseElement('p', t('onboarding.invitationSafety'), {
+            className: 'st-devtools-onboarding-invitation-safety',
         });
-        const promiseIcon = element('i', { className: 'fa-solid fa-flask' });
-        promiseIcon.setAttribute('aria-hidden', 'true');
-        promise.append(
-            promiseIcon,
-            element('span', { text: t('onboarding.invitationSafety') }),
-        );
-        content.append(icon, title, description, topics, promise);
+        content.append(title, description, topics, promise);
         return content;
     }
 
@@ -4064,20 +4076,18 @@ export class DevToolsWindow {
         const content = element('div', {
             className: `st-devtools-onboarding-step is-${step.id}`,
         });
-        const heading = element('div', {
-            className: 'st-devtools-onboarding-step-heading',
-        });
-        const icon = element('span', {
-            className: 'st-devtools-onboarding-step-icon',
-        });
-        const iconGlyph = element('i', { className: `fa-solid ${step.icon}` });
-        iconGlyph.setAttribute('aria-hidden', 'true');
-        icon.appendChild(iconGlyph);
         const title = element('h2', {
             text: t(`onboarding.step.${step.id}.title`),
         });
-        title.id = 'st-devtools-onboarding-title';
-        heading.append(icon, title);
+        title.id = 'st-devtools-onboarding-step-title';
+        const groupSteps = ONBOARDING_STEPS.filter(({ group }) => group === step.group);
+        const chapterIntro = groupSteps[0]?.id === step.id
+            ? proseElement(
+                'p',
+                t(`onboarding.chapter.${step.group}.intro`),
+                { className: 'st-devtools-onboarding-chapter-intro' },
+            )
+            : null;
         const description = proseElement(
             'p',
             t(`onboarding.step.${step.id}.what`),
@@ -4086,17 +4096,14 @@ export class DevToolsWindow {
             ? this.activeTabId()
             : step.tabId;
         const tabLabelKey = TABS.find(([id]) => id === locationTabId)?.[2];
-        const location = element('div', {
-            className: 'st-devtools-onboarding-location',
+        const location = element('p', {
+            className: 'st-devtools-onboarding-step-location',
             text: step.group === 'capture'
                 ? t('onboarding.location.capture')
                 : t('onboarding.location.tab', {
                     tab: tabLabelKey ? t(tabLabelKey) : '',
                 }),
         });
-        const locationIcon = element('i', { className: 'fa-solid fa-location-dot' });
-        locationIcon.setAttribute('aria-hidden', 'true');
-        location.prepend(locationIcon);
         const what = element('section', {
             className: 'st-devtools-onboarding-explanation is-what',
         });
@@ -4122,9 +4129,16 @@ export class DevToolsWindow {
         });
         contextBody.append(what, when);
         context.append(contextSummary, contextBody);
+        context.addEventListener('toggle', () => {
+            if (!context.isConnected) return;
+            this.window?.classList.toggle('is-onboarding-context-open', context.open);
+        });
+        const interactionComplete = Boolean(
+            step.interaction && this.onboardingStepComplete,
+        );
         const task = element('section', {
             className: `st-devtools-onboarding-task${
-                this.onboardingStepComplete ? ' is-complete' : ''
+                interactionComplete ? ' is-complete' : ''
             }`,
         });
         task.id = 'st-devtools-onboarding-task';
@@ -4135,12 +4149,21 @@ export class DevToolsWindow {
         taskDescription.id = 'st-devtools-onboarding-description';
         task.append(
             element('strong', {
-                text: step.interaction
-                    ? t('onboarding.tryLabel')
-                    : t('onboarding.lookLabel'),
+                text: t('onboarding.currentTaskLabel'),
             }),
             taskDescription,
         );
+        if (step.target) {
+            const locate = element('button', {
+                className: 'menu_button st-devtools-onboarding-show-on-screen',
+                text: t('onboarding.showOnScreen'),
+                type: 'button',
+            });
+            locate.addEventListener('click', () => {
+                this.showOnboardingTarget();
+            });
+            task.appendChild(locate);
+        }
         if (step.interaction?.event === 'panel') {
             const action = element('button', {
                 className: 'menu_button st-devtools-primary-button st-devtools-onboarding-practice-action',
@@ -4166,7 +4189,7 @@ export class DevToolsWindow {
         }
         const status = element('span', {
             className: 'st-devtools-onboarding-task-status',
-            text: this.onboardingStepComplete
+            text: interactionComplete
                 ? t(this.onboardingStepSkipped
                     ? 'onboarding.taskSkipped'
                     : 'onboarding.taskComplete')
@@ -4176,7 +4199,9 @@ export class DevToolsWindow {
         status.setAttribute('aria-live', 'polite');
         task.appendChild(status);
         this.onboardingTaskStatus = status;
-        content.append(heading, location, task, context);
+        content.append(title);
+        if (chapterIntro) content.appendChild(chapterIntro);
+        content.append(location, task, context);
         return content;
     }
 
@@ -4417,7 +4442,7 @@ export class DevToolsWindow {
         session.capturePhase = 'complete';
         return this.recordOnboardingAction(
             'panel',
-            this.onboardingPanel?.querySelector('[data-onboarding-action="run-capture-demo"]'),
+            this.onboardingRail?.querySelector('[data-onboarding-action="run-capture-demo"]'),
         );
     }
 
@@ -4428,26 +4453,6 @@ export class DevToolsWindow {
         if (closest) return closest;
         if (node) return null;
         return this.window?.querySelector(interaction.selector) ?? null;
-    }
-
-    onboardingInteractionAllowsNode(interaction, candidate, node) {
-        if (!interaction || !candidate || !node) return false;
-        if (interaction.event !== 'toggle') {
-            return Boolean(
-                candidate === node
-                || candidate.contains?.(node)
-                || node.contains?.(candidate),
-            );
-        }
-        if (node === candidate) return true;
-        const summary = candidate.matches?.('summary')
-            ? candidate
-            : candidate.querySelector?.(':scope > summary');
-        if (!summary || !(node === summary || summary.contains?.(node))) return false;
-        const nestedControl = node.closest?.(
-            'button,input,select,textarea,a[href],summary,[role="button"]',
-        );
-        return !nestedControl || nestedControl === summary;
     }
 
     recordOnboardingAction(eventType, node = null) {
@@ -4493,114 +4498,31 @@ export class DevToolsWindow {
     handleOnboardingInteraction(event) {
         if (!this.tutorialIsActive()) return;
         if (this.onboardingApplyingSkippedState) return;
-        if (this.onboardingPanel?.contains(event.target)) return;
+        if (this.onboardingRail?.contains(event.target)) return;
         const step = this.currentOnboardingStep();
-        const selector = step?.interaction?.selector ?? null;
-        const candidate = selector
-            ? this.onboardingInteractionCandidate(step.interaction, event.target)
-            : null;
-        const allowed = this.onboardingInteractionAllowsNode(
-            step?.interaction,
-            candidate,
+        const interaction = step?.interaction;
+        if (!interaction || interaction.event !== event.type) return;
+        const candidate = this.onboardingInteractionCandidate(
+            interaction,
             event.target,
         );
-        if (!allowed) {
-            if (['click', 'change', 'input'].includes(event.type)) {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                if (this.onboardingTaskStatus) {
-                    this.onboardingTaskStatus.textContent = t('onboarding.useHighlighted');
-                }
-            }
-            return;
-        }
+        if (!candidate) return;
         if (step.id !== 'search-query-korean' || event.type !== 'input') {
             queueMicrotask(() => this.recordOnboardingAction(event.type, candidate));
         }
     }
 
-    handleOnboardingFocus(event) {
-        if (!this.tutorialIsActive() || this.onboardingPanel?.contains(event.target)) return;
-        const step = this.currentOnboardingStep();
-        const interaction = step?.interaction;
-        const selector = interaction?.selector ?? step?.target;
-        const candidate = interaction && selector
-            ? this.window?.querySelector(selector)
-            : null;
-        const allowed = interaction
-            ? this.onboardingInteractionAllowsNode(interaction, candidate, event.target)
-            : selector && (
-                event.target.matches?.(selector)
-                || event.target.closest?.(selector)
-            );
-        if (allowed) return;
-        queueMicrotask(() => {
-            const target = this.onboardingTarget;
-            const focusTarget = target?.matches?.('button,input,select,summary,[tabindex]')
-                ? target
-                : target?.querySelector?.('button,input,select,summary,[tabindex]');
-            (focusTarget ?? this.onboardingNextButton)?.focus({ preventScroll: true });
-        });
-    }
-
-    restoreOnboardingControls() {
-        for (const [control, previous] of this.onboardingDisabledControls) {
-            if (!control?.isConnected) continue;
-            if ('disabled' in control) control.disabled = previous.disabled;
-            if (previous.tabIndex == null) control.removeAttribute('tabindex');
-            else control.setAttribute('tabindex', previous.tabIndex);
-            if (previous.ariaDisabled == null) control.removeAttribute('aria-disabled');
-            else control.setAttribute('aria-disabled', previous.ariaDisabled);
-        }
-        this.onboardingDisabledControls.clear();
-    }
-
-    updateOnboardingControls() {
-        this.restoreOnboardingControls();
-        if (!this.tutorialIsActive()) return;
-        const step = this.currentOnboardingStep();
-        const interaction = step?.interaction;
-        const selector = interaction?.selector ?? null;
-        const allowedTarget = selector
-            ? this.window?.querySelector(selector)
-            : null;
-        for (const control of this.window?.querySelectorAll(
-            'button,input,select,textarea,a[href],summary,[tabindex]',
-        ) ?? []) {
-            if (this.onboardingPanel?.contains(control)) continue;
-            const allowed = this.onboardingInteractionAllowsNode(
-                interaction,
-                allowedTarget,
-                control,
-            );
-            if (allowed) {
-                const primaryFocusTarget = control === allowedTarget
-                    || (interaction?.event === 'toggle' && control.matches?.('summary'));
-                if (primaryFocusTarget && control.tabIndex < 0) {
-                    this.onboardingDisabledControls.set(control, {
-                        disabled: 'disabled' in control ? control.disabled : false,
-                        tabIndex: control.getAttribute('tabindex'),
-                        ariaDisabled: control.getAttribute('aria-disabled'),
-                    });
-                    control.setAttribute('tabindex', '0');
-                }
-                continue;
-            }
-            this.onboardingDisabledControls.set(control, {
-                disabled: 'disabled' in control ? control.disabled : false,
-                tabIndex: control.getAttribute('tabindex'),
-                ariaDisabled: control.getAttribute('aria-disabled'),
-            });
-            if ('disabled' in control) control.disabled = true;
-            control.setAttribute('tabindex', '-1');
-            control.setAttribute('aria-disabled', 'true');
-        }
-    }
-
     clearOnboardingTarget() {
         if (!this.onboardingTarget) return;
-        this.onboardingGeometryObserver?.unobserve?.(this.onboardingTarget);
+        if (this.onboardingLocateTimer != null) {
+            clearTimeout(this.onboardingLocateTimer);
+            this.onboardingLocateTimer = null;
+        }
         this.onboardingTarget.classList.remove('st-devtools-onboarding-target');
+        this.onboardingTarget.classList.remove('is-locating');
+        if (this.onboardingTargetAddedTabIndex) {
+            this.onboardingTarget.removeAttribute('tabindex');
+        }
         if (this.onboardingTargetDescriptionId == null) {
             this.onboardingTarget.removeAttribute('aria-describedby');
         } else {
@@ -4611,16 +4533,13 @@ export class DevToolsWindow {
         }
         this.onboardingTarget = null;
         this.onboardingTargetDescriptionId = null;
+        this.onboardingTargetAddedTabIndex = false;
     }
 
     refreshOnboardingTarget() {
         if (!this.onboardingIsOpen()) return;
         this.clearOnboardingTarget();
-        if (!this.tutorialIsActive()) {
-            this.restoreOnboardingControls();
-            this.requestOnboardingPosition();
-            return;
-        }
+        if (!this.tutorialIsActive()) return;
         const step = this.currentOnboardingStep();
         const target = step?.target ? this.window?.querySelector(step.target) : null;
         if (target) {
@@ -4628,199 +4547,70 @@ export class DevToolsWindow {
             this.onboardingTargetDescriptionId = target.getAttribute('aria-describedby');
             target.classList.add('st-devtools-onboarding-target');
             target.setAttribute('aria-describedby', 'st-devtools-onboarding-task');
-            this.onboardingGeometryObserver?.observe?.(target);
-            this.focusOnboardingTarget({ nearestOnly: true });
         }
-        this.updateOnboardingControls();
-        this.requestOnboardingPosition();
     }
 
-    focusOnboardingTarget({ nearestOnly = false } = {}) {
+    showOnboardingTarget() {
+        if (!this.tutorialIsActive()) return false;
+        const step = this.currentOnboardingStep();
+        if (!step?.target) return false;
+        if (this.onboardingSession.tabId !== step.tabId) {
+            this.onboardingSession.tabId = step.tabId;
+            this.render();
+        }
+        queueMicrotask(() => {
+            if (this.currentOnboardingStep()?.id !== step.id) return;
+            this.refreshOnboardingTarget();
+            this.focusOnboardingTarget({ focus: true });
+        });
+        return true;
+    }
+
+    focusOnboardingTarget({ nearestOnly = false, focus = false } = {}) {
         const target = this.onboardingTarget;
-        const windowRect = this.window?.getBoundingClientRect?.();
+        const viewport = this.content?.contains(target) ? this.content : this.window;
+        const viewportRect = viewport?.getBoundingClientRect?.();
         const targetRect = target?.getBoundingClientRect?.();
-        if (!target || !windowRect || !targetRect) return false;
+        if (!target || !viewportRect || !targetRect) return false;
         const inset = 12;
         const fullyVisible = (
-            targetRect.top >= windowRect.top + inset
-            && targetRect.right <= windowRect.right - inset
-            && targetRect.bottom <= windowRect.bottom - inset
-            && targetRect.left >= windowRect.left + inset
+            targetRect.top >= viewportRect.top + inset
+            && targetRect.right <= viewportRect.right - inset
+            && targetRect.bottom <= viewportRect.bottom - inset
+            && targetRect.left >= viewportRect.left + inset
         );
         if (!nearestOnly || !fullyVisible) {
-            const compact = windowRect.width <= 700;
             target.scrollIntoView?.({
-                block: compact && this.content?.contains(target) ? 'start' : 'nearest',
+                block: nearestOnly ? 'nearest' : 'center',
                 inline: 'nearest',
                 behavior: 'auto',
             });
         }
-        this.requestOnboardingPosition();
+        if (focus) {
+            if (this.onboardingLocateTimer != null) {
+                clearTimeout(this.onboardingLocateTimer);
+            }
+            target.classList.remove('is-locating');
+            void target.offsetWidth;
+            target.classList.add('is-locating');
+            this.onboardingLocateTimer = setTimeout(() => {
+                target.classList.remove('is-locating');
+                if (this.onboardingTarget === target) {
+                    this.onboardingLocateTimer = null;
+                }
+            }, 2200);
+            const selector = 'button,input,select,textarea,a[href],summary,[tabindex]';
+            let focusTarget = target.matches?.(selector)
+                ? target
+                : target.querySelector?.(selector);
+            if (!focusTarget && typeof target.focus === 'function') {
+                target.setAttribute('tabindex', '-1');
+                this.onboardingTargetAddedTabIndex = true;
+                focusTarget = target;
+            }
+            focusTarget?.focus?.({ preventScroll: true });
+        }
         return true;
-    }
-
-    requestOnboardingPosition() {
-        if (!this.onboardingIsOpen()) return;
-        if (this.onboardingPositionFrame != null) {
-            cancelAnimationFrame(this.onboardingPositionFrame);
-        }
-        this.onboardingPositionFrame = requestAnimationFrame(() => {
-            this.onboardingPositionFrame = null;
-            this.positionOnboarding();
-        });
-    }
-
-    positionOnboarding() {
-        if (!this.onboardingIsOpen() || !this.onboardingPanel) return;
-        const panel = this.onboardingPanel;
-        panel.removeAttribute('style');
-        panel.classList.remove('is-fallback', 'is-target-hidden');
-        delete panel.dataset.placement;
-        if (this.onboardingTargetStatus) this.onboardingTargetStatus.hidden = true;
-        if (this.onboardingPhase === 'invitation') {
-            this.onboardingOverlay.classList.add('is-centered');
-            panel.classList.add('is-invitation');
-            this.onboardingHighlight.hidden = true;
-            this.onboardingHighlight.removeAttribute('style');
-            return;
-        }
-        this.onboardingOverlay.classList.remove('is-centered');
-        panel.classList.remove('is-invitation');
-        const target = this.onboardingTarget;
-        const targetRect = target?.getBoundingClientRect?.();
-        const windowRect = this.window?.getBoundingClientRect?.();
-        if (
-            !targetRect
-            || !windowRect
-            || targetRect.width <= 0
-            || targetRect.height <= 0
-        ) {
-            this.onboardingHighlight.hidden = true;
-            this.onboardingHighlight.removeAttribute('style');
-            panel.classList.add('is-fallback');
-            this.onboardingOverlay.classList.add('is-centered');
-            return;
-        }
-        const visibleRect = {
-            left: Math.max(targetRect.left, windowRect.left),
-            top: Math.max(targetRect.top, windowRect.top),
-            right: Math.min(targetRect.right, windowRect.right),
-            bottom: Math.min(targetRect.bottom, windowRect.bottom),
-        };
-        visibleRect.width = Math.max(0, visibleRect.right - visibleRect.left);
-        visibleRect.height = Math.max(0, visibleRect.bottom - visibleRect.top);
-        const margin = windowRect.width <= 700 ? 8 : 14;
-        if (visibleRect.width <= 0 || visibleRect.height <= 0) {
-            this.onboardingHighlight.hidden = true;
-            this.onboardingHighlight.removeAttribute('style');
-            panel.classList.add('is-target-hidden');
-            if (this.onboardingTargetStatus) this.onboardingTargetStatus.hidden = false;
-            const compactRect = panel.getBoundingClientRect();
-            const panelWidth = Math.min(compactRect.width, windowRect.width - (margin * 2));
-            const panelHeight = Math.min(compactRect.height, windowRect.height - (margin * 2));
-            const targetCenter = targetRect.left + (targetRect.width / 2) - windowRect.left;
-            const panelLeft = Math.max(margin, Math.min(
-                targetCenter - (panelWidth / 2),
-                windowRect.width - panelWidth - margin,
-            ));
-            const targetAbove = targetRect.bottom <= windowRect.top;
-            const panelTop = targetAbove
-                ? margin
-                : windowRect.height - panelHeight - margin;
-            panel.dataset.placement = targetAbove ? 'edge-top' : 'edge-bottom';
-            Object.assign(panel.style, {
-                left: `${panelLeft}px`,
-                top: `${Math.max(margin, panelTop)}px`,
-                width: `${panelWidth}px`,
-            });
-            return;
-        }
-
-        const padding = 7;
-        const left = Math.max(3, visibleRect.left - windowRect.left - padding);
-        const top = Math.max(3, visibleRect.top - windowRect.top - padding);
-        const right = Math.min(
-            windowRect.width - 3,
-            visibleRect.right - windowRect.left + padding,
-        );
-        const bottom = Math.min(
-            windowRect.height - 3,
-            visibleRect.bottom - windowRect.top + padding,
-        );
-        Object.assign(this.onboardingHighlight.style, {
-            left: `${left}px`,
-            top: `${top}px`,
-            width: `${Math.max(1, right - left)}px`,
-            height: `${Math.max(1, bottom - top)}px`,
-        });
-        this.onboardingHighlight.classList.toggle('is-label-below', top < 38);
-        this.onboardingHighlight.hidden = false;
-
-        const panelRect = panel.getBoundingClientRect();
-        const compact = windowRect.width <= 700;
-        const gap = compact ? 10 : 14;
-        const rooms = {
-            below: windowRect.bottom - visibleRect.bottom - gap - margin,
-            above: visibleRect.top - windowRect.top - gap - margin,
-            right: windowRect.right - visibleRect.right - gap - margin,
-            left: visibleRect.left - windowRect.left - gap - margin,
-        };
-        const directions = compact
-            ? ['below', 'above']
-            : ['right', 'left', 'below', 'above'];
-        const required = {
-            below: panelRect.height,
-            above: panelRect.height,
-            right: panelRect.width,
-            left: panelRect.width,
-        };
-        const fitting = directions.filter((direction) => (
-            rooms[direction] >= required[direction]
-        ));
-        const candidates = fitting.length > 0 ? fitting : directions;
-        const placement = [...candidates].sort((leftDirection, rightDirection) => (
-            rooms[rightDirection] - required[rightDirection]
-            - (rooms[leftDirection] - required[leftDirection])
-        ))[0];
-        const availableHeight = ['above', 'below'].includes(placement)
-            ? rooms[placement]
-            : windowRect.height - (margin * 2);
-        const maxHeight = Math.max(132, Math.min(
-            panelRect.height,
-            availableHeight,
-        ));
-        const renderedHeight = Math.min(panelRect.height, maxHeight);
-        let panelLeft;
-        let panelTop;
-        if (placement === 'right') {
-            panelLeft = visibleRect.right - windowRect.left + gap;
-            panelTop = visibleRect.top - windowRect.top
-                + (visibleRect.height - renderedHeight) / 2;
-        } else if (placement === 'left') {
-            panelLeft = visibleRect.left - windowRect.left - panelRect.width - gap;
-            panelTop = visibleRect.top - windowRect.top
-                + (visibleRect.height - renderedHeight) / 2;
-        } else if (placement === 'above') {
-            panelTop = visibleRect.top - windowRect.top - renderedHeight - gap;
-            panelLeft = visibleRect.left - windowRect.left
-                + (visibleRect.width - panelRect.width) / 2;
-        } else {
-            panelTop = visibleRect.bottom - windowRect.top + gap;
-            panelLeft = visibleRect.left - windowRect.left
-                + (visibleRect.width - panelRect.width) / 2;
-        }
-        panelTop = Math.max(margin, Math.min(
-            panelTop,
-            windowRect.height - renderedHeight - margin,
-        ));
-        panelLeft = Math.max(margin, Math.min(
-            panelLeft,
-            windowRect.width - panelRect.width - margin,
-        ));
-        panel.dataset.placement = placement;
-        panel.style.maxHeight = `${maxHeight}px`;
-        panel.style.left = `${panelLeft}px`;
-        panel.style.top = `${panelTop}px`;
     }
 
     buildCaptureStatus() {
@@ -5575,7 +5365,7 @@ export class DevToolsWindow {
     focusableElements() {
         if (!this.window) return [];
         const scope = this.onboardingIsOpen() && this.onboardingPhase === 'invitation'
-            ? this.onboardingPanel
+            ? this.onboardingInvitationPanel
             : (
                 this.semanticConsentOverlay
                 && !this.semanticConsentOverlay.hidden
@@ -5633,7 +5423,7 @@ export class DevToolsWindow {
         const last = focusable.at(-1);
         const active = document.activeElement;
         const focusScope = this.onboardingIsOpen() && this.onboardingPhase === 'invitation'
-            ? this.onboardingPanel
+            ? this.onboardingInvitationPanel
             : (
                 this.semanticConsentOverlay
                 && !this.semanticConsentOverlay.hidden
@@ -5852,7 +5642,6 @@ export class DevToolsWindow {
         if (event.key === 'End') nextIndex = ids.length - 1;
         if (nextIndex == null) return;
         event.preventDefault();
-        if (this.tutorialIsActive()) return;
         this.selectTab(ids[nextIndex], { focus: true });
     }
 
@@ -7919,7 +7708,6 @@ export class DevToolsWindow {
                 }
                 if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
                 event.preventDefault();
-                if (this.tutorialIsActive()) return;
                 let nextIndex = index;
                 if (event.key === 'ArrowLeft') nextIndex = Math.max(0, index - 1);
                 if (event.key === 'ArrowRight') nextIndex = Math.min(points.length - 1, index + 1);

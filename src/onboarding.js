@@ -1,5 +1,5 @@
-export const ONBOARDING_VERSION = 2;
-export const ONBOARDING_STORAGE_KEY = 'st-devtools:onboarding:v2';
+export const ONBOARDING_VERSION = 3;
+export const ONBOARDING_STORAGE_KEY = 'st-devtools:onboarding:v3';
 
 const VALID_STATUSES = new Set(['new', 'skipped', 'completed']);
 const SCHEMA_VERSION = 1;
@@ -74,7 +74,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'explorer',
         'explorer-configured-group',
-        '.st-devtools-source-group[data-group="configured"]',
+        '.st-devtools-source-group[data-group="configured"] > summary',
         defineInteraction('toggle', '.st-devtools-source-group[data-group="configured"]', {
             state: 'open',
         }),
@@ -82,7 +82,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'explorer',
         'explorer-format-source',
-        '.st-devtools-source[data-source-id="tutorial:source:output"]',
+        '.st-devtools-source[data-source-id="tutorial:source:output"] > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-source[data-source-id="tutorial:source:output"]',
@@ -92,7 +92,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'explorer',
         'explorer-provenance',
-        '.st-devtools-source[data-source-id="tutorial:source:output"] .st-devtools-provenance-details',
+        '.st-devtools-source[data-source-id="tutorial:source:output"] .st-devtools-provenance-details > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-source[data-source-id="tutorial:source:output"] .st-devtools-provenance-details',
@@ -102,13 +102,13 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'explorer',
         'explorer-final-group',
-        '.st-devtools-source-group[data-group="final"]',
+        '.st-devtools-source-group[data-group="final"] > summary',
         defineInteraction('toggle', '.st-devtools-source-group[data-group="final"]', { state: 'open' }),
     ),
     defineStep(
         'explorer',
         'explorer-final-source',
-        '.st-devtools-source[data-source-id="tutorial:source:final:3"]',
+        '.st-devtools-source[data-source-id="tutorial:source:final:3"] > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-source[data-source-id="tutorial:source:final:3"]',
@@ -118,7 +118,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'explorer',
         'explorer-payload',
-        '.st-devtools-prompt-request-data',
+        '.st-devtools-prompt-request-data > summary',
         defineInteraction('toggle', '.st-devtools-prompt-request-data', { state: 'open' }),
     ),
 
@@ -134,7 +134,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'rules',
         'rules-evidence',
-        '.st-devtools-rule-card[data-rule-id="format"] .st-devtools-rule-evidence',
+        '.st-devtools-rule-card[data-rule-id="format"] .st-devtools-rule-evidence > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-rule-card[data-rule-id="format"] .st-devtools-rule-evidence',
@@ -190,7 +190,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'timeline',
         'timeline-list',
-        '.st-devtools-timeline-snapshots',
+        '.st-devtools-timeline-snapshots > summary',
         defineInteraction('toggle', '.st-devtools-timeline-snapshots', { state: 'open' }),
     ),
 
@@ -222,7 +222,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'diff',
         'diff-added',
-        '.st-devtools-source-change.status-added',
+        '.st-devtools-source-change.status-added > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-source-change.status-added',
@@ -232,7 +232,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'diff',
         'diff-changed',
-        '.st-devtools-source-change.status-changed',
+        '.st-devtools-source-change.status-changed > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-source-change.status-changed',
@@ -242,7 +242,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'diff',
         'diff-removed',
-        '.st-devtools-source-change.status-removed',
+        '.st-devtools-source-change.status-removed > summary',
         defineInteraction(
             'toggle',
             '.st-devtools-source-change.status-removed',
@@ -252,7 +252,7 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'diff',
         'diff-full',
-        '.st-devtools-full-diff',
+        '.st-devtools-full-diff > summary',
         defineInteraction('toggle', '.st-devtools-full-diff', { state: 'open' }),
     ),
 

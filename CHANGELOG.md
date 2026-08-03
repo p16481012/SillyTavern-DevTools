@@ -1,5 +1,19 @@
 # 변경 기록
 
+## 0.15.3 - 2026-08-04
+
+### guided learning rail 전면 재설계
+
+- 실습 단계의 floating overlay·spotlight·대상 주변 자동 배치·scroll/resize geometry 추적을 제거하고 실제 제품 레이아웃 안의 guided learning rail로 교체
+- 데스크톱에서는 실제 콘텐츠 옆 side rail, 좁은 화면에서는 콘텐츠 위 top rail에 현재 장·전체/장별 진행률·현재 할 일·완료 기준과 이전·다음·건너뛰기를 일관되게 표시
+- 첫 실행 초대만 modal dialog로 유지하고 실습 중에는 제품 콘텐츠와 rail을 함께 사용할 수 있는 complementary 구조로 전환
+- 기존 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5의 6개 주제·38단계와 920·1,080·1,248 토큰 분리 더미 session 경계를 유지
+- `답변 형식이 JSON에서 XML로 바뀐 이유 찾기`를 하나의 사건으로 삼아 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 장 목표와 카피를 연결
+- 현재 단계와 관계없는 제품 control의 임시 비활성화와 click/focus 차단을 제거하고, 사용자가 연습 session 안에서 안전하게 다른 화면을 탐색할 수 있도록 변경
+- disclosure 전체 카드 대신 실제 `summary`를 비롯한 button·input·select 등 조작 대상을 직접 강조하고, rail의 `화면에서 보기`로 대상 탭·스크롤·focus를 복구
+- guided learning rail을 새로 제안할 수 있도록 최소 온보딩 상태 키를 `st-devtools:onboarding:v3`로 갱신하고 건너뛰기·완료만 저장
+- 실습 중 snapshot store 추가·삭제·보관, provider·Semantic Inspector, 클립보드와 export를 호출하지 않고 종료 시 원래 live 탭·선택·타임라인·캡처 상태를 복구하는 격리 계약 유지
+
 ## 0.15.2 - 2026-08-03
 
 ### hands-on 안내 위치·가독성 패치

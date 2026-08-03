@@ -270,12 +270,12 @@ test('one bottom app tablist exposes all five content functions exactly once', a
     const primaryRegions = sourceBlock(build, 'this.primaryRegions = [', '];');
     assert.match(
         primaryRegions,
-        /this\.primaryRegions = \[\s*header,\s*this\.content,\s*tabList,\s*$/u,
+        /this\.primaryRegions = \[\s*header,\s*workspace,\s*tabList,\s*$/u,
     );
     const windowChildren = sourceBlock(build, 'this.window.append(', ');');
     assert.match(
         windowChildren,
-        /this\.window\.append\(\s*header,\s*this\.content,\s*tabList,/u,
+        /this\.window\.append\(\s*header,\s*workspace,\s*tabList,/u,
     );
     assert.doesNotMatch(
         ui,

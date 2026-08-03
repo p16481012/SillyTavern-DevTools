@@ -19,6 +19,7 @@ import {
     SemanticInspectorMemoryCache,
 } from '../src/semantic-inspector.js';
 import { SemanticProviderEvaluationHarness } from '../src/semantic-provider-evaluation-harness.js';
+import { ONBOARDING_STEPS } from '../src/onboarding.js';
 
 const fixtureParameters = new URLSearchParams(globalThis.location?.search ?? '');
 
@@ -31,6 +32,8 @@ function fixtureCount(name, minimum, maximum) {
 
 const requestedFixtureSize = fixtureCount('fixtureSize', 3, 5_000);
 const requestedSourceCount = fixtureCount('sourceCount', 2, 5_000);
+const requestedPanelWidth = fixtureCount('panelWidth', 280, 1_200);
+const requestedPanelHeight = fixtureCount('panelHeight', 360, 900);
 
 function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     const provider = additions.provider ?? additions.chatCompletionSource ?? 'openai';
@@ -68,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.15.2',
+        extensionVersion: '0.15.3',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1447,11 +1450,28 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.15.2',
+    version: '0.15.3',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
 });
+
+function applyRequestedPanelGeometry() {
+    if (!devTools.window || (requestedPanelWidth == null && requestedPanelHeight == null)) return;
+
+    if (requestedPanelWidth != null) {
+        devTools.window.style.width = `${requestedPanelWidth}px`;
+        devTools.window.style.minWidth = '0';
+    }
+    if (requestedPanelHeight != null) {
+        devTools.window.style.height = `${requestedPanelHeight}px`;
+    }
+
+    const panelWidth = requestedPanelWidth ?? devTools.window.getBoundingClientRect().width;
+    devTools.window.style.left = `${Math.max(0, Math.round((window.innerWidth - panelWidth) / 2))}px`;
+    devTools.window.style.top = '8px';
+    devTools.window.style.transform = 'none';
+}
 document.body.dataset.fixtureSchema = '7';
 document.body.dataset.fixtureSize = String(timeline.length);
 document.body.dataset.sourceCount = String(
@@ -1516,9 +1536,13 @@ retroThemeToggle?.addEventListener?.('click', () => {
     setRetroThemeConflict(!document.body.classList?.contains?.('sandbox-retro-theme'));
 });
 
-document.getElementById('sandbox-launcher').addEventListener('click', () => devTools.open());
+document.getElementById('sandbox-launcher').addEventListener('click', async () => {
+    await devTools.open();
+    applyRequestedPanelGeometry();
+});
 document.getElementById('sandbox-onboarding')?.addEventListener('click', async () => {
     await devTools.open();
+    applyRequestedPanelGeometry();
     devTools.startOnboarding({ invitation: true, force: true });
 });
 document.getElementById('sandbox-storage-error').addEventListener('click', () => {
@@ -1637,7 +1661,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.15.2',
+        extensionVersion: '0.15.3',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1684,7 +1708,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.15.2',
+        version: '0.15.3',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1837,13 +1861,42 @@ function equalStringLists(left = [], right = []) {
 function sandboxOnboardingStatus() {
     const step = devTools.currentOnboardingStep();
     const session = devTools.onboardingSession;
+    const groupSteps = step
+        ? ONBOARDING_STEPS.filter(({ group }) => group === step.group)
+        : [];
+    const targetMatches = step?.target
+        ? [...(devTools.window?.querySelectorAll(step.target) ?? [])]
+        : [];
+    const target = targetMatches[0] ?? null;
     return {
         phase: devTools.onboardingPhase,
         stepId: step?.id ?? null,
         group: step?.group ?? null,
         index: devTools.tutorialIsActive() ? devTools.onboardingStepIndex : null,
+        total: ONBOARDING_STEPS.length,
+        groupIndex: step
+            ? groupSteps.findIndex(({ id }) => id === step.id)
+            : null,
+        groupTotal: groupSteps.length || null,
         complete: Boolean(devTools.tutorialIsActive() && devTools.onboardingStepComplete),
         target: step?.target ?? null,
+        targetState: {
+            found: Boolean(target),
+            count: targetMatches.length,
+            inRail: Boolean(target && devTools.onboardingRail?.contains(target)),
+            describedByTask: target?.getAttribute?.('aria-describedby')
+                === 'st-devtools-onboarding-task',
+        },
+        rail: {
+            mounted: Boolean(devTools.onboardingRail?.isConnected),
+            visible: Boolean(devTools.onboardingRail && !devTools.onboardingRail.hidden),
+            group: devTools.onboardingRail?.dataset?.group ?? null,
+            step: devTools.onboardingRail?.dataset?.step ?? null,
+        },
+        invitationVisible: Boolean(
+            devTools.onboardingInvitationOverlay
+            && !devTools.onboardingInvitationOverlay.hidden
+        ),
         tab: devTools.activeTabId(),
         selectedId: devTools.activeSelectedId(),
         timelineCount: devTools.activeTimeline().length,
@@ -1914,7 +1967,7 @@ async function performSandboxOnboardingAction() {
     }
 
     const scope = interaction.event === 'panel'
-        ? devTools.onboardingPanel
+        ? devTools.onboardingRail
         : devTools.window;
     const target = scope?.querySelector(interaction.selector) ?? null;
     if (!target) {
@@ -1974,6 +2027,7 @@ const sandboxOnboardingHook = Object.freeze({
             devTools.closeOnboarding({ persist: null, restoreFocus: false });
         }
         await devTools.open();
+        applyRequestedPanelGeometry();
         onboardingIsolationBaseline = sandboxIsolationSnapshot();
         const started = devTools.startOnboarding({ invitation: false, force: true });
         return {

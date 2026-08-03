@@ -60,12 +60,20 @@ test('hands-on practice owns an isolated two-snapshot view instead of borrowing 
         onboardingStepSkipped: true,
         primaryRegions: [],
         onboardingSessionBadge: { hidden: true },
+        onboardingInvitationOverlay: { hidden: false },
+        onboardingRail: {
+            hidden: true,
+            focus() {},
+        },
         window: {
             setAttribute() {},
             classList: { add() {} },
             addEventListener(type) {
                 listeners.push(type);
             },
+        },
+        tutorialIsActive() {
+            return DevToolsWindow.prototype.tutorialIsActive.call(this);
         },
         updateCaptureStatus() {},
         render() {},
@@ -80,9 +88,11 @@ test('hands-on practice owns an isolated two-snapshot view instead of borrowing 
         ['tutorial:snapshot:1', 'tutorial:snapshot:2'],
     );
     assert.equal(state.onboardingSessionBadge.hidden, false);
+    assert.equal(state.onboardingInvitationOverlay.hidden, true);
+    assert.equal(state.onboardingRail.hidden, false);
     assert.deepEqual(
         listeners,
-        ['click', 'change', 'input', 'toggle', 'focusin'],
+        ['click', 'change', 'input', 'toggle'],
     );
 });
 
@@ -470,22 +480,50 @@ test('required actions gate Next while step skip and Escape remain available', a
         view,
         /this\.onboardingStepSkipButton\.hidden = !step\.interaction\s*\|\| this\.onboardingStepComplete/u,
     );
+    assert.match(view, /if \(stepChanged\) this\.onboardingBody\.scrollTop = 0/u);
+    assert.match(
+        view,
+        /!stepChanged && bodyHadFocus && this\.onboardingStepComplete[\s\S]*?this\.onboardingNextButton\.focus\(\{ preventScroll: true \}\)/u,
+    );
+    assert.match(
+        view,
+        /this\.onboardingStepComplete && step\.interaction[\s\S]*?t\('onboarding\.taskComplete'\)/u,
+    );
 });
 
 test('only the invitation is modal and inert; practice stays visibly identified', async () => {
     const ui = await readFile(UI_URL, 'utf8');
     const style = await readFile(STYLE_URL, 'utf8');
+    const invitation = sourceBlock(
+        ui,
+        '\n    buildOnboardingInvitationLayer() {',
+        '\n    buildOnboardingRail() {',
+    );
+    const rail = sourceBlock(
+        ui,
+        '\n    buildOnboardingRail() {',
+        '\n    onboardingIsOpen() {',
+    );
     const start = sourceBlock(ui, '\n    startOnboarding({ invitation = true, force = false } = {}) {', '\n    closeOnboarding(');
     const close = sourceBlock(ui, '\n    closeOnboarding(', '\n    beginOnboardingPractice() {');
     const begin = sourceBlock(ui, '\n    beginOnboardingPractice() {', '\n    nextOnboardingStep() {');
-    const view = sourceBlock(ui, '\n    updateOnboardingView() {', '\n    renderOnboardingInvitation() {');
     const render = sourceBlock(ui, '\n    render() {', '\n    renderSnapshotPrivacyNotice(');
 
+    assert.match(invitation, /setAttribute\('role', 'dialog'\)/u);
+    assert.match(invitation, /setAttribute\('aria-modal', 'true'\)/u);
+    assert.match(rail, /element\('aside'/u);
+    assert.match(rail, /setAttribute\('role', 'complementary'\)/u);
+    assert.match(rail, /setAttribute\('aria-labelledby', 'st-devtools-onboarding-step-title'\)/u);
+    assert.doesNotMatch(rail, /aria-modal/u);
     assert.match(start, /if \(invitation\) \{[\s\S]*?region\.inert = true;[\s\S]*?aria-hidden/u);
+    assert.match(start, /this\.onboardingInvitationOverlay\.hidden = false/u);
+    assert.match(start, /this\.onboardingRail\.hidden = true/u);
     assert.match(begin, /region\.inert = false;[\s\S]*?removeAttribute\('aria-hidden'\)/u);
     assert.match(begin, /this\.window\.setAttribute\('aria-modal', 'true'\)/u);
-    assert.match(view, /setAttribute\('role', 'dialog'\)[\s\S]*?setAttribute\('aria-modal', 'true'\)/u);
-    assert.match(view, /setAttribute\('role', 'complementary'\)[\s\S]*?setAttribute\('aria-modal', 'false'\)/u);
+    assert.match(begin, /this\.onboardingInvitationOverlay\.hidden = true/u);
+    assert.match(begin, /this\.onboardingRail\.hidden = false/u);
+    assert.match(close, /this\.onboardingInvitationOverlay\.hidden = true/u);
+    assert.match(close, /this\.onboardingRail\.hidden = true/u);
     assert.match(ui, /className: 'st-devtools-onboarding-session-badge'/u);
     assert.match(begin, /this\.onboardingSessionBadge\.hidden = false/u);
     assert.match(close, /this\.onboardingSessionBadge\.hidden = true/u);
@@ -527,7 +565,7 @@ test('automatic invitation is offered at most once per panel session', async () 
         onboardingAutoStart: true,
         onboardingState: {
             schemaVersion: 1,
-            tourVersion: 2,
+            tourVersion: 3,
             disposition: 'new',
         },
         startOnboarding() {
@@ -554,157 +592,280 @@ test('sandbox exposes deterministic walkthrough controls without automatic produ
     assert.match(sandbox, /document\.body\.dataset\.semanticNetworkCallCount = '0'/u);
 });
 
-test('walkthrough geometry follows the visible target and never leaves a stale highlight', () => {
-    const makeClassList = () => {
-        const values = new Set();
-        return {
-            add(...names) {
-                for (const name of names) values.add(name);
-            },
-            remove(...names) {
-                for (const name of names) values.delete(name);
-            },
-            contains(name) {
-                return values.has(name);
-            },
-            toggle(name, force) {
-                if (force) values.add(name);
-                else values.delete(name);
-            },
-        };
-    };
-    const style = {};
-    const panel = {
-        classList: makeClassList(),
-        dataset: {},
-        style,
-        removeAttribute(name) {
-            if (name === 'style') {
-                for (const key of Object.keys(style)) delete style[key];
-            }
-        },
-        getBoundingClientRect() {
-            return { width: 400, height: 260 };
-        },
-    };
-    const highlightStyle = {};
-    const highlight = {
-        hidden: true,
-        classList: makeClassList(),
-        style: highlightStyle,
-        removeAttribute(name) {
-            if (name === 'style') {
-                for (const key of Object.keys(highlightStyle)) delete highlightStyle[key];
-            }
-        },
-    };
-    const overlay = { classList: makeClassList() };
-    const windowRect = {
-        left: 0,
-        top: 0,
-        right: 1000,
-        bottom: 700,
-        width: 1000,
-        height: 700,
-    };
-    let targetRect = {
-        left: 100,
-        top: 300,
-        right: 300,
-        bottom: 340,
-        width: 200,
-        height: 40,
-    };
-    const state = {
-        onboardingPhase: 'steps',
-        onboardingPanel: panel,
-        onboardingOverlay: overlay,
-        onboardingHighlight: highlight,
-        onboardingTargetStatus: { hidden: true },
-        onboardingTarget: { getBoundingClientRect: () => targetRect },
-        window: { getBoundingClientRect: () => windowRect },
-        onboardingIsOpen: () => true,
-    };
-
-    DevToolsWindow.prototype.positionOnboarding.call(state);
-    assert.equal(highlight.hidden, false);
-    assert.equal(panel.dataset.placement, 'right');
-    assert.ok(Number.parseFloat(panel.style.left) > targetRect.right);
-    const firstHighlightTop = highlight.style.top;
-
-    targetRect = { ...targetRect, top: 110, bottom: 150 };
-    DevToolsWindow.prototype.positionOnboarding.call(state);
-    assert.notEqual(highlight.style.top, firstHighlightTop);
-    assert.equal(panel.classList.contains('is-target-hidden'), false);
-
-    targetRect = { ...targetRect, top: -180, bottom: -140 };
-    DevToolsWindow.prototype.positionOnboarding.call(state);
-    assert.equal(highlight.hidden, true);
-    assert.equal(panel.classList.contains('is-target-hidden'), true);
-    assert.equal(state.onboardingTargetStatus.hidden, false);
-    assert.equal(panel.dataset.placement, 'edge-top');
-});
-
-test('walkthrough installs bounded geometry observers and offers target recovery', async () => {
+test('practice renders the product workspace and learning rail as in-flow siblings', async () => {
     const ui = await readFile(UI_URL, 'utf8');
     const style = await readFile(STYLE_URL, 'utf8');
-    const start = sourceBlock(ui, '\n    startOnboarding({ invitation = true, force = false } = {}) {', '\n    cancelOnboardingCaptureWait() {');
-    const close = sourceBlock(ui, '\n    closeOnboarding(', '\n    beginOnboardingPractice() {');
-    const position = sourceBlock(ui, '\n    positionOnboarding() {', '\n    buildCaptureStatus() {');
-
-    assert.match(start, /addEventListener\(\s*'scroll',[\s\S]*?capture: true,[\s\S]*?passive: true/u);
-    assert.match(start, /globalThis\.ResizeObserver/u);
-    assert.match(close, /removeEventListener\(\s*'scroll',[\s\S]*?true/u);
-    assert.match(close, /onboardingGeometryObserver\?\.disconnect\(\)/u);
-    assert.match(position, /visibleRect\.width <= 0 \|\| visibleRect\.height <= 0/u);
-    assert.match(position, /panel\.classList\.add\('is-target-hidden'\)/u);
-    assert.match(position, /const directions = compact\s*\? \['below', 'above'\]/u);
-    assert.match(style, /\.st-devtools-onboarding-highlight::after/u);
-    assert.match(style, /\.st-devtools-onboarding-panel\.is-target-hidden/u);
-    assert.doesNotMatch(
-        sourceBlock(
-            style,
-            ".st-devtools-onboarding-overlay[data-phase='steps']",
-            '@keyframes st-devtools-focus',
-        ),
-        /9999px/u,
+    const build = sourceBlock(ui, '\n    build() {', '\n    buildOnboardingInvitationLayer() {');
+    const railBuilder = sourceBlock(
+        ui,
+        '\n    buildOnboardingRail() {',
+        '\n    onboardingIsOpen() {',
     );
-    assert.doesNotMatch(style, /bottom: calc\(74px/u);
+    const railStyle = sourceBlock(
+        style,
+        '.st-devtools-onboarding-rail {',
+        '.st-devtools-onboarding-rail-header {',
+    );
 
-    let scrolled = 0;
-    let positioned = 0;
+    assert.match(build, /const rail = this\.buildOnboardingRail\(\)/u);
+    assert.match(build, /className: 'st-devtools-workspace'/u);
+    assert.match(build, /workspace\.append\(this\.content, rail\)/u);
+    assert.match(build, /this\.window\.append\(\s*header,\s*workspace,\s*tabList/u);
+    assert.match(railBuilder, /element\('aside',[\s\S]*?st-devtools-onboarding-rail/u);
+    assert.match(railBuilder, /setAttribute\('role', 'complementary'\)/u);
+    assert.match(style, /\.st-devtools-workspace\s*\{[\s\S]*?display: grid/u);
+    assert.match(railStyle, /position: relative/u);
+    assert.doesNotMatch(railStyle, /position:\s*(?:absolute|fixed)/u);
+});
+
+test('practice has no floating geometry, scroll tracking, or legacy highlight layer', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const style = await readFile(STYLE_URL, 'utf8');
+    const guidedStyle = sourceTail(
+        style,
+        '/* Guided learning rail: practice stays in the product layout instead of floating over it. */',
+    );
+    const start = sourceBlock(
+        ui,
+        '\n    startOnboarding({ invitation = true, force = false } = {}) {',
+        '\n    cancelOnboardingCaptureWait() {',
+    );
+    const close = sourceBlock(ui, '\n    closeOnboarding(', '\n    beginOnboardingPractice() {');
+
+    assert.doesNotMatch(start, /ResizeObserver|addEventListener\(\s*'scroll'/u);
+    assert.doesNotMatch(close, /ResizeObserver|removeEventListener\(\s*'scroll'/u);
+    assert.doesNotMatch(
+        ui,
+        /onboarding(?:GeometryObserver|Highlight|PositionFrame|ScrollHandler|ResizeHandler)|positionOnboarding|requestOnboardingPosition/u,
+    );
+    assert.doesNotMatch(guidedStyle, /\.st-devtools-onboarding-(?:overlay|highlight)(?:\s|\{|\[|:)/u);
+    assert.match(guidedStyle, /\.st-devtools-onboarding-invitation-overlay\s*\{/u);
+});
+
+test('unrelated practice interactions remain available and are never cancelled', async () => {
+    let prevented = 0;
+    let stopped = 0;
+    const step = onboardingStep('explorer-tab');
+    const state = {
+        onboardingApplyingSkippedState: false,
+        onboardingRail: { contains: () => false },
+        tutorialIsActive: () => true,
+        currentOnboardingStep: () => step,
+        onboardingInteractionCandidate: () => null,
+    };
+    const event = {
+        type: 'click',
+        target: {},
+        preventDefault() {
+            prevented += 1;
+        },
+        stopImmediatePropagation() {
+            stopped += 1;
+        },
+    };
+
+    DevToolsWindow.prototype.handleOnboardingInteraction.call(state, event);
+    assert.equal(prevented, 0);
+    assert.equal(stopped, 0);
+
+    const ui = await readFile(UI_URL, 'utf8');
+    const interaction = sourceBlock(
+        ui,
+        '\n    handleOnboardingInteraction(event) {',
+        '\n    clearOnboardingTarget() {',
+    );
+    assert.doesNotMatch(interaction, /preventDefault|stopImmediatePropagation/u);
+});
+
+test('target recovery uses the content viewport, centers explicit requests, and focuses the target', () => {
+    const scrollOptions = [];
+    const focusOptions = [];
+    const classNames = new Set();
+    const focusControl = {
+        focus(options) {
+            focusOptions.push(options);
+        },
+    };
     const target = {
+        offsetWidth: 40,
+        classList: {
+            add(name) {
+                classNames.add(name);
+            },
+            remove(name) {
+                classNames.delete(name);
+            },
+        },
         getBoundingClientRect: () => ({
-            left: 10,
-            top: 900,
-            right: 110,
-            bottom: 940,
+            left: 40,
+            top: 520,
+            right: 180,
+            bottom: 560,
         }),
+        matches: () => false,
+        querySelector: () => focusControl,
         scrollIntoView(options) {
-            scrolled += 1;
-            assert.equal(options.block, 'start');
+            scrollOptions.push(options);
         },
     };
     const state = {
         onboardingTarget: target,
+        onboardingLocateTimer: null,
+        onboardingTargetAddedTabIndex: false,
+        content: {
+            contains: () => true,
+            getBoundingClientRect: () => ({
+                left: 0,
+                top: 100,
+                right: 400,
+                bottom: 500,
+            }),
+        },
         window: {
             getBoundingClientRect: () => ({
                 left: 0,
                 top: 0,
-                right: 390,
+                right: 1000,
                 bottom: 700,
-                width: 390,
             }),
         },
-        content: { contains: () => true },
-        requestOnboardingPosition() {
-            positioned += 1;
-        },
     };
+
     assert.equal(
-        DevToolsWindow.prototype.focusOnboardingTarget.call(state, { nearestOnly: true }),
+        DevToolsWindow.prototype.focusOnboardingTarget.call(
+            state,
+            { nearestOnly: true },
+        ),
         true,
     );
-    assert.equal(scrolled, 1);
-    assert.equal(positioned, 1);
+    assert.equal(scrollOptions[0].block, 'nearest');
+
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(
+            state,
+            { focus: true },
+        ),
+        true,
+    );
+    assert.equal(scrollOptions[1].block, 'center');
+    assert.deepEqual(focusOptions, [{ preventScroll: true }]);
+    assert.equal(classNames.has('is-locating'), true);
+    clearTimeout(state.onboardingLocateTimer);
+});
+
+test('onboarding target descriptions and temporary tabindex are restored exactly', () => {
+    const exercise = (initialAttributes = {}) => {
+        const attributes = new Map(Object.entries(initialAttributes));
+        const classes = new Set();
+        let focused = 0;
+        const target = {
+            offsetWidth: 20,
+            classList: {
+                add(name) {
+                    classes.add(name);
+                },
+                remove(name) {
+                    classes.delete(name);
+                },
+            },
+            getAttribute(name) {
+                return attributes.get(name) ?? null;
+            },
+            setAttribute(name, value) {
+                attributes.set(name, String(value));
+            },
+            removeAttribute(name) {
+                attributes.delete(name);
+            },
+            matches(selector) {
+                return selector.includes('[tabindex]') && attributes.has('tabindex');
+            },
+            querySelector: () => null,
+            getBoundingClientRect: () => ({
+                left: 10,
+                top: 10,
+                right: 60,
+                bottom: 40,
+            }),
+            scrollIntoView() {},
+            focus() {
+                focused += 1;
+            },
+        };
+        const step = onboardingStep('capture-purpose');
+        const state = {
+            onboardingTarget: null,
+            onboardingTargetDescriptionId: null,
+            onboardingTargetAddedTabIndex: false,
+            onboardingLocateTimer: null,
+            onboardingIsOpen: () => true,
+            tutorialIsActive: () => true,
+            currentOnboardingStep: () => step,
+            window: {
+                querySelector: () => target,
+                getBoundingClientRect: () => ({
+                    left: 0,
+                    top: 0,
+                    right: 400,
+                    bottom: 300,
+                }),
+            },
+            content: {
+                contains: () => false,
+            },
+            clearOnboardingTarget() {
+                return DevToolsWindow.prototype.clearOnboardingTarget.call(this);
+            },
+        };
+
+        DevToolsWindow.prototype.refreshOnboardingTarget.call(state);
+        assert.equal(attributes.get('aria-describedby'), 'st-devtools-onboarding-task');
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, { focus: true });
+        DevToolsWindow.prototype.clearOnboardingTarget.call(state);
+        return { attributes, classes, focused, state };
+    };
+
+    const temporary = exercise();
+    assert.equal(temporary.focused, 1);
+    assert.equal(temporary.attributes.has('tabindex'), false);
+    assert.equal(temporary.attributes.has('aria-describedby'), false);
+    assert.equal(temporary.classes.has('st-devtools-onboarding-target'), false);
+    assert.equal(temporary.state.onboardingTarget, null);
+
+    const existing = exercise({
+        'aria-describedby': 'existing-description',
+        tabindex: '0',
+    });
+    assert.equal(existing.attributes.get('tabindex'), '0');
+    assert.equal(existing.attributes.get('aria-describedby'), 'existing-description');
+});
+
+test('learning rail uses a desktop side column and a narrow top row without overlays', async () => {
+    const style = await readFile(STYLE_URL, 'utf8');
+    const guidedStyle = sourceTail(
+        style,
+        '/* Guided learning rail: practice stays in the product layout instead of floating over it. */',
+    );
+    const desktop = sourceBlock(
+        style,
+        '.st-devtools-window.is-onboarding-practice .st-devtools-workspace {',
+        '.st-devtools-onboarding-rail[hidden]',
+    );
+    const narrow = sourceBlock(
+        style,
+        '@container (max-width: 899px) {',
+        '@media (max-width: 520px) {',
+    );
+
+    assert.match(
+        guidedStyle,
+        /\.st-devtools-window\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/u,
+    );
+    assert.match(desktop, /grid-template-columns:\s*minmax\(0, 1fr\) clamp\(320px, 34%, 380px\)/u);
+    assert.match(narrow, /grid-template-columns:\s*minmax\(0, 1fr\)/u);
+    assert.match(narrow, /grid-template-rows:\s*clamp\(190px, 38dvh, 260px\) minmax\(0, 1fr\)/u);
+    assert.match(narrow, /\.st-devtools-onboarding-rail\s*\{[\s\S]*?grid-row: 1/u);
+    assert.match(narrow, /\.st-devtools-content\s*\{[\s\S]*?grid-row: 2/u);
+    assert.doesNotMatch(guidedStyle, /\.st-devtools-onboarding-(?:overlay|highlight)(?:\s|\{|\[|:)/u);
+    assert.doesNotMatch(narrow, /position:\s*(?:absolute|fixed)/u);
 });

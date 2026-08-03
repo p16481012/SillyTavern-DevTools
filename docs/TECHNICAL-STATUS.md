@@ -1,4 +1,15 @@
-# v0.15.2 기술 구현 현황
+# v0.15.3 기술 구현 현황
+
+## v0.15.3 guided learning rail 전면 재설계
+
+- 첫 실행 초대만 modal dialog와 `inert` 경계를 사용합니다. 실습을 시작하면 modal overlay를 닫고 실제 콘텐츠와 guided learning rail을 같은 workspace에 렌더링합니다.
+- 데스크톱은 실제 콘텐츠 옆 side rail, 좁은 화면은 콘텐츠 위 top rail을 사용합니다. rail은 현재 장·6개 장 여정·전체/장별 진행률·현재 할 일·완료 기준·이전·다음·건너뛰기를 한곳에 유지합니다.
+- floating coach panel·spotlight·대상 주변 자동 배치와 scroll/resize geometry 추적을 실습 경로에서 제거했습니다. 따라서 콘텐츠를 스크롤해도 안내가 화면 위를 따라다니거나 제품 control을 덮지 않습니다.
+- 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5의 6개 주제·38단계는 유지합니다. 전체 흐름은 `답변 형식이 JSON에서 XML로 바뀐 이유 찾기` 한 사건을 캡처부터 원본 검색까지 추적하도록 연결했습니다.
+- 단계 완료 감지는 click/change/input/toggle 이벤트를 관찰할 뿐 현재 단계와 관계없는 control을 비활성화하거나 click/focus를 차단하지 않습니다. 사용자는 분리 연습 session 안에서 다른 제품 화면도 안전하게 탐색할 수 있습니다.
+- target은 전체 카드가 아니라 실제 button·input·select 또는 disclosure의 직접 `summary`를 가리킵니다. rail의 `화면에서 보기`는 필요한 탭을 선택하고 target을 스크롤한 뒤 가능한 요소에 focus합니다.
+- 새 rail 제안을 한 번 표시할 수 있도록 현재 최소 상태 키는 `st-devtools:onboarding:v3`이며 `skipped` 또는 `completed`만 저장합니다.
+- 920·1,080·1,248 토큰 fixture와 별도 mutable view session, 실제 snapshot store·provider·Semantic Inspector·clipboard·export 비접근, 종료 시 live 탭·선택·타임라인·캡처 상태 복구 계약을 유지합니다.
 
 ## v0.15.2 hands-on 안내 위치·가독성 안정화
 
@@ -345,12 +356,12 @@
 
 - 말투·안전 의미의 정적 atom·relation 양성/음성 경계를 과잉 탐지 없이 추가하는 분류 설계
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
-- 실제 초보자 검토에서 확인되는 워크스루 문구·예시 밀도·강조 위치 보정
+- 실제 초보자 검토에서 확인되는 rail의 장별 질문·할 일·완료 기준·예시 밀도 보정
 
-선택형 온보딩의 기본 계약은 v0.15.1에서 완료했고 위치·가독성 계약은 v0.15.2에서 보완했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+선택형 온보딩의 기본 계약은 v0.15.1에서 완료했고 v0.15.2의 floating 안내 위치 보완은 v0.15.3에서 제품 레이아웃 안의 guided learning rail로 교체했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
 1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
-3. 온보딩은 실제 초보자 검토 뒤 문구와 강조 위치를 보정하되 6개 주제·38단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.
+3. 온보딩은 실제 초보자 검토 뒤 rail 카피와 장 흐름을 보정하되 6개 주제·38단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.
