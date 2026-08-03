@@ -372,11 +372,11 @@ test('compact mobile layout skips restored geometry, persisted resize, and dragg
     );
     assert.match(
         observe,
-        /const save = \(\) => \{\s*if \(this\.usesCompactLayout\(\)\) return;/u,
+        /const save = \(\) => \{\s*if \(this\.usesCompactLayout\(\) \|\| this\.tutorialIsActive\(\)\) return;/u,
     );
     assert.match(
         dragging,
-        /pointerdown[\s\S]*?if \(this\.usesCompactLayout\(\)\) return;[\s\S]*?if \(event\.target\.closest\('button'\)\) return;/u,
+        /pointerdown[\s\S]*?if \(this\.usesCompactLayout\(\) \|\| this\.tutorialIsActive\(\)\) return;[\s\S]*?if \(event\.target\.closest\('button'\)\) return;/u,
     );
     assert.match(compact, /window\.matchMedia\('\(max-width: 700px\)'\)\.matches/u);
     assert.match(compact, /Number\(window\.innerWidth\) <= 700/u);
@@ -527,7 +527,7 @@ test('rule results separate AI mode and settings from local supporting sections'
     );
     assert.match(
         rules,
-        /host\.appendChild\(list\);\s*this\.appendRuleSupportingSections\(/u,
+        /host\.appendChild\(list\);[\s\S]*?if \(!tutorial\)[\s\S]*?this\.appendRuleSupportingSections\(/u,
     );
     assert.match(
         supporting,
@@ -536,7 +536,7 @@ test('rule results separate AI mode and settings from local supporting sections'
     assert.doesNotMatch(supporting, /renderSemanticInspectorDisclosure/u);
     assert.doesNotMatch(supporting, /renderDeferredRuleSettings/u);
     assert.doesNotMatch(supporting, /renderDeferredComparisonPolicySettings/u);
-    assert.match(rules, /if \(this\.ruleViewMode === 'ai'\)/u);
+    assert.match(rules, /if \(!tutorial && this\.ruleViewMode === 'ai'\)/u);
     assert.match(rules, /this\.renderSemanticInspectorSettings\(\)/u);
     assert.match(rules, /this\.renderSemanticInspector\(snapshot, analysis, findings\)/u);
 });

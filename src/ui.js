@@ -13,6 +13,7 @@ import {
 } from './diagnostics.js';
 import {
     SEARCH_QUERY_MAX_LENGTH,
+    searchSnapshot,
     serializeSnapshot,
     snapshotProvider,
 } from './model.js';
@@ -129,6 +130,7 @@ import {
     saveSemanticPromptSettings,
 } from './semantic-prompt-settings.js';
 import {
+    ONBOARDING_GROUPS,
     ONBOARDING_VERSION,
     ONBOARDING_STEPS,
     ONBOARDING_STORAGE_KEY,
@@ -136,6 +138,7 @@ import {
     saveOnboardingState,
     shouldAutoStartOnboarding,
 } from './onboarding.js';
+import { createOnboardingSession } from './onboarding-fixture.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -466,6 +469,14 @@ function formatTimestamp(timestamp) {
     }).format(new Date(timestamp));
 }
 
+function formatSnapshotHeading(snapshot, tutorial = false) {
+    const timestamp = formatTimestamp(snapshot?.timestamp);
+    const label = tutorial && typeof snapshot?.tutorialLabel === 'string'
+        ? snapshot.tutorialLabel.trim().slice(0, 40)
+        : '';
+    return label ? `${label} · ${timestamp}` : timestamp;
+}
+
 function formatDelta(value) {
     const number = Number(value) || 0;
     return `${number > 0 ? '+' : ''}${number}`;
@@ -764,7 +775,7 @@ async function copyWithFeedback(text, successKey) {
     }
 }
 
-function copyButton(labelKey, text, successKey) {
+function copyButton(labelKey, text, successKey, runTask = (task) => task()) {
     const button = element('button', {
         className: 'menu_button st-devtools-copy-button',
         type: 'button',
@@ -777,7 +788,7 @@ function copyButton(labelKey, text, successKey) {
         element('span', { text: t(labelKey) }),
     );
     button.addEventListener('click', () => {
-        void copyWithFeedback(text, successKey);
+        void runTask(() => copyWithFeedback(text, successKey));
     });
     return button;
 }
@@ -972,7 +983,30 @@ export class DevToolsWindow {
         this.onboardingLauncher = null;
         this.onboardingPreviouslyFocused = null;
         this.onboardingPositionFrame = null;
+        this.onboardingSession = null;
+        this.onboardingStepComplete = false;
+        this.onboardingStepSkipped = false;
+        this.onboardingApplyingSkippedState = false;
+        this.onboardingTaskStatus = null;
+        this.onboardingStepSkipButton = null;
+        this.onboardingTarget = null;
+        this.onboardingTargetDescriptionId = null;
+        this.onboardingDisabledControls = new Map();
+        this.onboardingInteractionHandler = (event) => {
+            this.handleOnboardingInteraction(event);
+        };
+        this.onboardingFocusHandler = (event) => {
+            this.handleOnboardingFocus(event);
+        };
+        this.onboardingResizeHandler = () => {
+            if (this.onboardingIsOpen()) this.requestOnboardingPosition();
+        };
+        this.onboardingResizeListening = false;
+        this.onboardingCaptureTimer = null;
+        this.onboardingCaptureWaitResolve = null;
+        this.onboardingSessionBadge = null;
         this.storageToolsStatus = null;
+        this.activeBlockingTaskCount = 0;
         this.diagnosticCompareFiles = [];
         this.primaryRegions = [];
         this.storageErrors = [];
@@ -996,9 +1030,56 @@ export class DevToolsWindow {
             ?? this.currentChatId();
     }
 
+    tutorialIsActive() {
+        return Boolean(this.onboardingSession && this.onboardingPhase === 'steps');
+    }
+
+    activeTimeline() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.timeline
+            : this.timeline;
+    }
+
+    activeTimelineTotalCount() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.timeline.length
+            : this.timelineTotalCount;
+    }
+
+    activeSelectedId() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.selectedId
+            : this.selectedId;
+    }
+
+    activeOpenSourceIds() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.openSourceIds
+            : this.openSourceIds;
+    }
+
+    activeExplorerIncludedOnly() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.explorerIncludedOnly
+            : this.explorerIncludedOnly;
+    }
+
+    activeTimelineSnapshotsOpen() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.timelineSnapshotsOpen
+            : this.timelineSnapshotsOpen;
+    }
+
+    activeTabId() {
+        return this.tutorialIsActive()
+            ? this.onboardingSession.tabId
+            : this.activeTab;
+    }
+
     selectedSnapshot() {
-        return this.timeline.find((snapshot) => snapshot.id === this.selectedId)
-            ?? this.timeline.at(-1)
+        const timeline = this.activeTimeline();
+        return timeline.find((snapshot) => snapshot.id === this.activeSelectedId())
+            ?? timeline.at(-1)
             ?? null;
     }
 
@@ -1025,6 +1106,11 @@ export class DevToolsWindow {
         const nextId = typeof snapshotId === 'string' && snapshotId.length > 0
             ? snapshotId
             : null;
+        if (this.tutorialIsActive()) {
+            if (this.onboardingSession.selectedId === nextId) return false;
+            this.onboardingSession.selectedId = nextId;
+            return true;
+        }
         if (this.selectedId === nextId) return false;
         this.invalidateAnalysisState();
         this.selectedId = nextId;
@@ -2012,12 +2098,13 @@ export class DevToolsWindow {
                 retentionPolicyChanged
                 || requested.timelineReadLimit !== previousPreferences.timelineReadLimit
             );
-            try {
-                let pruneResult = {
-                    snapshotCount: 0,
-                    affectedChatCount: 0,
-                    approximateBytes: 0,
-                };
+            await this.withActiveBlockingTask(async () => {
+                try {
+                    let pruneResult = {
+                        snapshotCount: 0,
+                        affectedChatCount: 0,
+                        approximateBytes: 0,
+                    };
                 if (
                     retentionPolicyChanged
                     && typeof this.store.getRetentionPolicyPreview === 'function'
@@ -2138,17 +2225,18 @@ export class DevToolsWindow {
                     'ST DevTools',
                 );
                 if (timelineSettingsChanged) this.scheduleSettingsRefresh();
-            } catch (error) {
-                console.error('[ST DevTools] Failed to apply storage settings.', error);
-                globalThis.toastr?.error?.(
-                    t('settings.saveFailed'),
-                    'ST DevTools',
-                );
-            } finally {
-                apply.disabled = false;
-                apply.textContent = applyLabel;
-                apply.removeAttribute('aria-busy');
-            }
+                } catch (error) {
+                    console.error('[ST DevTools] Failed to apply storage settings.', error);
+                    globalThis.toastr?.error?.(
+                        t('settings.saveFailed'),
+                        'ST DevTools',
+                    );
+                } finally {
+                    apply.disabled = false;
+                    apply.textContent = applyLabel;
+                    apply.removeAttribute('aria-busy');
+                }
+            });
         });
 
         panel.append(heading, form);
@@ -2203,13 +2291,22 @@ export class DevToolsWindow {
         };
     }
 
+    async withActiveBlockingTask(task) {
+        this.activeBlockingTaskCount += 1;
+        try {
+            return await task();
+        } finally {
+            this.activeBlockingTaskCount = Math.max(0, this.activeBlockingTaskCount - 1);
+        }
+    }
+
     async withBusyButton(button, task) {
         if (button.disabled) return null;
         const label = button.textContent;
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
         try {
-            return await task();
+            return await this.withActiveBlockingTask(task);
         } finally {
             button.disabled = false;
             button.textContent = label;
@@ -2617,10 +2714,15 @@ export class DevToolsWindow {
             type: 'button',
         });
         diagnosticImport.addEventListener('click', () => diagnosticImportInput.click());
-        diagnosticImportInput.addEventListener('change', async () => {
+        diagnosticImportInput.addEventListener('change', () => {
             const file = diagnosticImportInput.files?.[0];
             diagnosticImportInput.value = '';
-            if (file) await this.importDiagnosticFile(file);
+            if (file) {
+                void this.withBusyButton(
+                    diagnosticImport,
+                    () => this.importDiagnosticFile(file),
+                );
+            }
         });
 
         const clearCurrent = element('button', {
@@ -2630,7 +2732,10 @@ export class DevToolsWindow {
         });
         clearCurrent.addEventListener('click', async () => {
             if (!confirm(t('timeline.deleteConfirm'))) return;
-            await this.clearCurrentTimeline();
+            await this.withBusyButton(
+                clearCurrent,
+                () => this.clearCurrentTimeline(),
+            );
         });
         const clearAll = element('button', {
             className: 'menu_button',
@@ -2641,7 +2746,7 @@ export class DevToolsWindow {
             if (!confirm(t('storage.clearAllConfirm', {
                 count: this.storageSummary.snapshotCount ?? t('common.unknown'),
             }))) return;
-            await this.clearAllSnapshots();
+            await this.withBusyButton(clearAll, () => this.clearAllSnapshots());
         });
 
         const diagnosticStatus = this.renderDiagnosticImportStatus();
@@ -3256,10 +3361,16 @@ export class DevToolsWindow {
         const titleIcon = element('i', { className: 'fa-solid fa-code' });
         titleIcon.setAttribute('aria-hidden', 'true');
         this.captureStatusRegion = this.buildCaptureStatus();
+        this.onboardingSessionBadge = element('span', {
+            className: 'st-devtools-onboarding-session-badge',
+            text: t('onboarding.practiceBadge'),
+        });
+        this.onboardingSessionBadge.hidden = true;
         title.append(
             titleIcon,
             element('strong', { text: 'ST DevTools' }),
             this.captureStatusRegion,
+            this.onboardingSessionBadge,
             element('small', { text: `v${this.version}` }),
             element('span', { className: 'st-devtools-readonly-badge', text: t('app.readOnly') }),
         );
@@ -3370,9 +3481,6 @@ export class DevToolsWindow {
             className: 'st-devtools-onboarding-overlay',
         });
         overlay.hidden = true;
-        overlay.addEventListener('pointerdown', (event) => {
-            event.stopPropagation();
-        });
 
         const highlight = element('div', {
             className: 'st-devtools-onboarding-highlight',
@@ -3416,6 +3524,12 @@ export class DevToolsWindow {
         const actions = element('footer', {
             className: 'st-devtools-onboarding-actions',
         });
+        const skipStep = element('button', {
+            className: 'menu_button st-devtools-onboarding-skip-step',
+            text: t('onboarding.skipStep'),
+            type: 'button',
+        });
+        skipStep.addEventListener('click', () => this.skipOnboardingStep());
         const back = element('button', {
             className: 'menu_button',
             text: t('onboarding.back'),
@@ -3428,7 +3542,7 @@ export class DevToolsWindow {
             type: 'button',
         });
         next.addEventListener('click', () => this.nextOnboardingStep());
-        actions.append(back, next);
+        actions.append(skipStep, back, next);
         panel.append(header, body, actions);
         overlay.append(highlight, panel);
 
@@ -3440,9 +3554,7 @@ export class DevToolsWindow {
         this.onboardingBody = body;
         this.onboardingBackButton = back;
         this.onboardingNextButton = next;
-        globalThis.addEventListener?.('resize', () => {
-            if (this.onboardingIsOpen()) this.requestOnboardingPosition();
-        });
+        this.onboardingStepSkipButton = skipStep;
         return overlay;
     }
 
@@ -3469,6 +3581,9 @@ export class DevToolsWindow {
         return !semanticBusy
             && !semanticProviderBusy
             && !this.semanticEvaluationIsActive()
+            && this.activeBlockingTaskCount === 0
+            && !this.storageSummaryRebuildPromise
+            && !this.refreshButton?.disabled
             && !anotherDialogOpen;
     }
 
@@ -3500,15 +3615,23 @@ export class DevToolsWindow {
             return false;
         }
         this.onboardingPreviouslyFocused = document.activeElement;
-        this.onboardingPhase = invitation ? 'invitation' : 'steps';
         this.onboardingStepIndex = 0;
-        this.window.setAttribute('aria-modal', 'false');
-        for (const region of this.primaryRegions) {
-            region.inert = true;
-            region.setAttribute('aria-hidden', 'true');
-        }
+        this.onboardingPhase = invitation ? 'invitation' : 'idle';
         this.onboardingOverlay.hidden = false;
-        this.updateOnboardingView();
+        if (!this.onboardingResizeListening) {
+            globalThis.addEventListener?.('resize', this.onboardingResizeHandler);
+            this.onboardingResizeListening = true;
+        }
+        if (invitation) {
+            this.window.setAttribute('aria-modal', 'false');
+            for (const region of this.primaryRegions) {
+                region.inert = true;
+                region.setAttribute('aria-hidden', 'true');
+            }
+            this.updateOnboardingView();
+        } else {
+            this.beginOnboardingPractice();
+        }
         queueMicrotask(() => {
             if (this.onboardingIsOpen()) {
                 this.onboardingPanel?.focus({ preventScroll: true });
@@ -3517,12 +3640,37 @@ export class DevToolsWindow {
         return true;
     }
 
+    cancelOnboardingCaptureWait() {
+        if (this.onboardingCaptureTimer != null) {
+            clearTimeout(this.onboardingCaptureTimer);
+            this.onboardingCaptureTimer = null;
+        }
+        const resolveCaptureWait = this.onboardingCaptureWaitResolve;
+        this.onboardingCaptureWaitResolve = null;
+        resolveCaptureWait?.();
+    }
+
     closeOnboarding({ persist = null, restoreFocus = true } = {}) {
         if (!this.onboardingIsOpen()) return false;
+        if (this.onboardingResizeListening) {
+            globalThis.removeEventListener?.('resize', this.onboardingResizeHandler);
+            this.onboardingResizeListening = false;
+        }
         if (this.onboardingPositionFrame != null) {
             cancelAnimationFrame(this.onboardingPositionFrame);
             this.onboardingPositionFrame = null;
         }
+        const practiceWasActive = this.tutorialIsActive();
+        const liveDataChanged = Boolean(this.onboardingSession?.liveDataChanged);
+        const latestLiveCaptureStatus = this.onboardingSession?.latestLiveCaptureStatus ?? null;
+        this.cancelOnboardingCaptureWait();
+        this.restoreOnboardingControls();
+        this.clearOnboardingTarget();
+        this.window?.removeEventListener('click', this.onboardingInteractionHandler, true);
+        this.window?.removeEventListener('change', this.onboardingInteractionHandler, true);
+        this.window?.removeEventListener('input', this.onboardingInteractionHandler, true);
+        this.window?.removeEventListener('toggle', this.onboardingInteractionHandler, true);
+        this.window?.removeEventListener('focusin', this.onboardingFocusHandler, true);
         this.onboardingOverlay.hidden = true;
         this.onboardingOverlay.classList.remove('is-centered');
         this.onboardingOverlay.dataset.phase = 'idle';
@@ -3536,6 +3684,11 @@ export class DevToolsWindow {
         }
         this.onboardingPhase = 'idle';
         this.onboardingStepIndex = 0;
+        this.onboardingStepComplete = false;
+        this.onboardingStepSkipped = false;
+        this.onboardingSession = null;
+        this.window?.classList.remove('is-onboarding-practice');
+        if (this.onboardingSessionBadge) this.onboardingSessionBadge.hidden = true;
         this.window.setAttribute('aria-modal', 'true');
         for (const region of this.primaryRegions) {
             region.inert = false;
@@ -3560,21 +3713,53 @@ export class DevToolsWindow {
             focusTarget.focus({ preventScroll: true });
         }
         this.onboardingPreviouslyFocused = null;
+        if (latestLiveCaptureStatus) {
+            this.onCaptureStatus(latestLiveCaptureStatus);
+        } else {
+            this.updateCaptureStatus();
+        }
+        if (practiceWasActive) this.render();
+        if (liveDataChanged) queueMicrotask(() => void this.refresh());
+        return true;
+    }
+
+    beginOnboardingPractice() {
+        this.onboardingSession = createOnboardingSession();
+        this.onboardingPhase = 'steps';
+        this.onboardingStepIndex = 0;
+        this.onboardingStepComplete = false;
+        this.onboardingStepSkipped = false;
+        this.window.setAttribute('aria-modal', 'true');
+        this.window.classList.add('is-onboarding-practice');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (this.onboardingSessionBadge) this.onboardingSessionBadge.hidden = false;
+        this.window.addEventListener('click', this.onboardingInteractionHandler, true);
+        this.window.addEventListener('change', this.onboardingInteractionHandler, true);
+        this.window.addEventListener('input', this.onboardingInteractionHandler, true);
+        this.window.addEventListener('toggle', this.onboardingInteractionHandler, true);
+        this.window.addEventListener('focusin', this.onboardingFocusHandler, true);
+        this.updateCaptureStatus();
+        this.render();
+        this.updateOnboardingView();
         return true;
     }
 
     nextOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
         if (this.onboardingPhase === 'invitation') {
-            this.onboardingPhase = 'steps';
-            this.onboardingStepIndex = 0;
-            this.updateOnboardingView();
-            return true;
+            return this.beginOnboardingPractice();
         }
+        const current = ONBOARDING_STEPS[this.onboardingStepIndex];
+        if (current?.interaction && !this.onboardingStepComplete) return false;
         if (this.onboardingStepIndex >= ONBOARDING_STEPS.length - 1) {
             return this.closeOnboarding({ persist: 'completed' });
         }
         this.onboardingStepIndex += 1;
+        this.onboardingStepComplete = false;
+        this.onboardingStepSkipped = false;
         this.updateOnboardingView();
         return true;
     }
@@ -3583,11 +3768,79 @@ export class DevToolsWindow {
         if (!this.onboardingIsOpen()) return false;
         if (this.onboardingPhase === 'invitation') return false;
         if (this.onboardingStepIndex <= 0) {
-            this.onboardingPhase = 'invitation';
+            return false;
         } else {
+            const current = ONBOARDING_STEPS[this.onboardingStepIndex];
+            if (
+                current?.id === 'capture-practice'
+                && this.onboardingSession?.capturePhase === 'running'
+            ) {
+                this.cancelOnboardingCaptureWait();
+                this.onboardingSession.captureState = 'waiting';
+                this.onboardingSession.capturePhase = 'awaiting-practice';
+                this.updateCaptureStatus();
+            }
             this.onboardingStepIndex -= 1;
         }
+        this.onboardingStepComplete = false;
+        this.onboardingStepSkipped = false;
         this.updateOnboardingView();
+        return true;
+    }
+
+    skipOnboardingStep() {
+        if (!this.tutorialIsActive()) return false;
+        const step = ONBOARDING_STEPS[this.onboardingStepIndex];
+        if (!step) return false;
+        this.onboardingApplyingSkippedState = true;
+        try {
+            this.applySkippedOnboardingStepState(step);
+        } finally {
+            this.onboardingApplyingSkippedState = false;
+        }
+        this.onboardingSession.completedActions.add(step.id);
+        this.onboardingStepComplete = true;
+        this.onboardingStepSkipped = true;
+        return this.nextOnboardingStep();
+    }
+
+    applySkippedOnboardingStepState(step) {
+        const interaction = step?.interaction;
+        if (!interaction) return false;
+        if (step.id === 'capture-practice') {
+            this.cancelOnboardingCaptureWait();
+            this.onboardingSession.captureState = 'saved';
+            this.onboardingSession.capturePhase = 'complete';
+            this.onboardingSession.timeline = [...this.onboardingSession.availableTimeline];
+            this.updateCaptureStatus();
+            return true;
+        }
+        const candidate = interaction.selector
+            ? this.window?.querySelector(interaction.selector)
+            : null;
+        if (!candidate) return false;
+        if (interaction.value !== undefined) {
+            candidate.value = String(interaction.value);
+        }
+        if (interaction.state === 'open') {
+            candidate.open = true;
+            mountDetailsContent(candidate);
+        }
+        const alreadyChecked = interaction.state === 'checked' && (
+            candidate.checked === true
+            || candidate.getAttribute?.('aria-checked') === 'true'
+        );
+        if (interaction.event === 'click') {
+            if (alreadyChecked) return true;
+            if (typeof candidate.click === 'function') candidate.click();
+            else candidate.dispatchEvent?.(new Event('click', { bubbles: true }));
+        } else if (['change', 'input'].includes(interaction.event)) {
+            if (interaction.state === 'checked') {
+                if ('checked' in candidate) candidate.checked = true;
+                candidate.setAttribute?.('aria-checked', 'true');
+            }
+            candidate.dispatchEvent?.(new Event(interaction.event, { bubbles: true }));
+        }
         return true;
     }
 
@@ -3603,34 +3856,83 @@ export class DevToolsWindow {
             this.onboardingProgress.textContent = progress;
             this.onboardingAnnouncement.textContent = `${progress}. ${title}`;
             this.onboardingBackButton.hidden = true;
+            this.onboardingStepSkipButton.hidden = true;
+            this.onboardingNextButton.disabled = false;
             this.onboardingNextButton.textContent = t('onboarding.start');
             this.onboardingBody.replaceChildren(this.renderOnboardingInvitation());
             this.onboardingPanel.classList.add('is-invitation');
+            this.onboardingPanel.setAttribute('role', 'dialog');
+            this.onboardingPanel.setAttribute('aria-modal', 'true');
             if (focusWasOnBack) {
                 queueMicrotask(() => this.onboardingNextButton?.focus({ preventScroll: true }));
             }
         } else {
             const step = ONBOARDING_STEPS[this.onboardingStepIndex]
                 ?? ONBOARDING_STEPS[0];
+            const group = ONBOARDING_GROUPS.find(({ id }) => id === step.group)
+                ?? ONBOARDING_GROUPS[0];
+            const groupSteps = ONBOARDING_STEPS.filter(({ group: id }) => id === group.id);
+            const groupStepIndex = groupSteps.findIndex(({ id }) => id === step.id);
+            if (
+                !step.id.endsWith('-tab')
+                && step.target
+                && !step.interaction?.selector?.includes('.st-devtools-app-nav-item')
+                && !this.onboardingStepComplete
+                && this.onboardingSession.tabId !== step.tabId
+            ) {
+                this.onboardingSession.tabId = step.tabId;
+                this.render();
+            }
+            this.onboardingStepComplete = !step.interaction
+                || this.onboardingSession.completedActions.has(step.id);
             this.onboardingOverlay.dataset.phase = 'steps';
             this.onboardingOverlay.dataset.step = step.id;
-            this.onboardingOverlay.dataset.target = step.target;
-            this.onboardingProgress.textContent = t('onboarding.progress', {
+            if (step.target) this.onboardingOverlay.dataset.target = step.target;
+            else delete this.onboardingOverlay.dataset.target;
+            this.onboardingProgress.textContent = t('onboarding.progressDetailed', {
+                group: t(`onboarding.group.${group.id}`),
+                groupCurrent: groupStepIndex + 1,
+                groupTotal: groupSteps.length,
                 current: this.onboardingStepIndex + 1,
                 total: ONBOARDING_STEPS.length,
             });
             this.onboardingAnnouncement.textContent = `${this.onboardingProgress.textContent}. ${
                 t(`onboarding.step.${step.id}.title`)
             }`;
-            this.onboardingBackButton.hidden = false;
+            this.onboardingBackButton.hidden = this.onboardingStepIndex === 0;
+            this.onboardingStepSkipButton.hidden = !step.interaction
+                || this.onboardingStepComplete;
             this.onboardingNextButton.textContent = this.onboardingStepIndex
                 === ONBOARDING_STEPS.length - 1
                 ? t('onboarding.finish')
                 : t('onboarding.next');
+            this.onboardingNextButton.disabled = Boolean(
+                step.interaction && !this.onboardingStepComplete,
+            );
             this.onboardingBody.replaceChildren(this.renderOnboardingStep(step));
             this.onboardingPanel.classList.remove('is-invitation');
+            this.onboardingPanel.setAttribute('role', 'complementary');
+            this.onboardingPanel.setAttribute('aria-modal', 'false');
+            this.synchronizeOnboardingStepCompletion(step);
         }
-        this.requestOnboardingPosition();
+        queueMicrotask(() => this.refreshOnboardingTarget());
+    }
+
+    synchronizeOnboardingStepCompletion(step) {
+        if (step?.id !== 'search-query-korean' || this.onboardingStepComplete) return;
+        queueMicrotask(() => {
+            if (this.currentOnboardingStep()?.id !== step.id) return;
+            const input = this.window?.querySelector(step.interaction.selector);
+            const hasResult = Boolean(
+                this.window?.querySelector('.st-devtools-search-result'),
+            );
+            if (
+                hasResult
+                && String(input?.value ?? '') === String(step.interaction.value)
+            ) {
+                this.recordOnboardingAction(step.interaction.event, input);
+            }
+        });
     }
 
     renderOnboardingInvitation() {
@@ -3650,6 +3952,21 @@ export class DevToolsWindow {
             t('onboarding.invitationDescription'),
         );
         description.id = 'st-devtools-onboarding-description';
+        const topics = element('ol', {
+            className: 'st-devtools-onboarding-topic-list',
+        });
+        for (const group of ONBOARDING_GROUPS) {
+            const item = element('li');
+            const groupIcon = element('i', {
+                className: `fa-solid ${group.icon}`,
+            });
+            groupIcon.setAttribute('aria-hidden', 'true');
+            item.append(
+                groupIcon,
+                element('span', { text: t(`onboarding.group.${group.id}`) }),
+            );
+            topics.appendChild(item);
+        }
         const promise = element('div', {
             className: 'st-devtools-onboarding-safety-note',
         });
@@ -3659,7 +3976,7 @@ export class DevToolsWindow {
             promiseIcon,
             element('span', { text: t('onboarding.invitationSafety') }),
         );
-        content.append(icon, title, description, promise);
+        content.append(icon, title, description, topics, promise);
         return content;
     }
 
@@ -3683,13 +4000,16 @@ export class DevToolsWindow {
         heading.append(icon, title);
         const description = proseElement(
             'p',
-            t(`onboarding.step.${step.id}.description`),
+            t(`onboarding.step.${step.id}.what`),
         );
         description.id = 'st-devtools-onboarding-description';
-        const tabLabelKey = TABS.find(([id]) => id === step.tabId)?.[2];
+        const locationTabId = step.id === 'search-finish'
+            ? this.activeTabId()
+            : step.tabId;
+        const tabLabelKey = TABS.find(([id]) => id === locationTabId)?.[2];
         const location = element('div', {
             className: 'st-devtools-onboarding-location',
-            text: step.id === 'capture'
+            text: step.group === 'capture'
                 ? t('onboarding.location.capture')
                 : t('onboarding.location.tab', {
                     tab: tabLabelKey ? t(tabLabelKey) : '',
@@ -3698,12 +4018,70 @@ export class DevToolsWindow {
         const locationIcon = element('i', { className: 'fa-solid fa-location-dot' });
         locationIcon.setAttribute('aria-hidden', 'true');
         location.prepend(locationIcon);
-        content.append(
-            heading,
-            location,
+        const what = element('section', {
+            className: 'st-devtools-onboarding-explanation is-what',
+        });
+        what.append(
+            element('strong', { text: t('onboarding.whatLabel') }),
             description,
-            this.renderOnboardingDemo(step.demo),
         );
+        const when = element('section', {
+            className: 'st-devtools-onboarding-explanation is-when',
+        });
+        when.append(
+            element('strong', { text: t('onboarding.whenLabel') }),
+            proseElement('p', t(`onboarding.step.${step.id}.when`)),
+        );
+        const task = element('section', {
+            className: `st-devtools-onboarding-task${
+                this.onboardingStepComplete ? ' is-complete' : ''
+            }`,
+        });
+        task.id = 'st-devtools-onboarding-task';
+        task.append(
+            element('strong', {
+                text: step.interaction
+                    ? t('onboarding.tryLabel')
+                    : t('onboarding.lookLabel'),
+            }),
+            proseElement('p', t(`onboarding.step.${step.id}.task`)),
+        );
+        if (step.interaction?.event === 'panel') {
+            const action = element('button', {
+                className: 'menu_button st-devtools-primary-button st-devtools-onboarding-practice-action',
+                text: t(`onboarding.step.${step.id}.action`),
+                type: 'button',
+            });
+            action.dataset.onboardingAction = step.id === 'capture-practice'
+                ? 'run-capture-demo'
+                : 'finish';
+            if (step.id === 'capture-practice') {
+                action.value = 'run';
+                action.dataset.value = 'run';
+            }
+            action.addEventListener('click', () => {
+                if (step.id === 'capture-practice') {
+                    void this.runOnboardingCaptureDemo();
+                } else {
+                    this.recordOnboardingAction('panel', action);
+                }
+            });
+            action.disabled = this.onboardingStepComplete;
+            task.appendChild(action);
+        }
+        const status = element('span', {
+            className: 'st-devtools-onboarding-task-status',
+            text: this.onboardingStepComplete
+                ? t(this.onboardingStepSkipped
+                    ? 'onboarding.taskSkipped'
+                    : 'onboarding.taskComplete')
+                : t('onboarding.taskWaiting'),
+        });
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        task.appendChild(status);
+        this.onboardingTaskStatus = status;
+        content.append(heading, location, what, when, task);
         return content;
     }
 
@@ -3894,6 +4272,272 @@ export class DevToolsWindow {
         return demo;
     }
 
+    currentOnboardingStep() {
+        return this.tutorialIsActive()
+            ? ONBOARDING_STEPS[this.onboardingStepIndex] ?? null
+            : null;
+    }
+
+    async runOnboardingCaptureDemo() {
+        const session = this.onboardingSession;
+        const step = this.currentOnboardingStep();
+        if (!session || step?.id !== 'capture-practice') return false;
+        if (session.capturePhase === 'running' || session.capturePhase === 'complete') {
+            return false;
+        }
+        session.capturePhase = 'running';
+        const delay = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+            ? 60
+            : 220;
+        const wait = () => new Promise((resolve) => {
+            const finish = () => {
+                if (this.onboardingCaptureTimer === timer) {
+                    this.onboardingCaptureTimer = null;
+                }
+                if (this.onboardingCaptureWaitResolve === finish) {
+                    this.onboardingCaptureWaitResolve = null;
+                }
+                resolve();
+            };
+            const timer = setTimeout(finish, delay);
+            this.onboardingCaptureTimer = timer;
+            this.onboardingCaptureWaitResolve = finish;
+        });
+        for (const state of ['capturing', 'processing', 'saved']) {
+            if (
+                this.onboardingSession !== session
+                || !this.tutorialIsActive()
+                || session.capturePhase !== 'running'
+            ) return false;
+            session.captureState = state;
+            this.updateCaptureStatus();
+            await wait();
+        }
+        if (
+            this.onboardingSession !== session
+            || !this.tutorialIsActive()
+            || session.capturePhase !== 'running'
+        ) return false;
+        session.timeline = [...session.availableTimeline];
+        session.capturePhase = 'complete';
+        return this.recordOnboardingAction(
+            'panel',
+            this.onboardingPanel?.querySelector('[data-onboarding-action="run-capture-demo"]'),
+        );
+    }
+
+    onboardingInteractionCandidate(interaction, node = null) {
+        if (!interaction?.selector) return node;
+        if (node?.matches?.(interaction.selector)) return node;
+        const closest = node?.closest?.(interaction.selector);
+        if (closest) return closest;
+        if (node) return null;
+        return this.window?.querySelector(interaction.selector) ?? null;
+    }
+
+    onboardingInteractionAllowsNode(interaction, candidate, node) {
+        if (!interaction || !candidate || !node) return false;
+        if (interaction.event !== 'toggle') {
+            return Boolean(
+                candidate === node
+                || candidate.contains?.(node)
+                || node.contains?.(candidate),
+            );
+        }
+        if (node === candidate) return true;
+        const summary = candidate.matches?.('summary')
+            ? candidate
+            : candidate.querySelector?.(':scope > summary');
+        if (!summary || !(node === summary || summary.contains?.(node))) return false;
+        const nestedControl = node.closest?.(
+            'button,input,select,textarea,a[href],summary,[role="button"]',
+        );
+        return !nestedControl || nestedControl === summary;
+    }
+
+    recordOnboardingAction(eventType, node = null) {
+        if (this.onboardingApplyingSkippedState) return false;
+        const step = this.currentOnboardingStep();
+        const interaction = step?.interaction;
+        if (!interaction || interaction.event !== eventType) return false;
+        const eventCandidate = this.onboardingInteractionCandidate(interaction, node);
+        if (!eventCandidate) return false;
+        const candidate = (
+            (interaction.value !== undefined || interaction.state !== undefined)
+            && interaction.selector
+            && this.window?.querySelector(interaction.selector)
+        ) || eventCandidate;
+        const revokeCompletion = () => {
+            if (this.onboardingSession.completedActions.delete(step.id)) {
+                this.onboardingStepComplete = false;
+                this.onboardingStepSkipped = false;
+                this.updateOnboardingView();
+            }
+            return false;
+        };
+        if (
+            interaction.value !== undefined
+            && String(candidate.value ?? candidate.dataset?.value ?? '')
+                !== String(interaction.value)
+        ) return revokeCompletion();
+        if (interaction.state === 'open' && candidate.open !== true) {
+            return revokeCompletion();
+        }
+        if (
+            interaction.state === 'checked'
+            && candidate.checked !== true
+            && candidate.getAttribute?.('aria-checked') !== 'true'
+        ) return revokeCompletion();
+        this.onboardingSession.completedActions.add(step.id);
+        this.onboardingStepComplete = true;
+        this.onboardingStepSkipped = false;
+        this.updateOnboardingView();
+        return true;
+    }
+
+    handleOnboardingInteraction(event) {
+        if (!this.tutorialIsActive()) return;
+        if (this.onboardingApplyingSkippedState) return;
+        if (this.onboardingPanel?.contains(event.target)) return;
+        const step = this.currentOnboardingStep();
+        const selector = step?.interaction?.selector ?? null;
+        const candidate = selector
+            ? this.onboardingInteractionCandidate(step.interaction, event.target)
+            : null;
+        const allowed = this.onboardingInteractionAllowsNode(
+            step?.interaction,
+            candidate,
+            event.target,
+        );
+        if (!allowed) {
+            if (['click', 'change', 'input'].includes(event.type)) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                if (this.onboardingTaskStatus) {
+                    this.onboardingTaskStatus.textContent = t('onboarding.useHighlighted');
+                }
+            }
+            return;
+        }
+        if (step.id !== 'search-query-korean' || event.type !== 'input') {
+            queueMicrotask(() => this.recordOnboardingAction(event.type, candidate));
+        }
+    }
+
+    handleOnboardingFocus(event) {
+        if (!this.tutorialIsActive() || this.onboardingPanel?.contains(event.target)) return;
+        const step = this.currentOnboardingStep();
+        const interaction = step?.interaction;
+        const selector = interaction?.selector ?? step?.target;
+        const candidate = interaction && selector
+            ? this.window?.querySelector(selector)
+            : null;
+        const allowed = interaction
+            ? this.onboardingInteractionAllowsNode(interaction, candidate, event.target)
+            : selector && (
+                event.target.matches?.(selector)
+                || event.target.closest?.(selector)
+            );
+        if (allowed) return;
+        queueMicrotask(() => {
+            const target = this.onboardingTarget;
+            const focusTarget = target?.matches?.('button,input,select,summary,[tabindex]')
+                ? target
+                : target?.querySelector?.('button,input,select,summary,[tabindex]');
+            (focusTarget ?? this.onboardingNextButton)?.focus({ preventScroll: true });
+        });
+    }
+
+    restoreOnboardingControls() {
+        for (const [control, previous] of this.onboardingDisabledControls) {
+            if (!control?.isConnected) continue;
+            if ('disabled' in control) control.disabled = previous.disabled;
+            if (previous.tabIndex == null) control.removeAttribute('tabindex');
+            else control.setAttribute('tabindex', previous.tabIndex);
+            if (previous.ariaDisabled == null) control.removeAttribute('aria-disabled');
+            else control.setAttribute('aria-disabled', previous.ariaDisabled);
+        }
+        this.onboardingDisabledControls.clear();
+    }
+
+    updateOnboardingControls() {
+        this.restoreOnboardingControls();
+        if (!this.tutorialIsActive()) return;
+        const step = this.currentOnboardingStep();
+        const interaction = step?.interaction;
+        const selector = interaction?.selector ?? null;
+        const allowedTarget = selector
+            ? this.window?.querySelector(selector)
+            : null;
+        for (const control of this.window?.querySelectorAll(
+            'button,input,select,textarea,a[href],summary,[tabindex]',
+        ) ?? []) {
+            if (this.onboardingPanel?.contains(control)) continue;
+            const allowed = this.onboardingInteractionAllowsNode(
+                interaction,
+                allowedTarget,
+                control,
+            );
+            if (allowed) {
+                const primaryFocusTarget = control === allowedTarget
+                    || (interaction?.event === 'toggle' && control.matches?.('summary'));
+                if (primaryFocusTarget && control.tabIndex < 0) {
+                    this.onboardingDisabledControls.set(control, {
+                        disabled: 'disabled' in control ? control.disabled : false,
+                        tabIndex: control.getAttribute('tabindex'),
+                        ariaDisabled: control.getAttribute('aria-disabled'),
+                    });
+                    control.setAttribute('tabindex', '0');
+                }
+                continue;
+            }
+            this.onboardingDisabledControls.set(control, {
+                disabled: 'disabled' in control ? control.disabled : false,
+                tabIndex: control.getAttribute('tabindex'),
+                ariaDisabled: control.getAttribute('aria-disabled'),
+            });
+            if ('disabled' in control) control.disabled = true;
+            control.setAttribute('tabindex', '-1');
+            control.setAttribute('aria-disabled', 'true');
+        }
+    }
+
+    clearOnboardingTarget() {
+        if (!this.onboardingTarget) return;
+        this.onboardingTarget.classList.remove('st-devtools-onboarding-target');
+        if (this.onboardingTargetDescriptionId == null) {
+            this.onboardingTarget.removeAttribute('aria-describedby');
+        } else {
+            this.onboardingTarget.setAttribute(
+                'aria-describedby',
+                this.onboardingTargetDescriptionId,
+            );
+        }
+        this.onboardingTarget = null;
+        this.onboardingTargetDescriptionId = null;
+    }
+
+    refreshOnboardingTarget() {
+        if (!this.onboardingIsOpen()) return;
+        this.clearOnboardingTarget();
+        if (!this.tutorialIsActive()) {
+            this.restoreOnboardingControls();
+            this.requestOnboardingPosition();
+            return;
+        }
+        const step = this.currentOnboardingStep();
+        const target = step?.target ? this.window?.querySelector(step.target) : null;
+        if (target) {
+            this.onboardingTarget = target;
+            this.onboardingTargetDescriptionId = target.getAttribute('aria-describedby');
+            target.classList.add('st-devtools-onboarding-target');
+            target.setAttribute('aria-describedby', 'st-devtools-onboarding-task');
+            target.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'auto' });
+        }
+        this.updateOnboardingControls();
+        this.requestOnboardingPosition();
+    }
+
     requestOnboardingPosition() {
         if (!this.onboardingIsOpen()) return;
         if (this.onboardingPositionFrame != null) {
@@ -3917,8 +4561,7 @@ export class DevToolsWindow {
             return;
         }
         this.onboardingOverlay.classList.remove('is-centered');
-        const step = ONBOARDING_STEPS[this.onboardingStepIndex];
-        const target = step?.target ? this.window?.querySelector(step.target) : null;
+        const target = this.onboardingTarget;
         const targetRect = target?.getBoundingClientRect?.();
         const windowRect = this.window?.getBoundingClientRect?.();
         if (
@@ -3955,21 +4598,34 @@ export class DevToolsWindow {
         const panelRect = panel.getBoundingClientRect();
         const margin = 16;
         const gap = 14;
-        let panelTop = targetRect.top - windowRect.top - panelRect.height - gap;
-        if (panelTop < margin) {
+        const roomRight = windowRect.right - targetRect.right;
+        const roomLeft = targetRect.left - windowRect.left;
+        let panelLeft;
+        let panelTop;
+        if (roomRight >= panelRect.width + gap + margin) {
+            panelLeft = targetRect.right - windowRect.left + gap;
+            panelTop = targetRect.top - windowRect.top
+                + (targetRect.height - panelRect.height) / 2;
+        } else if (roomLeft >= panelRect.width + gap + margin) {
+            panelLeft = targetRect.left - windowRect.left - panelRect.width - gap;
+            panelTop = targetRect.top - windowRect.top
+                + (targetRect.height - panelRect.height) / 2;
+        } else {
             panelTop = targetRect.bottom - windowRect.top + gap;
+            if (panelTop + panelRect.height > windowRect.height - margin) {
+                panelTop = targetRect.top - windowRect.top - panelRect.height - gap;
+            }
+            panelLeft = targetRect.left - windowRect.left
+                + (targetRect.width - panelRect.width) / 2;
         }
-        panelTop = Math.max(
-            margin,
-            Math.min(panelTop, windowRect.height - panelRect.height - margin),
-        );
-        const centeredLeft = targetRect.left - windowRect.left
-            + (targetRect.width / 2)
-            - (panelRect.width / 2);
-        const panelLeft = Math.max(
-            margin,
-            Math.min(centeredLeft, windowRect.width - panelRect.width - margin),
-        );
+        panelTop = Math.max(margin, Math.min(
+            panelTop,
+            windowRect.height - panelRect.height - margin,
+        ));
+        panelLeft = Math.max(margin, Math.min(
+            panelLeft,
+            windowRect.width - panelRect.width - margin,
+        ));
         panel.style.left = `${panelLeft}px`;
         panel.style.top = `${panelTop}px`;
     }
@@ -3998,6 +4654,10 @@ export class DevToolsWindow {
     }
 
     onCaptureStatus(detail) {
+        if (this.tutorialIsActive()) {
+            this.onboardingSession.latestLiveCaptureStatus = detail;
+            return;
+        }
         const state = typeof detail?.state === 'string'
             ? detail.state
             : 'waiting';
@@ -4020,8 +4680,11 @@ export class DevToolsWindow {
 
     updateCaptureStatus() {
         if (!this.captureStatusRegion) return;
-        const state = CAPTURE_STATUS_STATES.has(this.captureStatus?.state)
-            ? this.captureStatus.state
+        const displayedStatus = this.tutorialIsActive()
+            ? { state: this.onboardingSession.captureState }
+            : this.captureStatus;
+        const state = CAPTURE_STATUS_STATES.has(displayedStatus?.state)
+            ? displayedStatus.state
             : 'waiting';
         for (const knownState of CAPTURE_STATUS_STATES) {
             this.captureStatusRegion.classList.remove(`is-${knownState}`);
@@ -4035,7 +4698,7 @@ export class DevToolsWindow {
         const copy = this.captureStatusRegion.querySelector(
             '.st-devtools-capture-status-copy',
         );
-        const phase = this.captureStatus?.phase;
+        const phase = displayedStatus?.phase;
         const phasedKey = (
             ['processing', 'failed'].includes(state)
             && CAPTURE_PIPELINE_PHASES.has(phase)
@@ -4076,10 +4739,13 @@ export class DevToolsWindow {
                 text: t('rules.aiMode'),
                 type: 'button',
             });
+            aiMode.dataset.tourId = 'rules-ai-mode';
             const aiActive = this.ruleViewMode === 'ai';
-            aiMode.classList.toggle('is-active', aiActive);
-            aiMode.setAttribute('aria-pressed', String(aiActive));
+            aiMode.classList.toggle('is-active', !this.tutorialIsActive() && aiActive);
+            aiMode.setAttribute('aria-pressed', String(!this.tutorialIsActive() && aiActive));
+            aiMode.disabled = this.tutorialIsActive();
             aiMode.addEventListener('click', () => {
+                if (this.tutorialIsActive()) return;
                 this.setSemanticInspectionMode(!aiActive);
             });
             const settings = element('button', {
@@ -4090,6 +4756,7 @@ export class DevToolsWindow {
             settings.setAttribute('aria-label', t('rules.configurationTitle'));
             settings.setAttribute('aria-haspopup', 'dialog');
             settings.setAttribute('aria-controls', 'st-devtools-rules-settings-dialog');
+            settings.hidden = this.tutorialIsActive();
             const icon = element('i', { className: 'fa-solid fa-sliders' });
             icon.setAttribute('aria-hidden', 'true');
             settings.appendChild(icon);
@@ -4191,7 +4858,7 @@ export class DevToolsWindow {
 
     observeGeometry() {
         const save = () => {
-            if (this.usesCompactLayout()) return;
+            if (this.usesCompactLayout() || this.tutorialIsActive()) return;
             const rect = this.window.getBoundingClientRect();
             localStorage.setItem(GEOMETRY_KEY, JSON.stringify({
                 width: Math.round(rect.width),
@@ -4209,7 +4876,7 @@ export class DevToolsWindow {
     enableDragging(handle) {
         let drag = null;
         handle.addEventListener('pointerdown', (event) => {
-            if (this.usesCompactLayout()) return;
+            if (this.usesCompactLayout() || this.tutorialIsActive()) return;
             if (event.target.closest('button')) return;
             const rect = this.window.getBoundingClientRect();
             drag = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
@@ -4240,6 +4907,10 @@ export class DevToolsWindow {
     }
 
     async onSnapshot(snapshot) {
+        if (this.tutorialIsActive()) {
+            this.onboardingSession.liveDataChanged = true;
+            return;
+        }
         this.invalidateAnalysisState();
         this.storageErrors = this.storageErrors.filter((item) => item.snapshotId !== snapshot.id);
         const panelVisible = Boolean(this.root && !this.root.hidden);
@@ -4266,6 +4937,8 @@ export class DevToolsWindow {
     }
 
     onCaptureError(detail) {
+        const tutorial = this.tutorialIsActive();
+        if (tutorial) this.onboardingSession.liveDataChanged = true;
         const snapshot = detail?.snapshot;
         const snapshotId = snapshot?.id ?? null;
         this.addStorageError({
@@ -4277,10 +4950,12 @@ export class DevToolsWindow {
             retry: snapshot ? () => this.capture.retrySnapshot(snapshot) : null,
             kind: snapshot ? 'storage' : 'capture',
         });
-        globalThis.toastr?.error?.(
-            t(snapshot ? 'storage.captureFailed' : 'capture.pipelineFailed'),
-            'ST DevTools',
-        );
+        if (!tutorial) {
+            globalThis.toastr?.error?.(
+                t(snapshot ? 'storage.captureFailed' : 'capture.pipelineFailed'),
+                'ST DevTools',
+            );
+        }
     }
 
     addStorageError({
@@ -4302,7 +4977,7 @@ export class DevToolsWindow {
             ...this.storageErrors.filter((existing) => existing.id !== id),
             item,
         ].slice(-5);
-        if (this.root && !this.root.hidden) this.render();
+        if (this.root && !this.root.hidden && !this.tutorialIsActive()) this.render();
         return item;
     }
 
@@ -4311,7 +4986,7 @@ export class DevToolsWindow {
         item.pending = true;
         this.render();
         try {
-            await item.retry();
+            await this.withActiveBlockingTask(() => item.retry());
             this.storageErrors = this.storageErrors.filter((existing) => existing.id !== item.id);
             globalThis.toastr?.success?.(t('storage.retrySucceeded'), 'ST DevTools');
         } catch (error) {
@@ -4382,6 +5057,7 @@ export class DevToolsWindow {
         throwOnError = false,
         chatId = this.currentChatId(),
     } = {}) {
+        if (this.tutorialIsActive()) return false;
         const requestId = ++this.refreshRequestId;
         try {
             const page = await this.readTimelinePage(chatId);
@@ -4465,7 +5141,11 @@ export class DevToolsWindow {
             if (generation !== this.storageSummaryGeneration) return null;
             this.storageSummary = summary;
             const panelVisible = Boolean(this.root && !this.root.hidden);
-            if (panelVisible && this.activeTab === 'timeline') this.render();
+            if (
+                panelVisible
+                && !this.tutorialIsActive()
+                && this.activeTab === 'timeline'
+            ) this.render();
             if (
                 panelVisible
                 && this.activeTab === 'timeline'
@@ -4499,6 +5179,7 @@ export class DevToolsWindow {
                 generation !== this.storageSummaryGeneration
                 || !this.root
                 || this.root.hidden
+                || this.tutorialIsActive()
                 || this.activeTab !== 'timeline'
                 || this.storageSummaryRebuildPromise
             ) {
@@ -4547,7 +5228,12 @@ export class DevToolsWindow {
                         };
                         this.scheduleStorageSummaryRebuild();
                     }
-                    if (this.root && !this.root.hidden && this.activeTab === 'timeline') {
+                    if (
+                        this.root
+                        && !this.root.hidden
+                        && !this.tutorialIsActive()
+                        && this.activeTab === 'timeline'
+                    ) {
                         this.render();
                     }
                 });
@@ -4689,13 +5375,13 @@ export class DevToolsWindow {
 
     activeTabButton() {
         return this.window?.querySelector(
-            `.st-devtools-app-nav-item[data-tab="${this.activeTab}"]`,
+            `.st-devtools-app-nav-item[data-tab="${this.activeTabId()}"]`,
         ) ?? null;
     }
 
     focusableElements() {
         if (!this.window) return [];
-        const scope = this.onboardingIsOpen()
+        const scope = this.onboardingIsOpen() && this.onboardingPhase === 'invitation'
             ? this.onboardingPanel
             : (
                 this.semanticConsentOverlay
@@ -4753,7 +5439,7 @@ export class DevToolsWindow {
         const first = focusable[0];
         const last = focusable.at(-1);
         const active = document.activeElement;
-        const focusScope = this.onboardingIsOpen()
+        const focusScope = this.onboardingIsOpen() && this.onboardingPhase === 'invitation'
             ? this.onboardingPanel
             : (
                 this.semanticConsentOverlay
@@ -4973,16 +5659,27 @@ export class DevToolsWindow {
         if (event.key === 'End') nextIndex = ids.length - 1;
         if (nextIndex == null) return;
         event.preventDefault();
+        if (this.tutorialIsActive()) return;
         this.selectTab(ids[nextIndex], { focus: true });
     }
 
     selectTab(id, { focus = false } = {}) {
         const nextTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
-        const changed = nextTab !== this.activeTab;
-        this.activeTab = nextTab;
-        localStorage.setItem(LAST_TAB_KEY, this.activeTab);
+        const currentTab = this.activeTabId();
+        const changed = nextTab !== currentTab;
+        if (this.tutorialIsActive()) {
+            this.onboardingSession.tabId = nextTab;
+        } else {
+            this.activeTab = nextTab;
+            localStorage.setItem(LAST_TAB_KEY, this.activeTab);
+        }
         this.render();
-        if (this.activeTab === 'timeline' && this.root && !this.root.hidden) {
+        if (
+            !this.tutorialIsActive()
+            && this.activeTab === 'timeline'
+            && this.root
+            && !this.root.hidden
+        ) {
             void this.refreshStorageSummary();
         }
         if (changed && this.content) this.content.scrollTop = 0;
@@ -4996,28 +5693,39 @@ export class DevToolsWindow {
         if (this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden) {
             this.refreshRulesSettingsPanel();
         }
+        const activeTab = this.activeTabId();
         for (const button of this.window.querySelectorAll('.st-devtools-app-nav-item')) {
-            const active = button.dataset.tab === this.activeTab;
+            const active = button.dataset.tab === activeTab;
             button.classList.toggle('active', active);
             button.setAttribute('aria-selected', String(active));
             button.tabIndex = active ? 0 : -1;
         }
-        this.content.id = this.panelElementId(this.activeTab);
-        this.content.setAttribute('aria-labelledby', this.tabElementId(this.activeTab));
-        this.content.replaceChildren(this.renderScreenHeader(this.activeTab));
-        if (this.storageErrors.length > 0) {
+        this.content.id = this.panelElementId(activeTab);
+        this.content.setAttribute('aria-labelledby', this.tabElementId(activeTab));
+        this.content.replaceChildren(this.renderScreenHeader(activeTab));
+        if (this.tutorialIsActive()) {
+            const practiceNotice = element('div', {
+                className: 'st-devtools-onboarding-practice-notice',
+            });
+            practiceNotice.setAttribute('role', 'status');
+            practiceNotice.append(
+                element('i', { className: 'fa-solid fa-flask' }),
+                element('span', { text: t('onboarding.practiceNotice') }),
+            );
+            this.content.appendChild(practiceNotice);
+        } else if (this.storageErrors.length > 0) {
             this.content.appendChild(this.renderStorageErrors());
         }
 
         const snapshot = this.selectedSnapshot();
-        if (!snapshot && this.activeTab !== 'timeline') {
+        if (!snapshot && activeTab !== 'timeline') {
             this.content.appendChild(this.renderEmpty());
             return;
         }
         const privacyMode = snapshot?.privacy?.mode ?? 'full';
         if (snapshot && privacyMode !== 'full') {
             const privacyNotice = this.renderSnapshotPrivacyNotice(snapshot);
-            if (privacyMode === 'metadata' && this.activeTab !== 'timeline') {
+            if (privacyMode === 'metadata' && activeTab !== 'timeline') {
                 this.content.appendChild(this.renderMetadataOnlySnapshot(
                     snapshot,
                     privacyNotice,
@@ -5026,7 +5734,7 @@ export class DevToolsWindow {
             }
             if (
                 privacyMode === 'redacted'
-                && ['rules', 'search'].includes(this.activeTab)
+                && ['rules', 'search'].includes(activeTab)
             ) {
                 this.content.appendChild(this.renderRedactedLimitedFeature(
                     snapshot,
@@ -5044,7 +5752,8 @@ export class DevToolsWindow {
             rules: () => this.renderRules(snapshot),
             search: () => this.renderSearch(snapshot),
         };
-        this.content.appendChild(renderers[this.activeTab]());
+        this.content.appendChild(renderers[activeTab]());
+        if (this.tutorialIsActive()) queueMicrotask(() => this.refreshOnboardingTarget());
     }
 
     renderSnapshotPrivacyNotice(snapshot) {
@@ -5188,13 +5897,14 @@ export class DevToolsWindow {
             text: labelText,
         }));
         const select = element('select');
+        select.dataset.tourId = 'snapshot-select';
         select.setAttribute('aria-label', labelText);
-        for (const snapshot of [...this.timeline].reverse()) {
+        for (const snapshot of [...this.activeTimeline()].reverse()) {
             const option = element('option', {
-                text: `${formatTimestamp(snapshot.timestamp)} · ${snapshotProviderDisplay(snapshot)} · ${t('snapshot.tokens', { count: snapshot.stats?.totalTokens ?? 0 })}`,
+                text: `${formatSnapshotHeading(snapshot, this.tutorialIsActive())} · ${snapshotProviderDisplay(snapshot)} · ${t('snapshot.tokens', { count: snapshot.stats?.totalTokens ?? 0 })}`,
             });
             option.value = snapshot.id;
-            option.selected = snapshot.id === this.selectedId;
+            option.selected = snapshot.id === this.activeSelectedId();
             select.appendChild(option);
         }
         select.addEventListener('change', () => {
@@ -5222,6 +5932,11 @@ export class DevToolsWindow {
         );
         const details = element('details', {
             className: 'st-devtools-provenance-details st-devtools-disclosure',
+        });
+        details.addEventListener('toggle', () => {
+            if (this.tutorialIsActive() && details.open) {
+                this.recordOnboardingAction('toggle', details);
+            }
         });
         const summary = element('summary');
         const heading = element('span', {
@@ -5359,6 +6074,7 @@ export class DevToolsWindow {
         const overview = element('section', {
             className: 'st-devtools-overview-card',
         });
+        overview.dataset.tourId = 'explorer-overview';
         const headline = element('div', {
             className: 'st-devtools-overview-headline',
         });
@@ -5460,11 +6176,13 @@ export class DevToolsWindow {
 
     renderExplorer(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
+        const includedOnly = this.activeExplorerIncludedOnly();
+        const openSourceIds = this.activeOpenSourceIds();
         const allSourceGroups = explorerSourceGroups(snapshot.sources);
         const configuredGroup = allSourceGroups.find((group) => group.key === 'configured');
         const promptManagerOrder = configuredGroup?.promptManagerOrder ?? false;
         const sourceGroups = allSourceGroups.map((group) => (
-            group.key === 'configured' && this.explorerIncludedOnly
+            group.key === 'configured' && includedOnly
                 ? {
                     ...group,
                     sources: group.sources.filter((source) => source.included === true),
@@ -5502,6 +6220,7 @@ export class DevToolsWindow {
             const filter = element('section', {
                 className: 'st-devtools-explorer-filter',
             });
+            filter.dataset.tourId = 'explorer-included-filter';
             const copy = element('span', {
                 className: 'st-devtools-explorer-filter-copy',
             });
@@ -5511,15 +6230,19 @@ export class DevToolsWindow {
             );
             const toggle = element('button', {
                 className: 'menu_button st-devtools-switch-button',
-                text: t(this.explorerIncludedOnly
+                text: t(includedOnly
                     ? 'explorer.requestFilterIncluded'
                     : 'explorer.requestFilterAll'),
                 type: 'button',
             });
             toggle.setAttribute('role', 'switch');
-            toggle.setAttribute('aria-checked', String(this.explorerIncludedOnly));
+            toggle.setAttribute('aria-checked', String(includedOnly));
             toggle.addEventListener('click', () => {
-                this.explorerIncludedOnly = !this.explorerIncludedOnly;
+                if (this.tutorialIsActive()) {
+                    this.onboardingSession.explorerIncludedOnly = !includedOnly;
+                } else {
+                    this.explorerIncludedOnly = !includedOnly;
+                }
                 this.render();
             });
             filter.append(copy, toggle);
@@ -5533,6 +6256,11 @@ export class DevToolsWindow {
             const group = element('details', { className: 'st-devtools-source-group' });
             group.dataset.group = groupData.key;
             group.open = groupData.open;
+            group.addEventListener('toggle', () => {
+                if (this.tutorialIsActive() && group.open) {
+                    this.recordOnboardingAction('toggle', group);
+                }
+            });
             const groupSummary = element('summary');
             const groupHeading = element('span', { className: 'st-devtools-source-group-heading' });
             const groupTitle = t(`explorer.group.${groupData.key}`);
@@ -5560,10 +6288,13 @@ export class DevToolsWindow {
                     '--source-color',
                     sourceColorById.get(source.id) ?? source.color,
                 );
-                details.open = this.openSourceIds.has(source.id);
+                details.open = openSourceIds.has(source.id);
                 details.addEventListener('toggle', () => {
-                    if (details.open) this.openSourceIds.add(source.id);
-                    else this.openSourceIds.delete(source.id);
+                    if (details.open) openSourceIds.add(source.id);
+                    else openSourceIds.delete(source.id);
+                    if (this.tutorialIsActive() && details.open) {
+                        this.recordOnboardingAction('toggle', details);
+                    }
                 });
                 const summary = element('summary');
                 const heading = element('span', { className: 'st-devtools-source-heading' });
@@ -5657,7 +6388,7 @@ export class DevToolsWindow {
                     if (source.provenance) {
                         body.appendChild(this.renderProvenanceDetails(source));
                     }
-                    if (hasRawPromptContent(snapshot)) {
+                    if (hasRawPromptContent(snapshot) && !this.tutorialIsActive()) {
                         const actions = element('div', {
                             className: 'st-devtools-source-actions',
                         });
@@ -5665,6 +6396,7 @@ export class DevToolsWindow {
                             'action.copySource',
                             source.content,
                             'action.sourceCopied',
+                            (task) => this.withActiveBlockingTask(task),
                         ));
                         body.appendChild(actions);
                     }
@@ -5729,6 +6461,12 @@ export class DevToolsWindow {
         const details = element('details', {
             className: 'st-devtools-prompt-request-data st-devtools-disclosure',
         });
+        details.dataset.tourId = 'prompt-request-data';
+        details.addEventListener('toggle', () => {
+            if (this.tutorialIsActive() && details.open) {
+                this.recordOnboardingAction('toggle', details);
+            }
+        });
         const summary = element('summary');
         summary.appendChild(explainedTitle(
             t('explorer.requestDataTitle'),
@@ -5755,7 +6493,7 @@ export class DevToolsWindow {
                 const content = element('div', {
                     className: 'st-devtools-copyable-content',
                 });
-                if (hasRawPromptContent(snapshot)) {
+                if (hasRawPromptContent(snapshot) && !this.tutorialIsActive()) {
                     const actions = element('div', {
                         className: 'st-devtools-source-actions',
                     });
@@ -5763,6 +6501,7 @@ export class DevToolsWindow {
                         'action.copyContent',
                         displayText,
                         'action.contentCopied',
+                        (task) => this.withActiveBlockingTask(task),
                     ));
                     content.appendChild(actions);
                 }
@@ -5935,11 +6674,13 @@ export class DevToolsWindow {
     }
 
     openExplorerForFinding(snapshot, finding, target) {
+        const practiceSession = this.tutorialIsActive()
+            ? this.onboardingSession
+            : null;
         this.setSelectedSnapshotId(snapshot.id);
-        this.activeTab = 'explorer';
-        localStorage.setItem(LAST_TAB_KEY, this.activeTab);
-        this.render();
+        this.selectTab('explorer');
         this.scheduleExplorerFocus(() => {
+            if (practiceSession && this.onboardingSession !== practiceSession) return;
             if (target === 'sources') {
                 this.focusRuleSources(finding.sourceIds, finding.finalRanges);
             } else {
@@ -6058,18 +6799,12 @@ export class DevToolsWindow {
 
     renderTimeline() {
         const page = element('div', { className: 'st-devtools-page' });
-        const analyses = buildTimelineAnalysis(this.timeline, { includeSourceChanges: false });
-        this.pruneTimelineSelection();
-        const loadedStatus = element('p', {
-            className: 'st-devtools-section-intro',
-            text: this.timelineTotalCount > this.timeline.length
-                ? t('snapshot.loadedSubset', {
-                    loaded: this.timeline.length,
-                    total: this.timelineTotalCount,
-                })
-                : t('snapshot.loadedAll', { count: this.timeline.length }),
-        });
-        const storageOverview = this.renderStorageOverview();
+        const timeline = this.activeTimeline();
+        const totalCount = this.activeTimelineTotalCount();
+        const selectedId = this.activeSelectedId();
+        const tutorial = this.tutorialIsActive();
+        const analyses = buildTimelineAnalysis(timeline, { includeSourceChanges: false });
+        if (!tutorial) this.pruneTimelineSelection();
         let corruptWarning = null;
         if (this.timelineCorruptCount > 0) {
             corruptWarning = element('section', {
@@ -6084,43 +6819,58 @@ export class DevToolsWindow {
             );
         }
 
-        const storageDetails = element('details', {
-            className: 'st-devtools-disclosure st-devtools-timeline-storage-details',
-        });
-        storageDetails.appendChild(element('summary', {
-            text: t('timeline.storageDetailsTitle'),
-        }));
-        const storageContent = element('div', {
-            className: 'st-devtools-timeline-storage-content',
-        });
-        storageContent.append(
-            loadedStatus,
-            storageOverview,
-            this.buildStorageToolsPanel(),
-        );
-        storageDetails.appendChild(storageContent);
+        let storageDetails = null;
+        if (!tutorial) {
+            const loadedStatus = element('p', {
+                className: 'st-devtools-section-intro',
+                text: totalCount > timeline.length
+                    ? t('snapshot.loadedSubset', {
+                        loaded: timeline.length,
+                        total: totalCount,
+                    })
+                    : t('snapshot.loadedAll', { count: timeline.length }),
+            });
+            storageDetails = element('details', {
+                className: 'st-devtools-disclosure st-devtools-timeline-storage-details',
+            });
+            storageDetails.appendChild(element('summary', {
+                text: t('timeline.storageDetailsTitle'),
+            }));
+            const storageContent = element('div', {
+                className: 'st-devtools-timeline-storage-content',
+            });
+            storageContent.append(
+                loadedStatus,
+                this.renderStorageOverview(),
+                this.buildStorageToolsPanel(),
+            );
+            storageDetails.appendChild(storageContent);
+        }
 
-        if (this.timeline.length === 0) {
+        if (timeline.length === 0) {
             page.appendChild(this.renderEmpty());
             if (corruptWarning) page.appendChild(corruptWarning);
-            page.appendChild(storageDetails);
+            if (storageDetails) page.appendChild(storageDetails);
             return page;
         }
 
-        page.appendChild(this.renderGrowthChart(analyses, this.timelineTotalCount));
+        page.appendChild(this.renderGrowthChart(analyses, totalCount));
         if (corruptWarning) page.appendChild(corruptWarning);
         const timelineItems = [...analyses].reverse();
         const renderTimelineEntry = (analysis) => {
             const { snapshot, previous, tokenDelta, lore } = analysis;
             const entry = element('article', { className: 'st-devtools-timeline-entry' });
-            entry.classList.toggle('active', snapshot.id === this.selectedId);
-            entry.classList.toggle('is-selected', this.selectedTimelineIds.has(snapshot.id));
+            entry.classList.toggle('active', snapshot.id === selectedId);
+            entry.classList.toggle(
+                'is-selected',
+                !tutorial && this.selectedTimelineIds.has(snapshot.id),
+            );
             const selectWrapper = element('label', {
                 className: 'st-devtools-timeline-select',
             });
             const select = element('input');
             select.type = 'checkbox';
-            select.checked = this.selectedTimelineIds.has(snapshot.id);
+            select.checked = !tutorial && this.selectedTimelineIds.has(snapshot.id);
             select.dataset.snapshotId = snapshot.id;
             select.setAttribute(
                 'aria-label',
@@ -6136,7 +6886,9 @@ export class DevToolsWindow {
             });
             selectWrapper.appendChild(select);
             const button = element('button', { className: 'st-devtools-timeline-item', type: 'button' });
-            const heading = element('strong', { text: formatTimestamp(snapshot.timestamp) });
+            const heading = element('strong', {
+                text: formatSnapshotHeading(snapshot, tutorial),
+            });
             const metadata = element('span', {
                 text: `${snapshotProviderDisplay(snapshot)} · ${snapshot.model ?? t('timeline.unknownModel')} · ${t('snapshot.tokens', { count: snapshot.stats?.totalTokens ?? 0 })}`,
             });
@@ -6197,12 +6949,19 @@ export class DevToolsWindow {
             remove.appendChild(element('i', { className: 'fa-solid fa-trash' }));
             remove.addEventListener('click', async () => {
                 if (!confirm(t('timeline.deleteSnapshotConfirm'))) return;
-                await this.deleteTimelineSnapshot(snapshot);
+                await this.withBusyButton(
+                    remove,
+                    () => this.deleteTimelineSnapshot(snapshot),
+                );
             });
-            entry.append(selectWrapper, button, remove);
+            if (tutorial) {
+                entry.append(button);
+            } else {
+                entry.append(selectWrapper, button, remove);
+            }
 
             if (
-                snapshot.id === this.selectedId
+                snapshot.id === selectedId
                 && (
                     lore.activated.length
                     || lore.removed.length
@@ -6216,19 +6975,24 @@ export class DevToolsWindow {
         const snapshots = element('details', {
             className: 'st-devtools-disclosure st-devtools-timeline-snapshots',
         });
-        snapshots.open = this.timelineSnapshotsOpen;
+        snapshots.open = this.activeTimelineSnapshotsOpen();
         snapshots.addEventListener('toggle', () => {
-            this.timelineSnapshotsOpen = snapshots.open;
+            if (tutorial) {
+                this.onboardingSession.timelineSnapshotsOpen = snapshots.open;
+                if (snapshots.open) this.recordOnboardingAction('toggle', snapshots);
+            } else {
+                this.timelineSnapshotsOpen = snapshots.open;
+            }
         });
         const snapshotsSummary = element('summary');
         snapshotsSummary.append(
             element('strong', { text: t('timeline.snapshotsTitle') }),
             element('span', {
                 className: 'st-devtools-disclosure-count',
-                text: this.timelineTotalCount > analyses.length
+                text: totalCount > analyses.length
                     ? t('timeline.loadedSnapshotCount', {
                         loaded: analyses.length,
-                        total: this.timelineTotalCount,
+                        total: totalCount,
                     })
                     : t('timeline.snapshotCount', { count: analyses.length }),
             }),
@@ -6238,7 +7002,6 @@ export class DevToolsWindow {
             const content = element('div', {
                 className: 'st-devtools-timeline-snapshot-content',
             });
-            const selectionToolbar = this.renderTimelineSelectionToolbar();
             const list = element('div', {
                 className: 'st-devtools-timeline',
             });
@@ -6248,11 +7011,12 @@ export class DevToolsWindow {
                 focusSelector: '.st-devtools-timeline-item',
                 ariaLabel: t('timeline.snapshotsTitle'),
             });
-            content.append(selectionToolbar, list);
+            if (!tutorial) content.appendChild(this.renderTimelineSelectionToolbar());
+            content.appendChild(list);
             return content;
         });
         page.appendChild(snapshots);
-        page.appendChild(storageDetails);
+        if (storageDetails) page.appendChild(storageDetails);
         return page;
     }
 
@@ -6412,7 +7176,10 @@ export class DevToolsWindow {
         removeSelected.addEventListener('click', async () => {
             const countToDelete = this.selectedTimelineIds.size;
             if (!confirm(t('timeline.deleteSelectedConfirm', { count: countToDelete }))) return;
-            await this.deleteSelectedTimelineSnapshots();
+            await this.withBusyButton(
+                removeSelected,
+                () => this.deleteSelectedTimelineSnapshots(),
+            );
         });
         toolbar.append(selectAllLabel, count, removeSelected);
         return toolbar;
@@ -6461,32 +7228,34 @@ export class DevToolsWindow {
             type: 'button',
         });
         button.disabled = this.timeline.length === 0;
-        button.addEventListener('click', async () => {
-            const errorId = `export-current:${format}`;
-            try {
-                const chatId = this.currentChatId();
-                const maximum = Number(this.store.maxSnapshotsPerChat)
-                    || MAX_TIMELINE_READ_LIMIT;
-                const timeline = this.timelineTotalCount > this.timeline.length
-                    ? await this.store.getTimeline(chatId, { limit: maximum })
-                    : this.timeline;
-                const extension = format === 'markdown' ? 'md' : format;
-                const mime = format === 'json' ? 'application/json' : 'text/markdown';
-                const date = new Date().toISOString().replaceAll(':', '-');
-                downloadText(
-                    `st-devtools-timeline-diagnostics-${date}.${extension}`,
-                    serializeTimelineDiagnostics(timeline, format),
-                    mime,
-                );
-                this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
-            } catch (error) {
-                this.addStorageError({
-                    id: errorId,
-                    error,
-                    retry: null,
-                });
-                globalThis.toastr?.error?.(t('storage.exportCurrentFailed'), 'ST DevTools');
-            }
+        button.addEventListener('click', () => {
+            void this.withBusyButton(button, async () => {
+                const errorId = `export-current:${format}`;
+                try {
+                    const chatId = this.currentChatId();
+                    const maximum = Number(this.store.maxSnapshotsPerChat)
+                        || MAX_TIMELINE_READ_LIMIT;
+                    const timeline = this.timelineTotalCount > this.timeline.length
+                        ? await this.store.getTimeline(chatId, { limit: maximum })
+                        : this.timeline;
+                    const extension = format === 'markdown' ? 'md' : format;
+                    const mime = format === 'json' ? 'application/json' : 'text/markdown';
+                    const date = new Date().toISOString().replaceAll(':', '-');
+                    downloadText(
+                        `st-devtools-timeline-diagnostics-${date}.${extension}`,
+                        serializeTimelineDiagnostics(timeline, format),
+                        mime,
+                    );
+                    this.storageErrors = this.storageErrors.filter((item) => item.id !== errorId);
+                } catch (error) {
+                    this.addStorageError({
+                        id: errorId,
+                        error,
+                        retry: null,
+                    });
+                    globalThis.toastr?.error?.(t('storage.exportCurrentFailed'), 'ST DevTools');
+                }
+            });
         });
         return button;
     }
@@ -6498,7 +7267,12 @@ export class DevToolsWindow {
             text: t('action.exportAllDiagnostics', { format: label }),
             type: 'button',
         });
-        button.addEventListener('click', () => this.exportAllTimelineDiagnostics(format));
+        button.addEventListener('click', () => {
+            void this.withBusyButton(
+                button,
+                () => this.exportAllTimelineDiagnostics(format),
+            );
+        });
         return button;
     }
 
@@ -6860,15 +7634,20 @@ export class DevToolsWindow {
             text: t('timeline.openGrowthSnapshot'),
             type: 'button',
         });
+        openSelected.dataset.tourId = 'timeline-open-selected';
         detail.append(detailText, openSelected);
         const pointNodes = [];
         const selectedIndex = visibleAnalyses.findIndex(
-            ({ snapshot }) => snapshot.id === this.selectedId,
+            ({ snapshot }) => snapshot.id === this.activeSelectedId(),
         );
         let pinnedIndex = selectedIndex >= 0 ? selectedIndex : visibleAnalyses.length - 1;
         const showPointDetail = (index, { pin = false } = {}) => {
             if (pin) {
                 pinnedIndex = index;
+                if (this.tutorialIsActive()) {
+                    this.onboardingSession.growthPinnedId = visibleAnalyses[index]?.snapshot?.id
+                        ?? null;
+                }
                 pointNodes.forEach((node, pointIndex) => {
                     node.setAttribute('tabindex', pointIndex === pinnedIndex ? '0' : '-1');
                 });
@@ -6876,7 +7655,7 @@ export class DevToolsWindow {
             const snapshot = visibleAnalyses[index]?.snapshot;
             if (!snapshot) return;
             detailText.textContent = t('timeline.growthPointDetail', {
-                time: formatTimestamp(snapshot.timestamp),
+                time: formatSnapshotHeading(snapshot, this.tutorialIsActive()),
                 count: values[index],
             });
             pointNodes.forEach((node, pointIndex) => {
@@ -6893,13 +7672,14 @@ export class DevToolsWindow {
             if (!snapshot) return;
             this.setSelectedSnapshotId(snapshot.id);
             this.selectTab('explorer');
+            if (this.tutorialIsActive()) this.recordOnboardingAction('click', openSelected);
         });
         points.forEach(({ x, y }, index) => {
             const snapshot = visibleAnalyses[index].snapshot;
             const isLatest = index === visibleAnalyses.length - 1;
-            const isSelected = snapshot.id === this.selectedId;
+            const isSelected = snapshot.id === this.activeSelectedId();
             const label = [
-                formatTimestamp(snapshot.timestamp),
+                formatSnapshotHeading(snapshot, this.tutorialIsActive()),
                 t('snapshot.tokens', { count: values[index] }),
                 ...(isLatest ? [t('timeline.latestSnapshot')] : []),
             ].join(' · ');
@@ -6918,6 +7698,7 @@ export class DevToolsWindow {
                 'aria-current': isSelected ? 'true' : 'false',
                 'aria-pressed': 'false',
                 'data-point-index': index,
+                'data-snapshot-id': snapshot.id,
             });
             point.appendChild(svgElement('title'));
             point.firstChild.textContent = label;
@@ -6932,15 +7713,20 @@ export class DevToolsWindow {
             point.addEventListener('mouseleave', () => showPointDetail(pinnedIndex));
             point.addEventListener('focus', () => showPointDetail(index));
             point.addEventListener('blur', () => showPointDetail(pinnedIndex));
-            point.addEventListener('click', () => showPointDetail(index, { pin: true }));
+            const activatePoint = () => {
+                showPointDetail(index, { pin: true });
+                if (this.tutorialIsActive()) this.recordOnboardingAction('click', point);
+            };
+            point.addEventListener('click', activatePoint);
             point.addEventListener('keydown', (event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    showPointDetail(index, { pin: true });
+                    activatePoint();
                     return;
                 }
                 if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
                 event.preventDefault();
+                if (this.tutorialIsActive()) return;
                 let nextIndex = index;
                 if (event.key === 'ArrowLeft') nextIndex = Math.max(0, index - 1);
                 if (event.key === 'ArrowRight') nextIndex = Math.min(points.length - 1, index + 1);
@@ -7080,21 +7866,24 @@ export class DevToolsWindow {
 
     renderDiff() {
         const page = element('div', { className: 'st-devtools-page' });
-        if (this.timeline.length < 2) {
+        const timeline = this.activeTimeline();
+        if (timeline.length < 2) {
             page.appendChild(proseElement('p', t('diff.minimum')));
             return page;
         }
 
         const selectors = element('div', { className: 'st-devtools-diff-selectors' });
         const baseSelect = this.createTimelineSelect(
-            this.timeline.at(-2).id,
+            (this.tutorialIsActive() ? timeline.at(0) : timeline.at(-2)).id,
             t('diff.base'),
             t('diff.baseDescription'),
+            'base',
         );
         const compareSelect = this.createTimelineSelect(
-            this.selectedSnapshot()?.id ?? this.timeline.at(-1).id,
+            this.selectedSnapshot()?.id ?? timeline.at(-1).id,
             t('diff.compare'),
             t('diff.compareDescription'),
+            'compare',
         );
         selectors.append(baseSelect.wrapper, compareSelect.wrapper);
         const diffOutput = element('pre', { className: 'st-devtools-diff-output' });
@@ -7109,6 +7898,12 @@ export class DevToolsWindow {
         ));
         fullDiffSummary.appendChild(fullDiffHeading);
         fullDiff.appendChild(fullDiffSummary);
+        fullDiff.dataset.tourId = 'diff-full';
+        fullDiff.addEventListener('toggle', () => {
+            if (this.tutorialIsActive() && fullDiff.open) {
+                this.recordOnboardingAction('toggle', fullDiff);
+            }
+        });
         attachLazyDetailsContent(fullDiff, () => diffOutput);
         const sourceSection = element('section', { className: 'st-devtools-diff-section' });
         const loreSection = element('section', { className: 'st-devtools-diff-section' });
@@ -7136,10 +7931,10 @@ export class DevToolsWindow {
             if (fullDiff.open) renderFullDiff();
         });
         const renderDiff = async () => {
-            selectedBase = this.timeline.find(
+            selectedBase = timeline.find(
                 (snapshot) => snapshot.id === baseSelect.select.value,
             );
-            selectedCompare = this.timeline.find(
+            selectedCompare = timeline.find(
                 (snapshot) => snapshot.id === compareSelect.select.value,
             );
             const currentSelectionRevision = ++selectionRevision;
@@ -7165,6 +7960,9 @@ export class DevToolsWindow {
                     selectedBase,
                     selectedCompare,
                 );
+                if (this.tutorialIsActive()) {
+                    this.recordOnboardingAction('change', document.activeElement);
+                }
                 return;
             }
 
@@ -7287,6 +8085,13 @@ export class DevToolsWindow {
             const card = element('details', {
                 className: `st-devtools-source-change status-${change.status}`,
             });
+            card.dataset.changeStatus = change.status;
+            card.dataset.sourceId = change.source?.id ?? '';
+            card.addEventListener('toggle', () => {
+                if (this.tutorialIsActive() && card.open) {
+                    this.recordOnboardingAction('toggle', card);
+                }
+            });
             const summary = element('summary');
             const kindBadges = element('span', {
                 className: 'st-devtools-source-change-kinds',
@@ -7388,15 +8193,18 @@ export class DevToolsWindow {
         section.appendChild(this.renderLoreChangeList(changes));
     }
 
-    createTimelineSelect(selectedId, labelText, description) {
+    createTimelineSelect(selectedId, labelText, description, role = null) {
         const wrapper = element('div', { className: 'st-devtools-picker' });
+        if (role) wrapper.dataset.diffRole = role;
         wrapper.appendChild(explainedTitle(labelText, description, {
             titleTag: 'span',
         }));
         const select = element('select');
         select.setAttribute('aria-label', labelText);
-        for (const snapshot of this.timeline) {
-            const option = element('option', { text: formatTimestamp(snapshot.timestamp) });
+        for (const snapshot of this.activeTimeline()) {
+            const option = element('option', {
+                text: formatSnapshotHeading(snapshot, this.tutorialIsActive()),
+            });
             option.value = snapshot.id;
             option.selected = snapshot.id === selectedId;
             select.appendChild(option);
@@ -7772,7 +8580,9 @@ export class DevToolsWindow {
         const copy = element('button', { className: 'menu_button', text: t('action.copy'), type: 'button' });
         copy.addEventListener('click', async () => {
             if (!confirm(t('export.copyConfirm'))) return;
-            await copyWithFeedback(snapshot.finalText, 'action.promptCopied');
+            await this.withActiveBlockingTask(
+                () => copyWithFeedback(snapshot.finalText, 'action.promptCopied'),
+            );
         });
         exportActions.append(
             copy,
@@ -9026,41 +9836,43 @@ export class DevToolsWindow {
                 importInput.value = '';
                 return;
             }
-            try {
-                const prepared = preparePolicyImport(await file.text(), {
-                    ruleSettings: this.pendingImportedRuleSettings ?? this.ruleSettings,
-                    comparisonPolicy: this.comparisonPolicySettings,
-                    reviews: this.pendingImportedReviews ?? this.findingReviewDocument,
-                });
-                this.pendingImportedRuleSettings = prepared.nextState.ruleSettings;
-                this.pendingImportedReviews = prepared.nextState.reviews ?? null;
-                this.setComparisonPolicySettings(prepared.nextState.comparisonPolicy);
-                this.comparisonPolicyDirty = true;
-                this.comparisonPolicyOpen = true;
-                this.comparisonPolicySectionOpen.transfer = true;
-                this.comparisonPolicySectionOpen.preview = true;
-                this.ruleAuditLog = appendAuditEntry(this.ruleAuditLog, {
-                    action: 'policy.import-preview',
-                    before: this.savedComparisonPolicySettings,
-                    after: this.comparisonPolicySettings,
-                    summary: {
-                        profiles: this.comparisonPolicySettings.profiles.length,
-                    },
-                });
-                this.ruleReviewStatus = t('comparison.transfer.ready');
-                this.ruleReviewStatusIsError = false;
-                this.render();
-            } catch (error) {
-                setPolicyFormStatus(
-                    status,
-                    t('comparison.transfer.failed', {
-                        error: error?.code ?? error?.message ?? t('common.unknown'),
-                    }),
-                    true,
-                );
-            } finally {
-                importInput.value = '';
-            }
+            await this.withActiveBlockingTask(async () => {
+                try {
+                    const prepared = preparePolicyImport(await file.text(), {
+                        ruleSettings: this.pendingImportedRuleSettings ?? this.ruleSettings,
+                        comparisonPolicy: this.comparisonPolicySettings,
+                        reviews: this.pendingImportedReviews ?? this.findingReviewDocument,
+                    });
+                    this.pendingImportedRuleSettings = prepared.nextState.ruleSettings;
+                    this.pendingImportedReviews = prepared.nextState.reviews ?? null;
+                    this.setComparisonPolicySettings(prepared.nextState.comparisonPolicy);
+                    this.comparisonPolicyDirty = true;
+                    this.comparisonPolicyOpen = true;
+                    this.comparisonPolicySectionOpen.transfer = true;
+                    this.comparisonPolicySectionOpen.preview = true;
+                    this.ruleAuditLog = appendAuditEntry(this.ruleAuditLog, {
+                        action: 'policy.import-preview',
+                        before: this.savedComparisonPolicySettings,
+                        after: this.comparisonPolicySettings,
+                        summary: {
+                            profiles: this.comparisonPolicySettings.profiles.length,
+                        },
+                    });
+                    this.ruleReviewStatus = t('comparison.transfer.ready');
+                    this.ruleReviewStatusIsError = false;
+                    this.render();
+                } catch (error) {
+                    setPolicyFormStatus(
+                        status,
+                        t('comparison.transfer.failed', {
+                            error: error?.code ?? error?.message ?? t('common.unknown'),
+                        }),
+                        true,
+                    );
+                } finally {
+                    importInput.value = '';
+                }
+            });
         });
         wrapper.append(
             proseElement('p', t('comparison.transfer.privacy')),
@@ -11045,6 +11857,7 @@ export class DevToolsWindow {
                 'action.copySuggestion',
                 semanticSuggestionCopyText(suggestion),
                 'action.suggestionCopied',
+                (task) => this.withActiveBlockingTask(task),
             ));
             card.appendChild(actions);
             const evidenceItems = Array.isArray(suggestion?.evidence)
@@ -11529,15 +12342,29 @@ export class DevToolsWindow {
 
     renderRules(snapshot, providedAnalysis = undefined) {
         const page = element('div', { className: 'st-devtools-page' });
+        const tutorial = this.tutorialIsActive();
         page.appendChild(this.renderSnapshotPicker());
         const host = element('div', {
             className: 'st-devtools-rule-analysis-host',
         });
         host.dataset.tourId = 'rule-results';
         page.appendChild(host);
-        const effectiveRuleSettings = this.pendingImportedRuleSettings
-            ?? this.ruleSettings;
+        const effectiveRuleSettings = tutorial
+            ? DEFAULT_RULE_SETTINGS
+            : this.pendingImportedRuleSettings ?? this.ruleSettings;
+        const tutorialAnalysis = tutorial
+            ? this.onboardingSession.ruleAnalysis ?? analyzeSnapshotDetailed(
+                snapshot,
+                DEFAULT_RULE_SETTINGS,
+                DEFAULT_COMPARISON_POLICY_SETTINGS,
+            )
+            : undefined;
+        if (tutorial && !this.onboardingSession.ruleAnalysis) {
+            this.onboardingSession.ruleAnalysis = tutorialAnalysis;
+        }
         if (
+            !tutorial
+            &&
             providedAnalysis === undefined
             && this.shouldUseAsyncAnalysis('rules', [snapshot])
         ) {
@@ -11598,7 +12425,7 @@ export class DevToolsWindow {
             });
             return page;
         }
-        const analysis = providedAnalysis ?? analyzeSnapshotDetailed(
+        const analysis = tutorialAnalysis ?? providedAnalysis ?? analyzeSnapshotDetailed(
             snapshot,
             effectiveRuleSettings,
             this.comparisonPolicySettings,
@@ -11606,14 +12433,18 @@ export class DevToolsWindow {
         const reviewResult = applyFindingReviews(
             analysis?.findings ?? [],
             snapshot?.sources ?? [],
-            this.pendingImportedReviews ?? this.findingReviewDocument,
-            this.findingReviewContext(snapshot),
-            this.findingHiddenOnce,
+            tutorial
+                ? DEFAULT_FINDING_REVIEW_DOCUMENT
+                : this.pendingImportedReviews ?? this.findingReviewDocument,
+            tutorial
+                ? { scopeKeys: { preset: null, character: null, chat: null } }
+                : this.findingReviewContext(snapshot),
+            tutorial ? new Set() : this.findingHiddenOnce,
         );
         const findings = reviewResult.visible.filter(
             ({ review }) => review.decision !== 'false-positive',
         );
-        if (this.ruleViewMode === 'ai') {
+        if (!tutorial && this.ruleViewMode === 'ai') {
             host.classList.add('is-ai-mode');
             host.append(
                 this.renderSemanticInspectorSettings(),
@@ -11703,13 +12534,15 @@ export class DevToolsWindow {
                 ),
             );
             host.appendChild(empty);
-            this.appendRuleSupportingSections(
-                host,
-                snapshot,
-                analysis,
-                findings,
-                reviewResult,
-            );
+            if (!tutorial) {
+                this.appendRuleSupportingSections(
+                    host,
+                    snapshot,
+                    analysis,
+                    findings,
+                    reviewResult,
+                );
+            }
             return page;
         }
 
@@ -11725,6 +12558,7 @@ export class DevToolsWindow {
             });
             card.dataset.findingId = item.review?.findingKey ?? item.id;
             card.dataset.ruleId = item.ruleId;
+            if (item.ruleId === 'format') card.dataset.tourId = 'rule-format-finding';
             const header = element('header');
             header.append(
                 element('span', {
@@ -11795,6 +12629,11 @@ export class DevToolsWindow {
                     evidenceSummary,
                     element('pre', { text: item.evidence }),
                 );
+                evidence.addEventListener('toggle', () => {
+                    if (tutorial && evidence.open) {
+                        this.recordOnboardingAction('toggle', evidence);
+                    }
+                });
                 card.appendChild(evidence);
             }
             const actions = element('div', { className: 'st-devtools-rule-actions' });
@@ -11807,6 +12646,9 @@ export class DevToolsWindow {
                 sources.addEventListener('click', () => {
                     this.openExplorerForFinding(snapshot, item, 'sources');
                 });
+                if (item.ruleId === 'format') {
+                    sources.dataset.tourId = 'rule-related-sources';
+                }
                 actions.appendChild(sources);
             }
             if (item.finalRanges?.length > 0) {
@@ -11821,26 +12663,30 @@ export class DevToolsWindow {
                 actions.appendChild(finalEvidence);
             }
             if (actions.childElementCount > 0) card.appendChild(actions);
-            card.appendChild(this.renderFindingReviewControls(snapshot, item));
+            if (!tutorial) card.appendChild(this.renderFindingReviewControls(snapshot, item));
             list.appendChild(card);
         }
         host.appendChild(list);
-        this.appendRuleSupportingSections(
-            host,
-            snapshot,
-            analysis,
-            findings,
-            reviewResult,
-        );
+        if (!tutorial) {
+            this.appendRuleSupportingSections(
+                host,
+                snapshot,
+                analysis,
+                findings,
+                reviewResult,
+            );
+        }
         return page;
     }
 
     renderSearch(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
+        const tutorial = this.tutorialIsActive();
         page.appendChild(this.renderSnapshotPicker());
         const controls = element('div', { className: 'st-devtools-search-controls' });
         const input = element('input');
         input.type = 'search';
+        input.dataset.tourId = 'search-input';
         input.placeholder = t('search.placeholder');
         input.maxLength = SEARCH_QUERY_MAX_LENGTH;
         const regexLabel = element('label');
@@ -11924,36 +12770,40 @@ export class DevToolsWindow {
                         });
                     }
                 }
-                const response = await this.runUiAnalysis('search', {
-                    snapshot: {
-                        sources: snapshot.sources ?? [],
-                    },
-                    query,
-                    options: searchOptions,
-                }, {
-                    snapshots: [snapshot],
-                    configuration: {
+                const matches = tutorial
+                    ? searchSnapshot(
+                        { sources: snapshot.sources ?? [] },
+                        query,
+                        searchOptions,
+                    )
+                    : (await this.runUiAnalysis('search', {
+                        snapshot: {
+                            sources: snapshot.sources ?? [],
+                        },
                         query,
                         options: searchOptions,
-                    },
-                    controller: activeSearch,
-                    timeoutMs: searchOptions.regex ? 800 : undefined,
-                });
-                const matches = response.result ?? [];
+                    }, {
+                        snapshots: [snapshot],
+                        configuration: {
+                            query,
+                            options: searchOptions,
+                        },
+                        controller: activeSearch,
+                        timeoutMs: searchOptions.regex ? 800 : undefined,
+                    })).result ?? [];
                 if (sequence !== searchSequence || !page.isConnected) return;
                 status.textContent = matches.length === 200
                     ? t('search.matchesLimited', { count: matches.length })
                     : t('search.matches', { count: matches.length });
                 for (const match of matches) {
                     const item = element('button', { className: 'st-devtools-search-result', type: 'button' });
+                    item.dataset.sourceId = match.sourceId;
                     item.append(
                         element('strong', { text: match.sourceLabel }),
                         element('span', { text: match.snippet }),
                     );
                     item.addEventListener('click', () => {
-                        this.activeTab = 'explorer';
-                        localStorage.setItem(LAST_TAB_KEY, this.activeTab);
-                        this.render();
+                        this.selectTab('explorer');
                         this.jumpToSourceCard(match.sourceId);
                         const source = [...this.window.querySelectorAll(
                             '.st-devtools-source',
@@ -11965,8 +12815,15 @@ export class DevToolsWindow {
                             () => source?.classList.remove('search-focus'),
                             1500,
                         );
+                        if (tutorial) this.recordOnboardingAction('click', item);
                     });
                     results.appendChild(item);
+                }
+                if (tutorial) {
+                    this.recordOnboardingAction('input', input);
+                    if (matches.length > 0) {
+                        queueMicrotask(() => this.refreshOnboardingTarget());
+                    }
                 }
             } catch (error) {
                 if (
@@ -11982,6 +12839,13 @@ export class DevToolsWindow {
             activeSearch?.abort();
             searchSequence += 1;
             results.replaceChildren();
+            const tutorialStep = tutorial ? this.currentOnboardingStep() : null;
+            if (
+                tutorialStep?.id === 'search-query-korean'
+                && input.value !== tutorialStep.interaction?.value
+            ) {
+                this.recordOnboardingAction('input', input);
+            }
             if (!input.value) {
                 status.textContent = '';
                 return;
@@ -11989,7 +12853,7 @@ export class DevToolsWindow {
             status.textContent = t('search.waiting');
             debounceTimer = setTimeout(run, delay);
         };
-        input.addEventListener('input', () => schedule());
+        input.addEventListener('input', () => schedule(tutorial ? 0 : SEARCH_DEBOUNCE_MS));
         regex.addEventListener('change', () => {
             input.maxLength = regex.checked
                 ? USER_REGEX_MAX_LENGTH

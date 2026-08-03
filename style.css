@@ -4786,6 +4786,36 @@
     color: var(--st-devtools-primary);
 }
 
+.st-devtools-onboarding-topic-list {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    text-align: left;
+}
+
+.st-devtools-onboarding-topic-list > li {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    padding: 0.5rem 0.6rem;
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-surface);
+    color: var(--st-devtools-text);
+    font-size: 0.76rem;
+    font-weight: 750;
+}
+
+.st-devtools-onboarding-topic-list i {
+    width: 1rem;
+    color: var(--st-devtools-primary);
+    text-align: center;
+}
+
 .st-devtools-onboarding-step {
     display: flex;
     flex-direction: column;
@@ -5143,6 +5173,141 @@
     display: none !important;
 }
 
+/* v0.15.1 hands-on tutorial: the invitation is modal, practice steps use the real UI. */
+.st-devtools-onboarding-overlay[data-phase='steps'] {
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-overlay[data-phase='steps']
+.st-devtools-onboarding-panel {
+    width: min(360px, calc(100% - 2rem));
+    max-height: min(560px, calc(100% - 2rem));
+    pointer-events: auto;
+}
+
+.st-devtools-onboarding-session-badge,
+.st-devtools-onboarding-practice-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid color-mix(in srgb, var(--st-devtools-primary) 34%, transparent);
+    border-radius: 999px;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary);
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.st-devtools-onboarding-session-badge {
+    padding: 0.22rem 0.48rem;
+}
+
+.st-devtools-onboarding-session-badge[hidden] {
+    display: none;
+}
+
+.st-devtools-onboarding-practice-notice {
+    width: fit-content;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin: 0 0 0.75rem;
+    padding: 0.45rem 0.65rem;
+}
+
+.st-devtools-window.is-onboarding-practice .st-devtools-content {
+    scroll-padding-block: 5rem 22rem;
+}
+
+.st-devtools-window.is-onboarding-practice {
+    resize: none !important;
+}
+
+.st-devtools-onboarding-target {
+    position: relative;
+    z-index: 2;
+    outline: 3px solid var(--st-devtools-focus) !important;
+    outline-offset: 4px;
+}
+
+.st-devtools-onboarding-explanation,
+.st-devtools-onboarding-task {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.7rem 0.75rem;
+    border-radius: var(--st-devtools-radius-sm);
+}
+
+.st-devtools-onboarding-explanation {
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-onboarding-explanation.is-when {
+    border-inline-start: 3px solid var(--st-devtools-primary);
+}
+
+.st-devtools-onboarding-explanation > strong,
+.st-devtools-onboarding-task > strong {
+    color: var(--st-devtools-text);
+    font-size: 0.78rem;
+}
+
+.st-devtools-onboarding-explanation > p,
+.st-devtools-onboarding-task > p {
+    margin: 0;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.55;
+}
+
+.st-devtools-onboarding-task {
+    border: 1px solid color-mix(in srgb, var(--st-devtools-primary) 38%, var(--st-devtools-border));
+    background: var(--st-devtools-primary-soft);
+}
+
+.st-devtools-onboarding-task.is-complete {
+    border-color: color-mix(in srgb, var(--st-devtools-status-success) 55%, var(--st-devtools-border));
+    background: color-mix(in srgb, var(--st-devtools-status-success) 11%, var(--st-devtools-surface));
+}
+
+.st-devtools-onboarding-task-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.35rem;
+    color: var(--st-devtools-primary);
+    font-size: 0.74rem;
+    font-weight: 800;
+}
+
+.st-devtools-onboarding-task.is-complete
+.st-devtools-onboarding-task-status {
+    color: var(--st-devtools-status-success);
+}
+
+.st-devtools-window .st-devtools-onboarding-practice-action {
+    width: 100% !important;
+    margin-top: 0.25rem !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-skip-step {
+    margin-inline-end: auto !important;
+    background: transparent !important;
+    color: var(--st-devtools-text-muted) !important;
+    font-size: 0.76rem !important;
+}
+
+.st-devtools-onboarding-actions > button:disabled {
+    cursor: not-allowed !important;
+    opacity: 0.48 !important;
+}
+
+.st-devtools-onboarding-overlay[data-phase='steps']
+.st-devtools-onboarding-highlight {
+    box-shadow:
+        0 0 0 9999px rgb(8 15 30 / 42%),
+        0 0 0 5px color-mix(in srgb, var(--st-devtools-focus) 24%, transparent);
+}
+
 @keyframes st-devtools-focus {
     0%,
     100% {
@@ -5192,7 +5357,12 @@
         left: 0.55rem;
         top: auto !important;
         width: auto;
-        max-height: min(66dvh, calc(100dvh - 104px));
+        max-height: min(48dvh, calc(100dvh - 104px));
+    }
+
+    .st-devtools-window.is-onboarding-practice .st-devtools-content {
+        padding-bottom: calc(50dvh + 88px);
+        scroll-padding-block: 4.5rem calc(50dvh + 96px);
     }
 
     .st-devtools-onboarding-overlay.is-centered {

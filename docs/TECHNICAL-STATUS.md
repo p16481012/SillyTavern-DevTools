@@ -1,13 +1,14 @@
-# v0.15.0 기술 구현 현황
+# v0.15.1 기술 구현 현황
 
-## v0.15.0 선택형 온보딩
+## v0.15.1 실제 제품 UI hands-on 온보딩 v2
 
-- 6단계 워크스루가 캡처 상태·전송 프롬프트·규칙 검사·기록·변경 비교·검색의 실제 UI 대상을 순서대로 강조합니다.
-- 각 단계는 실제 사용과 닮은 고정 연습 카드로 provider/model/토큰, 요청 포함 상태, 충돌 근거, 토큰 변화, diff, 검색 일치를 설명합니다. 실제 스냅샷이 없어도 전체 흐름을 볼 수 있습니다.
-- 연습 데이터는 오버레이 DOM 안에서만 렌더링하며 snapshot store·timeline·분석·AI provider·clipboard·export를 호출하지 않고 현재 탭과 선택도 바꾸지 않습니다.
-- 첫 실행 제안은 `new` 상태에서 한 번만 시도하고 건너뛰기·완료만 `st-devtools:onboarding:v1`에 저장합니다. 중간 진행률·시각·내용은 저장하지 않습니다.
-- AI 의미 검사 또는 공식 Provider 평가가 활성 상태면 워크스루를 열지 않으며, 워크스루 중 새 AI 실행도 차단합니다.
-- dialog·focus trap·focus 복원·Escape·screen reader 상태를 제공하고 모바일에서는 하단 내비게이션을 가리지 않는 bottom sheet를 사용합니다.
+- 8~12분 hands-on 실습이 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5의 6개 주제·38단계로 실제 UI 대상을 순서대로 강조합니다.
+- 각 단계는 `무엇인가요?`·`언제 쓰나요?`·직접 수행할 `할 일`을 분리합니다. 상호작용 단계는 실제 click/change/input/toggle을 완료해야 다음으로 이동하며 `이 단계 건너뛰기`를 선택할 수 있습니다.
+- immutable fixture는 920·1,080·1,248 토큰의 실제와 닮은 스냅샷 3개, full privacy·provider/model·request/payload·range/provenance를 포함합니다. 두 번째에서 세 번째로 갈 때 소스 추가·수정·삭제와 JSON/XML 형식 충돌, 한국어 검색 일치가 모두 발생합니다.
+- `createOnboardingSession()`은 실제 `timeline`·`selectedId`·`activeTab`과 분리된 mutable view state를 만듭니다. 초기에는 스냅샷 2개를 보이고 캡처 연습 뒤에만 세 번째를 session timeline에 추가하며 실제 제품 renderer와 로컬 rules/diff/search 경로가 이를 읽습니다.
+- 실습은 실제 snapshot store의 추가·삭제·보관 작업과 provider·Semantic Inspector·clipboard·export를 호출하거나 변경하지 않습니다. 종료 시 session을 제거하고 live 탭·선택·타임라인·캡처 상태를 복구하며 실습 중 도착한 live 캡처가 있으면 후속 refresh합니다.
+- 첫 실행 제안은 `new` 상태에서 한 번만 시도하고 전체 건너뛰기·완료만 `st-devtools:onboarding:v2`에 저장합니다. 중간 진행률·시각·연습 원문은 저장하지 않습니다.
+- AI 의미 검사 또는 공식 Provider 평가가 활성 상태면 실습을 열지 않으며 실습 중 새 AI 실행도 차단합니다. 초대 dialog의 focus trap·복원·Escape·screen reader 상태와 hands-on coachmark·모바일 bottom sheet를 제공합니다.
 
 ## v0.14.1 공식 Provider harness·구조 경로 평가
 
@@ -337,10 +338,10 @@
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
 - 실제 초보자 검토에서 확인되는 워크스루 문구·예시 밀도·강조 위치 보정
 
-선택형 온보딩의 기본 계약은 v0.15.0에서 완료했습니다. 코치마크는 실제 데이터나 AI 응답을 미리 실행하는 시뮬레이터가 아니며, 고정 연습 데이터로 결과를 읽는 법만 안내합니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+선택형 온보딩의 기본 계약은 v0.15.1에서 완료했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
 1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
-3. 온보딩은 실제 초보자 검토 뒤 문구와 강조 위치를 보정하되 여섯 단계와 격리 경계를 기본값으로 유지합니다.
+3. 온보딩은 실제 초보자 검토 뒤 문구와 강조 위치를 보정하되 6개 주제·38단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.

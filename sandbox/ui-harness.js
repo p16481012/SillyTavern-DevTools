@@ -68,7 +68,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.15.0',
+        extensionVersion: '0.15.1',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1447,7 +1447,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.15.0',
+    version: '0.15.1',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1637,7 +1637,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.15.0',
+        extensionVersion: '0.15.1',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1684,7 +1684,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.15.0',
+        version: '0.15.1',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1792,21 +1792,226 @@ document.getElementById('sandbox-select-redacted')?.addEventListener('click', ()
 document.getElementById('sandbox-select-metadata')?.addEventListener('click', () => {
     selectPrivacyFixture('metadata');
 });
-globalThis.devToolsSandboxFixtures = {
+
+const SANDBOX_LAST_TAB_KEY = 'st-devtools:last-tab';
+let onboardingIsolationBaseline = null;
+
+function sandboxProviderCallCounters() {
+    return Object.freeze({
+        networkCallCount: semanticFixtureStats.networkCallCount,
+        adapterGenerateCount: semanticFixtureStats.adapterGenerateCount,
+        prepareCount: semanticFixtureStats.prepareCount,
+        inspectCount: semanticFixtureStats.inspectCount,
+        validatedResultCount: semanticFixtureStats.validatedResultCount,
+    });
+}
+
+function sandboxLastTab() {
+    try {
+        return localStorage.getItem(SANDBOX_LAST_TAB_KEY);
+    } catch {
+        return null;
+    }
+}
+
+function sandboxIsolationSnapshot() {
+    return Object.freeze({
+        liveTimelineIds: Object.freeze(
+            devTools.timeline.map((snapshot) => snapshot.id),
+        ),
+        storeTimelineIds: Object.freeze(timeline.map((snapshot) => snapshot.id)),
+        selectedId: devTools.selectedId,
+        lastTab: sandboxLastTab(),
+        storeSnapshotCount: timeline.length + otherTimeline.length,
+        storageRevision,
+        timelinePageReadCount,
+        providerCalls: sandboxProviderCallCounters(),
+    });
+}
+
+function equalStringLists(left = [], right = []) {
+    return left.length === right.length
+        && left.every((value, index) => value === right[index]);
+}
+
+function sandboxOnboardingStatus() {
+    const step = devTools.currentOnboardingStep();
+    const session = devTools.onboardingSession;
+    return {
+        phase: devTools.onboardingPhase,
+        stepId: step?.id ?? null,
+        group: step?.group ?? null,
+        index: devTools.tutorialIsActive() ? devTools.onboardingStepIndex : null,
+        complete: Boolean(devTools.tutorialIsActive() && devTools.onboardingStepComplete),
+        target: step?.target ?? null,
+        tab: devTools.activeTabId(),
+        selectedId: devTools.activeSelectedId(),
+        timelineCount: devTools.activeTimeline().length,
+        captureState: session?.captureState ?? devTools.captureStatus?.state ?? null,
+    };
+}
+
+function sandboxOnboardingIsolationStatus() {
+    const before = onboardingIsolationBaseline;
+    const after = sandboxIsolationSnapshot();
+    if (!before) {
+        return {
+            before: null,
+            after,
+            checks: null,
+            isolated: null,
+        };
+    }
+    const checks = {
+        liveTimeline: equalStringLists(before.liveTimelineIds, after.liveTimelineIds),
+        storeTimeline: equalStringLists(before.storeTimelineIds, after.storeTimelineIds),
+        selectedId: before.selectedId === after.selectedId,
+        lastTab: before.lastTab === after.lastTab,
+        storeSnapshotCount: before.storeSnapshotCount === after.storeSnapshotCount,
+        storageRevision: before.storageRevision === after.storageRevision,
+        providerCalls: JSON.stringify(before.providerCalls) === JSON.stringify(after.providerCalls),
+    };
+    return {
+        before,
+        after,
+        checks,
+        isolated: Object.values(checks).every(Boolean),
+    };
+}
+
+async function waitForSandboxOnboardingAction(stepId, attempts = 125) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (
+            devTools.currentOnboardingStep()?.id === stepId
+            && devTools.onboardingStepComplete
+        ) return true;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
+}
+
+function dispatchSandboxClick(target) {
+    if (typeof target?.click === 'function') {
+        target.click();
+        return;
+    }
+    target?.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: globalThis,
+    }));
+}
+
+async function performSandboxOnboardingAction() {
+    const step = devTools.currentOnboardingStep();
+    const interaction = step?.interaction;
+    if (!step || !interaction) {
+        return {
+            performed: false,
+            reason: step ? 'no-interaction' : 'no-active-step',
+            status: sandboxOnboardingStatus(),
+        };
+    }
+
+    const scope = interaction.event === 'panel'
+        ? devTools.onboardingPanel
+        : devTools.window;
+    const target = scope?.querySelector(interaction.selector) ?? null;
+    if (!target) {
+        return {
+            performed: false,
+            reason: 'target-unavailable',
+            stepId: step.id,
+            selector: interaction.selector,
+            status: sandboxOnboardingStatus(),
+        };
+    }
+
+    if (interaction.event === 'click' || interaction.event === 'panel') {
+        dispatchSandboxClick(target);
+    } else if (interaction.event === 'change' || interaction.event === 'input') {
+        if (interaction.value !== undefined) target.value = String(interaction.value);
+        target.dispatchEvent(new Event(interaction.event, {
+            bubbles: true,
+            cancelable: true,
+        }));
+    } else if (interaction.event === 'toggle') {
+        if (!('open' in target)) {
+            return {
+                performed: false,
+                reason: 'target-not-toggleable',
+                stepId: step.id,
+                selector: interaction.selector,
+                status: sandboxOnboardingStatus(),
+            };
+        }
+        target.open = interaction.state === 'open';
+        target.dispatchEvent(new Event('toggle', { bubbles: true }));
+    } else {
+        return {
+            performed: false,
+            reason: 'unsupported-interaction',
+            stepId: step.id,
+            event: interaction.event,
+            status: sandboxOnboardingStatus(),
+        };
+    }
+
+    const performed = await waitForSandboxOnboardingAction(step.id);
+    return {
+        performed,
+        reason: performed ? null : 'action-timeout',
+        stepId: step.id,
+        event: interaction.event,
+        selector: interaction.selector,
+        status: sandboxOnboardingStatus(),
+    };
+}
+
+const sandboxOnboardingHook = Object.freeze({
+    async startPractice() {
+        if (devTools.onboardingIsOpen()) {
+            devTools.closeOnboarding({ persist: null, restoreFocus: false });
+        }
+        await devTools.open();
+        onboardingIsolationBaseline = sandboxIsolationSnapshot();
+        const started = devTools.startOnboarding({ invitation: false, force: true });
+        return {
+            started,
+            status: sandboxOnboardingStatus(),
+            isolation: sandboxOnboardingIsolationStatus(),
+        };
+    },
+    next() {
+        const advanced = devTools.nextOnboardingStep();
+        return { advanced, status: sandboxOnboardingStatus() };
+    },
+    back() {
+        const moved = devTools.previousOnboardingStep();
+        return { moved, status: sandboxOnboardingStatus() };
+    },
+    skipStep() {
+        const skipped = devTools.skipOnboardingStep();
+        return { skipped, status: sandboxOnboardingStatus() };
+    },
+    exit() {
+        const closed = devTools.closeOnboarding({ persist: null, restoreFocus: false });
+        return {
+            closed,
+            status: sandboxOnboardingStatus(),
+            isolation: sandboxOnboardingIsolationStatus(),
+        };
+    },
+    status: sandboxOnboardingStatus,
+    performCurrentAction: performSandboxOnboardingAction,
+    isolationStatus: sandboxOnboardingIsolationStatus,
+});
+
+const sandboxApi = {
     selectPrivacyFixture,
     setRetroThemeConflict,
     setSemanticFixtureMode,
-    onboarding: {
-        start: () => devTools.startOnboarding({ invitation: true, force: true }),
-        next: () => devTools.nextOnboardingStep(),
-        back: () => devTools.previousOnboardingStep(),
-        skip: () => devTools.closeOnboarding({ persist: 'skipped' }),
-        status: () => ({
-            phase: devTools.onboardingPhase,
-            step: devTools.onboardingOverlay?.dataset?.step ?? null,
-            open: devTools.onboardingIsOpen(),
-        }),
-    },
+    onboarding: sandboxOnboardingHook,
     semantic: {
         inspector: sandboxSemanticInspector,
         adapter: sandboxSemanticAdapter,
@@ -1834,4 +2039,6 @@ globalThis.devToolsSandboxFixtures = {
         return results;
     },
 };
+globalThis.devToolsSandboxFixtures = sandboxApi;
+globalThis.__ST_DEVTOOLS_SANDBOX__ = sandboxApi;
 globalThis.devToolsSandbox = devTools;

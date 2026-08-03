@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.15.0 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.15.1 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.15.0 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.15\.0'/);
+    assert.match(harness, /extensionVersion:\s*'0\.15\.1'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.15\.0'/);
+    assert.match(harness, /version:\s*'0\.15\.1'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -78,7 +78,40 @@ test('v0.15.0 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /setFocusedGrowthFixture/);
     assert.match(harness, /onboardingAutoStart:\s*false/);
     assert.match(harness, /sandbox-onboarding/);
-    assert.match(harness, /onboarding:\s*\{/);
+    assert.match(harness, /onboarding:\s*sandboxOnboardingHook/);
+    assert.match(harness, /const sandboxOnboardingHook = Object\.freeze\(\{/);
+    assert.match(harness, /async startPractice\(\)/);
+    assert.match(
+        harness,
+        /startOnboarding\(\{\s*invitation:\s*false,\s*force:\s*true\s*\}\)/,
+    );
+    assert.match(harness, /skipStep\(\)/);
+    assert.match(harness, /performCurrentAction:\s*performSandboxOnboardingAction/);
+    assert.match(harness, /isolationStatus:\s*sandboxOnboardingIsolationStatus/);
+    assert.match(
+        harness,
+        /function sandboxOnboardingStatus\(\)[\s\S]*?phase:[\s\S]*?stepId:[\s\S]*?group:[\s\S]*?index:[\s\S]*?complete:[\s\S]*?target:[\s\S]*?tab:[\s\S]*?selectedId:[\s\S]*?timelineCount:[\s\S]*?captureState:/,
+    );
+    assert.match(harness, /interaction\.event === 'click' \|\| interaction\.event === 'panel'/);
+    assert.match(harness, /new Event\(interaction\.event,\s*\{/);
+    assert.match(harness, /new Event\('toggle',\s*\{\s*bubbles:\s*true\s*\}\)/);
+    assert.match(harness, /globalThis\.__ST_DEVTOOLS_SANDBOX__ = sandboxApi/);
+    const onboardingHarness = harness.slice(
+        harness.indexOf('const SANDBOX_LAST_TAB_KEY'),
+        harness.indexOf('const sandboxApi ='),
+    );
+    assert.match(onboardingHarness, /liveTimelineIds:/);
+    assert.match(onboardingHarness, /storeSnapshotCount:/);
+    assert.match(onboardingHarness, /lastTab:/);
+    assert.match(onboardingHarness, /providerCalls:/);
+    assert.doesNotMatch(
+        onboardingHarness,
+        /store\.(?:addSnapshot|deleteSnapshot|deleteSnapshots|clearTimeline|clearAll)/,
+    );
+    assert.doesNotMatch(
+        onboardingHarness,
+        /(?:semanticInspector\.inspect|sandboxSemanticAdapter\.generate)/,
+    );
     assert.match(harness, /growthFixture = 'focused'/);
     assert.match(harness, /new CustomEvent\('capture-status'/);
     assert.match(
@@ -87,7 +120,7 @@ test('v0.15.0 sandbox exposes every browser review fixture deterministically', a
     );
     assert.doesNotMatch(harness, /for \(const tab of \[[^\]]*'context'/u);
 
-    assert.match(html, /ST DevTools v0\.15\.0 UI Sandbox/);
+    assert.match(html, /ST DevTools v0\.15\.\d+ UI Sandbox/);
     assert.match(html, /초보자 둘러보기/);
     assert.match(html, /실제 제공자·네트워크 호출은 없습니다/);
     assert.match(html, /sandbox-archive-import-valid/);

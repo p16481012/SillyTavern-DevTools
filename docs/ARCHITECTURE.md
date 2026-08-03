@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.15.0의 선택형 첫 사용 워크스루와 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.15.1의 실제 제품 UI hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -10,11 +10,15 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
 
-### 온보딩 격리 경계
+### hands-on 온보딩의 view-session 격리 경계
 
-v0.15.0의 워크스루는 `src/onboarding.js`의 고정 단계 정의와 `DevToolsWindow`의 오버레이 DOM만 사용합니다. 연습 데이터는 매 단계에서 정적 문자열로 렌더링하며 `timeline`, snapshot store, 현재 선택, 분석 Worker, provider adapter, Semantic Inspector, 클립보드와 내보내기 경로에 전달하지 않습니다. 배경 탭을 자동 전환하지도 않습니다.
+v0.15.1의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. 각 단계는 `무엇인가요?`·`언제 쓰나요?`·직접 수행할 `할 일`을 가지며, 상호작용 단계에는 `이 단계 건너뛰기`가 있습니다. 예상 시간은 8~12분입니다.
 
-오버레이가 열린 동안 일반 영역은 `inert`·`aria-hidden`으로 비활성화되고 focus는 dialog 안에 갇힙니다. AI 의미 검사와 공식 Provider 평가가 실행 중이면 시작하지 않으며, 워크스루가 열린 동안 새 AI 실행도 거부합니다. 저장하는 상태는 schema/tour version과 `skipped` 또는 `completed`뿐입니다. 진행 단계·시각·연습 데이터·실제 데이터는 저장하지 않습니다.
+`src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개를 정의합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다. 따라서 실제 제품 renderer·control과 로컬 정적 rules/diff/search 경로를 그대로 사용하면서 live `timeline`·`selectedId`·`activeTab`은 바꾸지 않습니다.
+
+실습 단계는 실제 탭·select·button·details·검색 입력을 click/change/input/toggle하게 하지만 snapshot store의 추가·삭제·보관 API, provider adapter·Semantic Inspector, 클립보드와 export를 호출하지 않습니다. 캡처 연습의 `capturing → processing → saved`도 session 내부 상태 전환이며 실제 요청을 저장하지 않습니다. AI 의미 검사나 공식 Provider 평가가 실행 중이면 시작하지 않고 실습 중 새 AI 실행도 거부합니다.
+
+초대 화면만 modal dialog로 일반 영역을 `inert`·`aria-hidden` 처리합니다. hands-on 단계에서는 제품 control을 사용할 수 있도록 이를 해제하고 현재 단계와 관계없는 control만 일시적으로 비활성화하며 coach panel은 complementary 영역이 됩니다. 종료 시 임시 비활성화·spotlight·session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태를 다시 렌더링합니다. 실습 중 실제 캡처가 도착했다면 live 변경 표시를 보존하고 종료 뒤 refresh합니다. 저장하는 상태는 `st-devtools:onboarding:v2`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·시각·연습 원문·실제 데이터는 저장하지 않습니다.
 
 ## 캡처 파이프라인
 
@@ -299,7 +303,7 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 
 설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼, 바로 보이는 자주 쓰는 설정과 접힌 고급 설정을 유지하고 테마 선택은 해당 preference만 즉시 저장합니다. AI opt-in·연결 프로필·응답 상한은 규칙 검사 화면의 AI 모드에서 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다. 규칙·비교 정책 설정은 제목의 설정 버튼이 여는 별도 dialog에 렌더링합니다. 430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다.
 
-v0.15.0의 선택형 워크스루는 위 정보 구조를 실제 데이터와 격리된 연습 카드로 안내합니다. 빠른 시작과 tooltip은 워크스루를 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
+v0.15.1의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
 
 ## 내부 고대비 테마와 호스트 격리
 
