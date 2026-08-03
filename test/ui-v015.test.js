@@ -553,3 +553,158 @@ test('sandbox exposes deterministic walkthrough controls without automatic produ
     assert.match(sandbox, /onboarding: sandboxOnboardingHook/u);
     assert.match(sandbox, /document\.body\.dataset\.semanticNetworkCallCount = '0'/u);
 });
+
+test('walkthrough geometry follows the visible target and never leaves a stale highlight', () => {
+    const makeClassList = () => {
+        const values = new Set();
+        return {
+            add(...names) {
+                for (const name of names) values.add(name);
+            },
+            remove(...names) {
+                for (const name of names) values.delete(name);
+            },
+            contains(name) {
+                return values.has(name);
+            },
+            toggle(name, force) {
+                if (force) values.add(name);
+                else values.delete(name);
+            },
+        };
+    };
+    const style = {};
+    const panel = {
+        classList: makeClassList(),
+        dataset: {},
+        style,
+        removeAttribute(name) {
+            if (name === 'style') {
+                for (const key of Object.keys(style)) delete style[key];
+            }
+        },
+        getBoundingClientRect() {
+            return { width: 400, height: 260 };
+        },
+    };
+    const highlightStyle = {};
+    const highlight = {
+        hidden: true,
+        classList: makeClassList(),
+        style: highlightStyle,
+        removeAttribute(name) {
+            if (name === 'style') {
+                for (const key of Object.keys(highlightStyle)) delete highlightStyle[key];
+            }
+        },
+    };
+    const overlay = { classList: makeClassList() };
+    const windowRect = {
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 700,
+        width: 1000,
+        height: 700,
+    };
+    let targetRect = {
+        left: 100,
+        top: 300,
+        right: 300,
+        bottom: 340,
+        width: 200,
+        height: 40,
+    };
+    const state = {
+        onboardingPhase: 'steps',
+        onboardingPanel: panel,
+        onboardingOverlay: overlay,
+        onboardingHighlight: highlight,
+        onboardingTargetStatus: { hidden: true },
+        onboardingTarget: { getBoundingClientRect: () => targetRect },
+        window: { getBoundingClientRect: () => windowRect },
+        onboardingIsOpen: () => true,
+    };
+
+    DevToolsWindow.prototype.positionOnboarding.call(state);
+    assert.equal(highlight.hidden, false);
+    assert.equal(panel.dataset.placement, 'right');
+    assert.ok(Number.parseFloat(panel.style.left) > targetRect.right);
+    const firstHighlightTop = highlight.style.top;
+
+    targetRect = { ...targetRect, top: 110, bottom: 150 };
+    DevToolsWindow.prototype.positionOnboarding.call(state);
+    assert.notEqual(highlight.style.top, firstHighlightTop);
+    assert.equal(panel.classList.contains('is-target-hidden'), false);
+
+    targetRect = { ...targetRect, top: -180, bottom: -140 };
+    DevToolsWindow.prototype.positionOnboarding.call(state);
+    assert.equal(highlight.hidden, true);
+    assert.equal(panel.classList.contains('is-target-hidden'), true);
+    assert.equal(state.onboardingTargetStatus.hidden, false);
+    assert.equal(panel.dataset.placement, 'edge-top');
+});
+
+test('walkthrough installs bounded geometry observers and offers target recovery', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const style = await readFile(STYLE_URL, 'utf8');
+    const start = sourceBlock(ui, '\n    startOnboarding({ invitation = true, force = false } = {}) {', '\n    cancelOnboardingCaptureWait() {');
+    const close = sourceBlock(ui, '\n    closeOnboarding(', '\n    beginOnboardingPractice() {');
+    const position = sourceBlock(ui, '\n    positionOnboarding() {', '\n    buildCaptureStatus() {');
+
+    assert.match(start, /addEventListener\(\s*'scroll',[\s\S]*?capture: true,[\s\S]*?passive: true/u);
+    assert.match(start, /globalThis\.ResizeObserver/u);
+    assert.match(close, /removeEventListener\(\s*'scroll',[\s\S]*?true/u);
+    assert.match(close, /onboardingGeometryObserver\?\.disconnect\(\)/u);
+    assert.match(position, /visibleRect\.width <= 0 \|\| visibleRect\.height <= 0/u);
+    assert.match(position, /panel\.classList\.add\('is-target-hidden'\)/u);
+    assert.match(position, /const directions = compact\s*\? \['below', 'above'\]/u);
+    assert.match(style, /\.st-devtools-onboarding-highlight::after/u);
+    assert.match(style, /\.st-devtools-onboarding-panel\.is-target-hidden/u);
+    assert.doesNotMatch(
+        sourceBlock(
+            style,
+            ".st-devtools-onboarding-overlay[data-phase='steps']",
+            '@keyframes st-devtools-focus',
+        ),
+        /9999px/u,
+    );
+    assert.doesNotMatch(style, /bottom: calc\(74px/u);
+
+    let scrolled = 0;
+    let positioned = 0;
+    const target = {
+        getBoundingClientRect: () => ({
+            left: 10,
+            top: 900,
+            right: 110,
+            bottom: 940,
+        }),
+        scrollIntoView(options) {
+            scrolled += 1;
+            assert.equal(options.block, 'start');
+        },
+    };
+    const state = {
+        onboardingTarget: target,
+        window: {
+            getBoundingClientRect: () => ({
+                left: 0,
+                top: 0,
+                right: 390,
+                bottom: 700,
+                width: 390,
+            }),
+        },
+        content: { contains: () => true },
+        requestOnboardingPosition() {
+            positioned += 1;
+        },
+    };
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, { nearestOnly: true }),
+        true,
+    );
+    assert.equal(scrolled, 1);
+    assert.equal(positioned, 1);
+});

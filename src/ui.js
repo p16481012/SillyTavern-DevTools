@@ -989,6 +989,8 @@ export class DevToolsWindow {
         this.onboardingApplyingSkippedState = false;
         this.onboardingTaskStatus = null;
         this.onboardingStepSkipButton = null;
+        this.onboardingLocateButton = null;
+        this.onboardingTargetStatus = null;
         this.onboardingTarget = null;
         this.onboardingTargetDescriptionId = null;
         this.onboardingDisabledControls = new Map();
@@ -1002,6 +1004,16 @@ export class DevToolsWindow {
             if (this.onboardingIsOpen()) this.requestOnboardingPosition();
         };
         this.onboardingResizeListening = false;
+        this.onboardingScrollHandler = (event) => {
+            if (
+                this.onboardingIsOpen()
+                && !this.onboardingPanel?.contains(event.target)
+            ) {
+                this.requestOnboardingPosition();
+            }
+        };
+        this.onboardingScrollListening = false;
+        this.onboardingGeometryObserver = null;
         this.onboardingCaptureTimer = null;
         this.onboardingCaptureWaitResolve = null;
         this.onboardingSessionBadge = null;
@@ -3508,6 +3520,26 @@ export class DevToolsWindow {
         announcement.setAttribute('role', 'status');
         announcement.setAttribute('aria-live', 'polite');
         announcement.setAttribute('aria-atomic', 'true');
+        const targetStatus = element('span', {
+            className: 'st-devtools-onboarding-target-status',
+            text: t('onboarding.targetOutOfView'),
+        });
+        targetStatus.hidden = true;
+        const headerActions = element('span', {
+            className: 'st-devtools-onboarding-header-actions',
+        });
+        const locate = element('button', {
+            className: 'menu_button st-devtools-onboarding-locate',
+            title: t('onboarding.locateTarget'),
+            type: 'button',
+        });
+        locate.setAttribute('aria-label', t('onboarding.locateTarget'));
+        const locateIcon = element('i', {
+            className: 'fa-solid fa-crosshairs',
+        });
+        locateIcon.setAttribute('aria-hidden', 'true');
+        locate.appendChild(locateIcon);
+        locate.addEventListener('click', () => this.focusOnboardingTarget());
         const skip = element('button', {
             className: 'menu_button st-devtools-onboarding-skip',
             text: t('onboarding.skip'),
@@ -3516,7 +3548,8 @@ export class DevToolsWindow {
         skip.addEventListener('click', () => {
             this.closeOnboarding({ persist: 'skipped' });
         });
-        header.append(progress, announcement, skip);
+        headerActions.append(locate, skip);
+        header.append(progress, targetStatus, announcement, headerActions);
 
         const body = element('div', {
             className: 'st-devtools-onboarding-body',
@@ -3555,6 +3588,8 @@ export class DevToolsWindow {
         this.onboardingBackButton = back;
         this.onboardingNextButton = next;
         this.onboardingStepSkipButton = skipStep;
+        this.onboardingLocateButton = locate;
+        this.onboardingTargetStatus = targetStatus;
         return overlay;
     }
 
@@ -3622,6 +3657,24 @@ export class DevToolsWindow {
             globalThis.addEventListener?.('resize', this.onboardingResizeHandler);
             this.onboardingResizeListening = true;
         }
+        if (!this.onboardingScrollListening) {
+            this.window.addEventListener(
+                'scroll',
+                this.onboardingScrollHandler,
+                { capture: true, passive: true },
+            );
+            this.onboardingScrollListening = true;
+        }
+        if (
+            !this.onboardingGeometryObserver
+            && typeof globalThis.ResizeObserver === 'function'
+        ) {
+            this.onboardingGeometryObserver = new globalThis.ResizeObserver(
+                this.onboardingResizeHandler,
+            );
+            this.onboardingGeometryObserver.observe(this.onboardingPanel);
+            this.onboardingGeometryObserver.observe(this.content);
+        }
         if (invitation) {
             this.window.setAttribute('aria-modal', 'false');
             for (const region of this.primaryRegions) {
@@ -3656,6 +3709,16 @@ export class DevToolsWindow {
             globalThis.removeEventListener?.('resize', this.onboardingResizeHandler);
             this.onboardingResizeListening = false;
         }
+        if (this.onboardingScrollListening) {
+            this.window.removeEventListener(
+                'scroll',
+                this.onboardingScrollHandler,
+                true,
+            );
+            this.onboardingScrollListening = false;
+        }
+        this.onboardingGeometryObserver?.disconnect();
+        this.onboardingGeometryObserver = null;
         if (this.onboardingPositionFrame != null) {
             cancelAnimationFrame(this.onboardingPositionFrame);
             this.onboardingPositionFrame = null;
@@ -3676,11 +3739,19 @@ export class DevToolsWindow {
         this.onboardingOverlay.dataset.phase = 'idle';
         delete this.onboardingOverlay.dataset.step;
         delete this.onboardingOverlay.dataset.target;
-        this.onboardingPanel?.classList.remove('is-invitation', 'is-fallback');
+        this.onboardingPanel?.classList.remove(
+            'is-invitation',
+            'is-fallback',
+            'is-target-hidden',
+        );
         this.onboardingPanel?.removeAttribute('style');
+        delete this.onboardingPanel?.dataset.placement;
+        if (this.onboardingTargetStatus) this.onboardingTargetStatus.hidden = true;
         if (this.onboardingHighlight) {
             this.onboardingHighlight.hidden = true;
             this.onboardingHighlight.removeAttribute('style');
+            delete this.onboardingHighlight.dataset.label;
+            this.onboardingHighlight.classList.remove('is-label-below');
         }
         this.onboardingPhase = 'idle';
         this.onboardingStepIndex = 0;
@@ -3857,6 +3928,8 @@ export class DevToolsWindow {
             this.onboardingAnnouncement.textContent = `${progress}. ${title}`;
             this.onboardingBackButton.hidden = true;
             this.onboardingStepSkipButton.hidden = true;
+            this.onboardingLocateButton.hidden = true;
+            this.onboardingTargetStatus.hidden = true;
             this.onboardingNextButton.disabled = false;
             this.onboardingNextButton.textContent = t('onboarding.start');
             this.onboardingBody.replaceChildren(this.renderOnboardingInvitation());
@@ -3900,6 +3973,13 @@ export class DevToolsWindow {
                 t(`onboarding.step.${step.id}.title`)
             }`;
             this.onboardingBackButton.hidden = this.onboardingStepIndex === 0;
+            this.onboardingLocateButton.hidden = !step.target;
+            this.onboardingTargetStatus.hidden = true;
+            this.onboardingHighlight.dataset.label = t(
+                step.interaction
+                    ? 'onboarding.targetTry'
+                    : 'onboarding.targetLook',
+            );
             this.onboardingStepSkipButton.hidden = !step.interaction
                 || this.onboardingStepComplete;
             this.onboardingNextButton.textContent = this.onboardingStepIndex
@@ -4002,7 +4082,6 @@ export class DevToolsWindow {
             'p',
             t(`onboarding.step.${step.id}.what`),
         );
-        description.id = 'st-devtools-onboarding-description';
         const locationTabId = step.id === 'search-finish'
             ? this.activeTabId()
             : step.tabId;
@@ -4032,19 +4111,35 @@ export class DevToolsWindow {
             element('strong', { text: t('onboarding.whenLabel') }),
             proseElement('p', t(`onboarding.step.${step.id}.when`)),
         );
+        const context = element('details', {
+            className: 'st-devtools-onboarding-context st-devtools-disclosure',
+        });
+        const contextSummary = element('summary', {
+            text: t('onboarding.moreContext'),
+        });
+        const contextBody = element('div', {
+            className: 'st-devtools-onboarding-context-body',
+        });
+        contextBody.append(what, when);
+        context.append(contextSummary, contextBody);
         const task = element('section', {
             className: `st-devtools-onboarding-task${
                 this.onboardingStepComplete ? ' is-complete' : ''
             }`,
         });
         task.id = 'st-devtools-onboarding-task';
+        const taskDescription = proseElement(
+            'p',
+            t(`onboarding.step.${step.id}.task`),
+        );
+        taskDescription.id = 'st-devtools-onboarding-description';
         task.append(
             element('strong', {
                 text: step.interaction
                     ? t('onboarding.tryLabel')
                     : t('onboarding.lookLabel'),
             }),
-            proseElement('p', t(`onboarding.step.${step.id}.task`)),
+            taskDescription,
         );
         if (step.interaction?.event === 'panel') {
             const action = element('button', {
@@ -4075,13 +4170,13 @@ export class DevToolsWindow {
                 ? t(this.onboardingStepSkipped
                     ? 'onboarding.taskSkipped'
                     : 'onboarding.taskComplete')
-                : t('onboarding.taskWaiting'),
+                : '',
         });
         status.setAttribute('role', 'status');
         status.setAttribute('aria-live', 'polite');
         task.appendChild(status);
         this.onboardingTaskStatus = status;
-        content.append(heading, location, what, when, task);
+        content.append(heading, location, task, context);
         return content;
     }
 
@@ -4504,6 +4599,7 @@ export class DevToolsWindow {
 
     clearOnboardingTarget() {
         if (!this.onboardingTarget) return;
+        this.onboardingGeometryObserver?.unobserve?.(this.onboardingTarget);
         this.onboardingTarget.classList.remove('st-devtools-onboarding-target');
         if (this.onboardingTargetDescriptionId == null) {
             this.onboardingTarget.removeAttribute('aria-describedby');
@@ -4532,10 +4628,35 @@ export class DevToolsWindow {
             this.onboardingTargetDescriptionId = target.getAttribute('aria-describedby');
             target.classList.add('st-devtools-onboarding-target');
             target.setAttribute('aria-describedby', 'st-devtools-onboarding-task');
-            target.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'auto' });
+            this.onboardingGeometryObserver?.observe?.(target);
+            this.focusOnboardingTarget({ nearestOnly: true });
         }
         this.updateOnboardingControls();
         this.requestOnboardingPosition();
+    }
+
+    focusOnboardingTarget({ nearestOnly = false } = {}) {
+        const target = this.onboardingTarget;
+        const windowRect = this.window?.getBoundingClientRect?.();
+        const targetRect = target?.getBoundingClientRect?.();
+        if (!target || !windowRect || !targetRect) return false;
+        const inset = 12;
+        const fullyVisible = (
+            targetRect.top >= windowRect.top + inset
+            && targetRect.right <= windowRect.right - inset
+            && targetRect.bottom <= windowRect.bottom - inset
+            && targetRect.left >= windowRect.left + inset
+        );
+        if (!nearestOnly || !fullyVisible) {
+            const compact = windowRect.width <= 700;
+            target.scrollIntoView?.({
+                block: compact && this.content?.contains(target) ? 'start' : 'nearest',
+                inline: 'nearest',
+                behavior: 'auto',
+            });
+        }
+        this.requestOnboardingPosition();
+        return true;
     }
 
     requestOnboardingPosition() {
@@ -4553,14 +4674,18 @@ export class DevToolsWindow {
         if (!this.onboardingIsOpen() || !this.onboardingPanel) return;
         const panel = this.onboardingPanel;
         panel.removeAttribute('style');
-        panel.classList.remove('is-fallback');
+        panel.classList.remove('is-fallback', 'is-target-hidden');
+        delete panel.dataset.placement;
+        if (this.onboardingTargetStatus) this.onboardingTargetStatus.hidden = true;
         if (this.onboardingPhase === 'invitation') {
             this.onboardingOverlay.classList.add('is-centered');
             panel.classList.add('is-invitation');
             this.onboardingHighlight.hidden = true;
+            this.onboardingHighlight.removeAttribute('style');
             return;
         }
         this.onboardingOverlay.classList.remove('is-centered');
+        panel.classList.remove('is-invitation');
         const target = this.onboardingTarget;
         const targetRect = target?.getBoundingClientRect?.();
         const windowRect = this.window?.getBoundingClientRect?.();
@@ -4571,61 +4696,129 @@ export class DevToolsWindow {
             || targetRect.height <= 0
         ) {
             this.onboardingHighlight.hidden = true;
+            this.onboardingHighlight.removeAttribute('style');
             panel.classList.add('is-fallback');
             this.onboardingOverlay.classList.add('is-centered');
             return;
         }
-        const padding = 6;
-        const left = Math.max(4, targetRect.left - windowRect.left - padding);
-        const top = Math.max(4, targetRect.top - windowRect.top - padding);
-        const width = Math.min(
-            windowRect.width - left - 4,
-            targetRect.width + (padding * 2),
+        const visibleRect = {
+            left: Math.max(targetRect.left, windowRect.left),
+            top: Math.max(targetRect.top, windowRect.top),
+            right: Math.min(targetRect.right, windowRect.right),
+            bottom: Math.min(targetRect.bottom, windowRect.bottom),
+        };
+        visibleRect.width = Math.max(0, visibleRect.right - visibleRect.left);
+        visibleRect.height = Math.max(0, visibleRect.bottom - visibleRect.top);
+        const margin = windowRect.width <= 700 ? 8 : 14;
+        if (visibleRect.width <= 0 || visibleRect.height <= 0) {
+            this.onboardingHighlight.hidden = true;
+            this.onboardingHighlight.removeAttribute('style');
+            panel.classList.add('is-target-hidden');
+            if (this.onboardingTargetStatus) this.onboardingTargetStatus.hidden = false;
+            const compactRect = panel.getBoundingClientRect();
+            const panelWidth = Math.min(compactRect.width, windowRect.width - (margin * 2));
+            const panelHeight = Math.min(compactRect.height, windowRect.height - (margin * 2));
+            const targetCenter = targetRect.left + (targetRect.width / 2) - windowRect.left;
+            const panelLeft = Math.max(margin, Math.min(
+                targetCenter - (panelWidth / 2),
+                windowRect.width - panelWidth - margin,
+            ));
+            const targetAbove = targetRect.bottom <= windowRect.top;
+            const panelTop = targetAbove
+                ? margin
+                : windowRect.height - panelHeight - margin;
+            panel.dataset.placement = targetAbove ? 'edge-top' : 'edge-bottom';
+            Object.assign(panel.style, {
+                left: `${panelLeft}px`,
+                top: `${Math.max(margin, panelTop)}px`,
+                width: `${panelWidth}px`,
+            });
+            return;
+        }
+
+        const padding = 7;
+        const left = Math.max(3, visibleRect.left - windowRect.left - padding);
+        const top = Math.max(3, visibleRect.top - windowRect.top - padding);
+        const right = Math.min(
+            windowRect.width - 3,
+            visibleRect.right - windowRect.left + padding,
         );
-        const height = Math.min(
-            windowRect.height - top - 4,
-            targetRect.height + (padding * 2),
+        const bottom = Math.min(
+            windowRect.height - 3,
+            visibleRect.bottom - windowRect.top + padding,
         );
         Object.assign(this.onboardingHighlight.style, {
             left: `${left}px`,
             top: `${top}px`,
-            width: `${width}px`,
-            height: `${height}px`,
+            width: `${Math.max(1, right - left)}px`,
+            height: `${Math.max(1, bottom - top)}px`,
         });
+        this.onboardingHighlight.classList.toggle('is-label-below', top < 38);
         this.onboardingHighlight.hidden = false;
 
-        if (windowRect.width <= 700) return;
         const panelRect = panel.getBoundingClientRect();
-        const margin = 16;
-        const gap = 14;
-        const roomRight = windowRect.right - targetRect.right;
-        const roomLeft = targetRect.left - windowRect.left;
+        const compact = windowRect.width <= 700;
+        const gap = compact ? 10 : 14;
+        const rooms = {
+            below: windowRect.bottom - visibleRect.bottom - gap - margin,
+            above: visibleRect.top - windowRect.top - gap - margin,
+            right: windowRect.right - visibleRect.right - gap - margin,
+            left: visibleRect.left - windowRect.left - gap - margin,
+        };
+        const directions = compact
+            ? ['below', 'above']
+            : ['right', 'left', 'below', 'above'];
+        const required = {
+            below: panelRect.height,
+            above: panelRect.height,
+            right: panelRect.width,
+            left: panelRect.width,
+        };
+        const fitting = directions.filter((direction) => (
+            rooms[direction] >= required[direction]
+        ));
+        const candidates = fitting.length > 0 ? fitting : directions;
+        const placement = [...candidates].sort((leftDirection, rightDirection) => (
+            rooms[rightDirection] - required[rightDirection]
+            - (rooms[leftDirection] - required[leftDirection])
+        ))[0];
+        const availableHeight = ['above', 'below'].includes(placement)
+            ? rooms[placement]
+            : windowRect.height - (margin * 2);
+        const maxHeight = Math.max(132, Math.min(
+            panelRect.height,
+            availableHeight,
+        ));
+        const renderedHeight = Math.min(panelRect.height, maxHeight);
         let panelLeft;
         let panelTop;
-        if (roomRight >= panelRect.width + gap + margin) {
-            panelLeft = targetRect.right - windowRect.left + gap;
-            panelTop = targetRect.top - windowRect.top
-                + (targetRect.height - panelRect.height) / 2;
-        } else if (roomLeft >= panelRect.width + gap + margin) {
-            panelLeft = targetRect.left - windowRect.left - panelRect.width - gap;
-            panelTop = targetRect.top - windowRect.top
-                + (targetRect.height - panelRect.height) / 2;
+        if (placement === 'right') {
+            panelLeft = visibleRect.right - windowRect.left + gap;
+            panelTop = visibleRect.top - windowRect.top
+                + (visibleRect.height - renderedHeight) / 2;
+        } else if (placement === 'left') {
+            panelLeft = visibleRect.left - windowRect.left - panelRect.width - gap;
+            panelTop = visibleRect.top - windowRect.top
+                + (visibleRect.height - renderedHeight) / 2;
+        } else if (placement === 'above') {
+            panelTop = visibleRect.top - windowRect.top - renderedHeight - gap;
+            panelLeft = visibleRect.left - windowRect.left
+                + (visibleRect.width - panelRect.width) / 2;
         } else {
-            panelTop = targetRect.bottom - windowRect.top + gap;
-            if (panelTop + panelRect.height > windowRect.height - margin) {
-                panelTop = targetRect.top - windowRect.top - panelRect.height - gap;
-            }
-            panelLeft = targetRect.left - windowRect.left
-                + (targetRect.width - panelRect.width) / 2;
+            panelTop = visibleRect.bottom - windowRect.top + gap;
+            panelLeft = visibleRect.left - windowRect.left
+                + (visibleRect.width - panelRect.width) / 2;
         }
         panelTop = Math.max(margin, Math.min(
             panelTop,
-            windowRect.height - panelRect.height - margin,
+            windowRect.height - renderedHeight - margin,
         ));
         panelLeft = Math.max(margin, Math.min(
             panelLeft,
             windowRect.width - panelRect.width - margin,
         ));
+        panel.dataset.placement = placement;
+        panel.style.maxHeight = `${maxHeight}px`;
         panel.style.left = `${panelLeft}px`;
         panel.style.top = `${panelTop}px`;
     }

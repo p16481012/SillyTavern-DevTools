@@ -1,4 +1,13 @@
-# v0.15.1 기술 구현 현황
+# v0.15.2 기술 구현 현황
+
+## v0.15.2 hands-on 안내 위치·가독성 안정화
+
+- onboarding overlay는 패널 내부를 제외한 window 하위 scroll event를 capture 단계에서 수신하고, `requestAnimationFrame`으로 연속 위치 계산을 한 번으로 합칩니다.
+- `ResizeObserver`가 현재 대상·안내 패널·콘텐츠 영역을 추적하며 단계 변경과 종료 때 관찰 대상을 정리합니다.
+- 위치 엔진은 window와 대상의 교차 영역만 강조합니다. 교차 영역이 없으면 강조를 숨기고 가장 가까운 위·아래 가장자리에 복귀 전용 패널을 배치합니다.
+- 데스크톱은 우·좌·아래·위, 700px 이하 화면은 아래·위 순서로 가용 공간을 평가하며, 들어가지 않으면 가장 넓은 방향을 선택해 본문 최대 높이를 제한합니다.
+- 단계 본문은 행동 카드가 먼저 오고, 기능 정의·사용 시점은 native `details` 안에 둡니다. spotlight는 전체 화면 dim 대신 이중 테두리와 행동 라벨을 사용합니다.
+- 1280×720, 390×844, 320×640 브라우저 좌표 검증과 offscreen·scroll listener·observer cleanup 회귀 계약을 갖습니다.
 
 ## v0.15.1 실제 제품 UI hands-on 온보딩 v2
 
@@ -338,7 +347,7 @@
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
 - 실제 초보자 검토에서 확인되는 워크스루 문구·예시 밀도·강조 위치 보정
 
-선택형 온보딩의 기본 계약은 v0.15.1에서 완료했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+선택형 온보딩의 기본 계약은 v0.15.1에서 완료했고 위치·가독성 계약은 v0.15.2에서 보완했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
