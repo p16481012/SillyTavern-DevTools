@@ -1,4 +1,13 @@
-# v0.15.4 기술 구현 현황
+# v0.15.5 기술 구현 현황
+
+## v0.15.5 레퍼런스형 코치마크
+
+- 제품 위에 뜨던 흰색 auto-height sheet와 내부 스크롤, 장별 진행률, 위치·무엇·언제, 펼침 설명과 텍스트 버튼 묶음을 제거했습니다.
+- briefing·debrief는 전체 dim, 최소 52×44px target spotlight, 점선 화살표, 제목과 한 문장, 원형 종료·다음 버튼과 `현재 / 38`만 렌더링합니다.
+- practice는 modal·dim·`inert`를 해제하고 실제 target의 고대비 pulse ring과 한 줄 지시만 유지합니다. panel형 캡처 데모만 원형 실행 버튼을 함께 표시합니다.
+- 상호작용 30개는 실제 click/change/input/toggle 뒤 자동 debrief로 전환하고, 읽기 전용 8개는 fake practice·확인·debrief 없이 한 번의 briefing으로 완료합니다.
+- 기존 38단계 fixture 격리, focus trap·복원, 실제 store·provider·Semantic Inspector·clipboard·export 비접근 계약을 유지합니다.
+- 최소 상태 키는 `st-devtools:onboarding:v5`이고 `skipped` 또는 `completed`만 저장합니다.
 
 ## v0.15.4 briefing → practice → debrief 단계 흐름
 

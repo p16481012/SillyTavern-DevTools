@@ -28,8 +28,8 @@ function memoryStorage(initial = {}) {
 }
 
 test('onboarding defines six immutable groups and a detailed immutable walkthrough', () => {
-    assert.equal(ONBOARDING_VERSION, 4);
-    assert.equal(ONBOARDING_STORAGE_KEY, 'st-devtools:onboarding:v4');
+    assert.equal(ONBOARDING_VERSION, 5);
+    assert.equal(ONBOARDING_STORAGE_KEY, 'st-devtools:onboarding:v5');
     assert.equal(Object.isFrozen(ONBOARDING_GROUPS), true);
     assert.deepEqual(
         ONBOARDING_GROUPS.map(({ id }) => id),
@@ -90,7 +90,7 @@ test('onboarding defines six immutable groups and a detailed immutable walkthrou
     assert.ok(actionCount >= 15);
 });
 
-test('new, malformed, and older onboarding state offer the v4 invitation safely', () => {
+test('new, malformed, and older onboarding state offer the v5 invitation safely', () => {
     for (const value of [
         null,
         {},
@@ -101,7 +101,7 @@ test('new, malformed, and older onboarding state offer the v4 invitation safely'
         const state = normalizeOnboardingState(value);
         assert.deepEqual(state, {
             schemaVersion: 1,
-            tourVersion: 4,
+            tourVersion: 5,
             disposition: 'new',
         });
         assert.equal(Object.isFrozen(state), true);
@@ -138,7 +138,7 @@ test('only skip or completion persists one bounded global disposition', () => {
         const state = saveOnboardingState(disposition, { storage });
         assert.deepEqual(state, {
             schemaVersion: 1,
-            tourVersion: 4,
+            tourVersion: 5,
             disposition,
         });
         assert.equal(shouldAutoStartOnboarding(state), false);

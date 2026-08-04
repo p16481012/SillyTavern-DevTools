@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.15.4의 briefing → practice → debrief hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.15.5의 레퍼런스형 coachmark hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -12,17 +12,17 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩의 view-session 격리 경계
 
-v0.15.4의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. `답변 형식이 JSON에서 XML로 바뀐 이유 찾기` 한 사건을 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 각 단계는 `briefing → practice → debrief` phase를 가지며 예상 시간과 단계 수, `이 단계 건너뛰기` 계약은 유지합니다.
+v0.15.5의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. `답변 형식이 JSON에서 XML로 바뀐 이유 찾기` 한 사건을 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 상호작용 단계는 `briefing → practice → debrief`를 사용하고, 직접 조작할 것이 없는 읽기 단계는 briefing 한 번에서 바로 다음 단계로 이동합니다.
 
 `src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개를 정의합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다. 따라서 실제 제품 renderer·control과 로컬 정적 rules/diff/search 경로를 그대로 사용하면서 live `timeline`·`selectedId`·`activeTab`은 바꾸지 않습니다.
 
 실습 단계는 실제 탭·select·button·details·검색 입력을 click/change/input/toggle하게 하지만 snapshot store의 추가·삭제·보관 API, provider adapter·Semantic Inspector, 클립보드와 export를 호출하지 않습니다. 캡처 연습의 `대기 → 감지 → 저장 중 → 저장됨`도 session 내부 상태 전환이며 실제 요청을 저장하지 않습니다. 상태는 색상 점만 쓰지 않고 짧은 copy와 pill을 함께 갱신합니다. AI 의미 검사나 공식 Provider 평가가 실행 중이면 시작하지 않고 실습 중 새 AI 실행도 거부합니다.
 
-첫 초대와 각 단계의 briefing·debrief는 modal phase입니다. 제품 영역을 `inert`·`aria-hidden` 처리하고 focus를 안내 surface 안에 가둔 상태에서 화면을 dim 처리하며 실제 target의 spotlight 영역만 드러냅니다. briefing은 이번 단계의 목적·찾을 위치·짧은 설명만 전달하고, debrief는 방금 확인한 결과와 그 의미·다음 조사와의 연결을 추가합니다. phase가 끝나면 `inert`와 focus trap을 함께 해제합니다.
+첫 초대와 각 단계의 briefing·debrief는 modal phase입니다. 제품 영역을 `inert`·`aria-hidden` 처리하고 focus를 안내 surface 안에 가둔 상태에서 화면을 dim 처리하며 실제 target의 spotlight 영역만 드러냅니다. 화면에는 target ring, 점선 화살표, 제목과 한 문장, 원형 종료·다음 버튼과 진행 숫자만 보입니다. phase가 끝나면 `inert`와 focus trap을 함께 해제합니다.
 
-practice로 전환할 때 dim·modal·`inert`를 제거하고 실제 제품 화면과 compact task dock만 남깁니다. dock은 현재 할 일과 완료 기준을 짧게 유지하며 target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. 단계 완료 감지는 실제 이벤트를 관찰할 뿐 현재 단계와 관계없는 control을 비활성화하거나 잘못된 click/focus를 차단하지 않습니다. 정확한 동작을 감지하면 debrief로 전환하고, 건너뛰기·이전·다음·종료도 phase와 focus 상태를 함께 정리합니다.
+practice로 전환할 때 dim·modal·`inert`를 제거하고 실제 제품 화면, target의 고대비 pulse ring, 한 줄 지시만 남깁니다. target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. 단계 완료 감지는 실제 이벤트를 관찰할 뿐 현재 단계와 관계없는 control을 비활성화하거나 잘못된 click/focus를 차단하지 않습니다. 정확한 동작을 감지하면 debrief로 자동 전환합니다.
 
-기존 190~260px 모바일 rail 제한은 사용하지 않습니다. 320px·390px 화면에서는 briefing·practice dock·debrief가 내용에 따라 높이가 정해지는 responsive sheet로 렌더링되며 viewport 밖으로 밀릴 때만 내부 본문이 안전하게 스크롤됩니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태와 시작 전 focus를 다시 렌더링합니다. 실습 중 실제 캡처가 도착했다면 live 변경 표시를 보존하고 종료 뒤 refresh합니다. 저장하는 상태는 `st-devtools:onboarding:v4`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·phase·시각·연습 원문·실제 데이터는 저장하지 않습니다.
+320px·390px 화면에서도 고정 sheet나 내부 본문 스크롤을 사용하지 않습니다. target 강조 영역은 최소 52×44px이고 짧은 코치마크는 target 위·아래 중 가용 공간이 큰 쪽에 놓이며 하단 safe area 내비게이션을 피합니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태와 시작 전 focus를 다시 렌더링합니다. 저장하는 상태는 `st-devtools:onboarding:v5`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·phase·시각·연습 원문·실제 데이터는 저장하지 않습니다.
 
 ## 캡처 파이프라인
 
@@ -307,7 +307,7 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 
 설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼, 바로 보이는 자주 쓰는 설정과 접힌 고급 설정을 유지하고 테마 선택은 해당 preference만 즉시 저장합니다. AI opt-in·연결 프로필·응답 상한은 규칙 검사 화면의 AI 모드에서 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다. 규칙·비교 정책 설정은 제목의 설정 버튼이 여는 별도 dialog에 렌더링합니다. 430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다.
 
-v0.15.4의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. briefing·debrief는 dim과 target spotlight로 설명·결과를 분리하고 practice는 화면을 밝힌 채 compact task dock과 실제 DOM control을 직접 조작하게 합니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
+v0.15.5의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. briefing·debrief는 dim·target ring·점선 화살표·한 문장으로 설명과 결과를 분리하고 practice는 화면을 밝힌 채 한 줄 지시와 실제 DOM control을 직접 조작하게 합니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
 
 ## 내부 고대비 테마와 호스트 격리
 

@@ -491,6 +491,35 @@ test('briefing, practice, and debrief form one ordered step flow', async () => {
     assert.equal(DevToolsWindow.prototype.previousOnboardingStep.call(firstState), false);
 });
 
+test('read-only coachmarks advance once without fake practice or debrief screens', () => {
+    const passiveStepIndex = ONBOARDING_STEPS.findIndex(
+        ({ id }) => id === 'capture-purpose',
+    );
+    const state = {
+        onboardingPhase: 'steps',
+        onboardingStepStage: 'briefing',
+        onboardingStepIndex: passiveStepIndex,
+        onboardingStepComplete: false,
+        onboardingStepSkipped: false,
+        onboardingSession: {
+            completedActions: new Set(),
+            skippedActions: new Set(),
+        },
+        onboardingIsOpen: () => true,
+        updateOnboardingViewCalls: 0,
+        updateOnboardingView() {
+            this.updateOnboardingViewCalls += 1;
+        },
+    };
+
+    assert.equal(DevToolsWindow.prototype.nextOnboardingStep.call(state), true);
+    assert.equal(state.onboardingStepIndex, passiveStepIndex + 1);
+    assert.equal(state.onboardingStepStage, 'briefing');
+    assert.equal(state.onboardingStepComplete, false);
+    assert.equal(state.onboardingSession.completedActions.has('capture-purpose'), true);
+    assert.equal(state.updateOnboardingViewCalls, 1);
+});
+
 test('passive confirmation and step skip finish in debrief without advancing', async () => {
     const stepIndex = ONBOARDING_STEPS.findIndex(({ id }) => id === 'explorer-tab');
     assert.ok(stepIndex >= 0);
@@ -711,7 +740,7 @@ test('automatic invitation is offered at most once per panel session', async () 
         onboardingAutoStart: true,
         onboardingState: {
             schemaVersion: 1,
-            tourVersion: 4,
+            tourVersion: 5,
             disposition: 'new',
         },
         startOnboarding() {
@@ -758,7 +787,10 @@ test('spotlight guide overlays the unchanged product workspace', async () => {
     assert.match(build, /this\.window\.append\(\s*header,\s*workspace,\s*tabList/u);
     assert.match(build, /this\.buildOnboardingGuide\(\)/u);
     assert.match(guideBuilder, /className: 'st-devtools-onboarding-guide'/u);
-    assert.match(guideBuilder, /guide\.append\(blocker, spotlight, panel, practiceDock\)/u);
+    assert.match(
+        guideBuilder,
+        /guide\.append\(blocker, spotlight, panel, practiceDock, practiceExit\)/u,
+    );
     assert.match(guideStyle, /position: absolute/u);
     assert.match(guideStyle, /inset: 0/u);
     assert.match(
@@ -1019,40 +1051,40 @@ test('target descriptions are stage-specific and temporary tabindex is restored 
     assert.equal(existing.attributes.get('aria-describedby'), 'existing-description');
 });
 
-test('briefing and debrief panels use viewport-driven auto height at 320px and 390px', async () => {
+test('coachmarks use a panel-free overlay with mobile-safe icon navigation', async () => {
     const style = await readFile(STYLE_URL, 'utf8');
-    const spotlightStyle = sourceTail(
+    const coachmarkStyle = sourceTail(
         style,
-        '/* Spotlight onboarding: explain, practice in place, then debrief. */',
+        '/* v0.15.5 — reference-style coachmarks: dim, point, act. */',
     );
     const panel = sourceBlock(
-        spotlightStyle,
+        coachmarkStyle,
         '.st-devtools-onboarding-guide-panel {',
-        ".st-devtools-onboarding-guide[data-placement='top']",
-    );
-    const narrow = sourceBlock(
-        spotlightStyle,
-        '@container (max-width: 520px) {',
-        '@media (max-width: 520px) {',
+        '.st-devtools-onboarding-announcement {',
     );
     const body = sourceBlock(
-        spotlightStyle,
+        coachmarkStyle,
         '.st-devtools-onboarding-guide-body {',
         '.st-devtools-onboarding-step {',
     );
+    const actions = sourceBlock(
+        coachmarkStyle,
+        '.st-devtools-onboarding-guide-actions {',
+        '.st-devtools-onboarding-progress {',
+    );
 
-    assert.match(panel, /width:\s*min\(440px, calc\(100% - 1\.5rem\)\)/u);
+    assert.match(panel, /inset:\s*0/u);
+    assert.match(panel, /background(?:-color)?:\s*transparent/u);
+    assert.match(panel, /border:\s*0/u);
+    assert.match(panel, /box-shadow:\s*none/u);
+    assert.match(panel, /pointer-events:\s*none/u);
     assert.match(
-        panel,
-        /max-height:\s*min\([\s\S]*?640px,[\s\S]*?calc\(100% - 1\.5rem\),[\s\S]*?--st-devtools-onboarding-panel-max-height/u,
+        coachmarkStyle,
+        /\.st-devtools-onboarding-guide-body,[\s\S]*?overflow:\s*visible/u,
     );
-    assert.doesNotMatch(panel, /(?:^|\n)\s*height\s*:/u);
-    assert.match(body, /min-height:\s*0/u);
-    assert.match(body, /overflow-y:\s*auto/u);
-    assert.match(narrow, /\.st-devtools-onboarding-guide-panel,[\s\S]*?width:\s*calc\(100% - 1rem\)/u);
-    assert.match(
-        narrow,
-        /\.st-devtools-onboarding-guide-panel\s*\{[\s\S]*?max-height:\s*min\([\s\S]*?calc\(100% - 1rem\),[\s\S]*?--st-devtools-onboarding-panel-max-height/u,
-    );
-    assert.doesNotMatch(spotlightStyle, /grid-template-rows:\s*clamp\(190px, 38dvh, 260px\)/u);
+    assert.doesNotMatch(body, /overflow-y:\s*auto/u);
+    assert.match(actions, /bottom:\s*max\(1rem, env\(safe-area-inset-bottom\)\)/u);
+    assert.match(actions, /grid-template-columns:\s*52px minmax\(0, 1fr\) 52px/u);
+    assert.match(coachmarkStyle, /min-width:\s*52px[\s\S]*?min-height:\s*44px/u);
+    assert.match(coachmarkStyle, /@container \(max-width: 520px\)/u);
 });

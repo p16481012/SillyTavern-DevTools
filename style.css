@@ -6881,3 +6881,464 @@
         grid-column: 1 / -1;
     }
 }
+
+/* v0.15.5 — reference-style coachmarks: dim, point, act. */
+.st-devtools-onboarding-practice-exit[hidden] {
+    display: none !important;
+}
+
+.st-devtools-onboarding-guide {
+    position: absolute;
+    inset: 0;
+    z-index: 90;
+    display: block;
+    overflow: hidden;
+    isolation: isolate;
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-blocker {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgb(3 7 18 / 80%);
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.st-devtools-onboarding-guide.has-onboarding-spotlight
+.st-devtools-onboarding-blocker {
+    background: transparent;
+}
+
+.st-devtools-onboarding-spotlight {
+    position: absolute;
+    z-index: 3;
+    box-sizing: border-box;
+    min-width: 52px;
+    min-height: 44px;
+    border: 2px solid #fff;
+    border-radius: 14px;
+    background: transparent;
+    box-shadow:
+        0 0 0 4px #facc15,
+        0 0 22px rgb(250 204 21 / 58%),
+        0 0 0 9999px rgb(3 7 18 / 80%);
+    pointer-events: none;
+    transition:
+        left 150ms ease,
+        top 150ms ease,
+        width 150ms ease,
+        height 150ms ease;
+}
+
+.st-devtools-onboarding-guide-panel {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: block;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+    transform: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    background-color: transparent;
+    color: #fff;
+    box-shadow: none;
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-announcement {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.st-devtools-onboarding-guide-body,
+.st-devtools-onboarding-practice-dock {
+    position: absolute;
+    z-index: 5;
+    box-sizing: border-box;
+    width: min(360px, calc(100% - 2rem));
+    max-width: calc(100% - 2rem);
+    max-height: none;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    overflow: visible;
+    transform: none;
+    border: 1px dashed rgb(255 255 255 / 62%);
+    border-radius: 16px;
+    background: rgb(6 11 22 / 64%);
+    background-color: rgb(6 11 22 / 64%);
+    color: #fff;
+    box-shadow: none;
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+}
+
+.st-devtools-onboarding-guide-body {
+    display: block;
+    padding: 0.9rem 1rem;
+    pointer-events: none;
+    scrollbar-gutter: auto;
+}
+
+.st-devtools-onboarding-step {
+    display: grid;
+    justify-items: center;
+    gap: 0.45rem;
+    text-align: center;
+}
+
+.st-devtools-onboarding-step > h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 1.06rem;
+    font-weight: 800;
+    line-height: 1.42;
+    letter-spacing: -0.02em;
+    text-shadow: 0 1px 8px rgb(0 0 0 / 70%);
+    text-wrap: balance;
+    word-break: keep-all;
+}
+
+.st-devtools-onboarding-step-copy {
+    margin: 0;
+    color: rgb(255 255 255 / 88%);
+    font-size: 0.9rem;
+    font-weight: 560;
+    line-height: 1.58;
+    text-shadow: 0 1px 8px rgb(0 0 0 / 72%);
+    text-wrap: pretty;
+    word-break: keep-all;
+}
+
+.st-devtools-onboarding-step-copy .st-devtools-prose-paragraph {
+    display: inline;
+}
+
+.st-devtools-onboarding-result-mark {
+    display: inline-grid;
+    width: 2rem;
+    height: 2rem;
+    margin-bottom: 0.1rem;
+    place-items: center;
+    border-radius: 50%;
+    background: #22c55e;
+    color: #fff;
+    box-shadow: 0 0 0 5px rgb(34 197 94 / 20%);
+}
+
+.st-devtools-onboarding-guide-body::before,
+.st-devtools-onboarding-practice-dock::before {
+    position: absolute;
+    left: var(--st-devtools-onboarding-arrow-x, 50%);
+    width: 0;
+    height: 26px;
+    content: '';
+    transform: translateX(-50%);
+    border-left: 2px dashed #facc15;
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-guide-body::after,
+.st-devtools-onboarding-practice-dock::after {
+    position: absolute;
+    left: var(--st-devtools-onboarding-arrow-x, 50%);
+    color: #facc15;
+    font-size: 0.82rem;
+    line-height: 1;
+    text-shadow: 0 0 8px rgb(250 204 21 / 55%);
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-guide[data-placement='bottom']
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::before {
+    top: -28px;
+}
+
+.st-devtools-onboarding-guide[data-placement='bottom']
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::after {
+    top: -34px;
+    content: '\25b2';
+}
+
+.st-devtools-onboarding-guide[data-placement='top']
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::before {
+    bottom: -28px;
+}
+
+.st-devtools-onboarding-guide[data-placement='top']
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::after {
+    bottom: -34px;
+    content: '\25bc';
+}
+
+.st-devtools-onboarding-guide[data-placement='center']
+.st-devtools-onboarding-guide-body {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.st-devtools-onboarding-guide[data-placement='center']
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::before,
+.st-devtools-onboarding-guide[data-placement='center']
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::after {
+    display: none;
+}
+
+.st-devtools-onboarding-guide-actions {
+    position: absolute;
+    right: 1rem;
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    left: 1rem;
+    z-index: 6;
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr) 52px;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-progress {
+    margin: 0;
+    color: rgb(255 255 255 / 78%);
+    font-size: 0.76rem;
+    font-weight: 700;
+    line-height: 1.35;
+    text-align: center;
+    text-shadow: 0 1px 8px rgb(0 0 0 / 78%);
+}
+
+.st-devtools-window .st-devtools-onboarding-round-button {
+    display: inline-grid !important;
+    width: 52px !important;
+    min-width: 52px !important;
+    max-width: 52px !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    max-height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    place-items: center !important;
+    border: 2px solid rgb(255 255 255 / 92%) !important;
+    border-radius: 50% !important;
+    background: rgb(3 7 18 / 54%) !important;
+    color: #fff !important;
+    font-size: 1.15rem !important;
+    line-height: 1 !important;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 25%) !important;
+    pointer-events: auto;
+    writing-mode: horizontal-tb !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-nav-next {
+    border-color: #facc15 !important;
+    background: #facc15 !important;
+    color: #171717 !important;
+}
+
+.st-devtools-window
+.st-devtools-onboarding-guide-actions
+> .st-devtools-onboarding-round-button {
+    width: 50px !important;
+    min-width: 50px !important;
+    max-width: 50px !important;
+    height: 50px !important;
+    min-height: 50px !important;
+    max-height: 50px !important;
+    grid-column: auto !important;
+    justify-self: auto !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-exit::before {
+    content: none !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-practice-exit[hidden] {
+    display: none !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-round-button:hover,
+.st-devtools-window .st-devtools-onboarding-round-button:focus-visible {
+    transform: scale(1.06);
+    outline: 3px solid rgb(255 255 255 / 32%) !important;
+    outline-offset: 3px;
+}
+
+.st-devtools-onboarding-practice-dock {
+    display: flex;
+    right: auto !important;
+    bottom: auto !important;
+    height: auto !important;
+    max-width: calc(100% - 2rem);
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.65rem 0.72rem;
+    border-style: solid;
+    background: rgb(3 7 18 / 88%);
+    background-color: rgb(3 7 18 / 88%);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-practice-copy {
+    min-width: 0;
+    flex: 1 1 auto;
+    margin: 0;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 700;
+    line-height: 1.48;
+    text-align: start;
+    text-wrap: pretty;
+    word-break: keep-all;
+}
+
+.st-devtools-onboarding-practice-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0;
+    pointer-events: auto;
+}
+
+.st-devtools-onboarding-practice-actions:empty {
+    display: none;
+}
+
+.st-devtools-window .st-devtools-onboarding-practice-action {
+    width: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    max-height: 44px !important;
+    border-width: 0 !important;
+    background: #facc15 !important;
+    color: #171717 !important;
+    font-size: 0.95rem !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-practice-exit {
+    position: absolute;
+    top: max(0.75rem, env(safe-area-inset-top));
+    right: 0.75rem;
+    z-index: 7;
+    width: 46px !important;
+    min-width: 46px !important;
+    max-width: 46px !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    max-height: 46px !important;
+    background: rgb(3 7 18 / 74%) !important;
+}
+
+.st-devtools-window
+.st-devtools-onboarding-guide
+> .st-devtools-onboarding-practice-exit.st-devtools-onboarding-round-button {
+    display: inline-grid !important;
+    width: 46px !important;
+    min-width: 46px !important;
+    max-width: 46px !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    max-height: 46px !important;
+    box-sizing: border-box !important;
+    flex: 0 0 46px !important;
+}
+
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-target {
+    scroll-margin: 1rem;
+    outline: 3px solid #facc15 !important;
+    outline-offset: 4px;
+    box-shadow:
+        0 0 0 7px rgb(250 204 21 / 22%),
+        0 0 22px rgb(250 204 21 / 42%) !important;
+}
+
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-target.is-locating,
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-target {
+    animation: st-devtools-reference-target-pulse 1050ms ease-in-out infinite;
+}
+
+@keyframes st-devtools-reference-target-pulse {
+    50% {
+        outline-offset: 7px;
+        box-shadow:
+            0 0 0 10px rgb(250 204 21 / 12%),
+            0 0 28px rgb(250 204 21 / 50%) !important;
+    }
+}
+
+@container (max-width: 520px) {
+    .st-devtools-onboarding-guide-panel {
+        inset: 0;
+        width: 100%;
+        max-width: none;
+        max-height: none;
+        border-radius: 0;
+    }
+
+    .st-devtools-onboarding-guide-body,
+    .st-devtools-onboarding-practice-dock {
+        width: min(330px, calc(100% - 2rem));
+        max-width: calc(100% - 2rem);
+    }
+
+    .st-devtools-onboarding-guide-body {
+        padding: 0.78rem 0.85rem;
+    }
+
+    .st-devtools-onboarding-step > h2 {
+        font-size: 0.98rem;
+    }
+
+    .st-devtools-onboarding-step-copy {
+        font-size: 0.84rem;
+        line-height: 1.52;
+    }
+
+    .st-devtools-onboarding-guide-actions {
+        grid-template-columns: 50px minmax(0, 1fr) 50px;
+    }
+
+    .st-devtools-window .st-devtools-onboarding-round-button {
+        width: 50px !important;
+        min-width: 50px !important;
+        max-width: 50px !important;
+        height: 50px !important;
+        min-height: 50px !important;
+        max-height: 50px !important;
+    }
+
+    .st-devtools-window.is-onboarding-practice
+    .st-devtools-onboarding-session-badge {
+        display: none !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .st-devtools-window[data-onboarding-stage='practice']
+    .st-devtools-onboarding-target {
+        animation: none;
+    }
+}
