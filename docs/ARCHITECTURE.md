@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.3의 세 갈래 도움말 정보 구조, 19개 기능 설명서의 제품형 정적 preview와 다섯 고급 coachmark, 직접 체험형 기본 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.4의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 좌표 유지형 전환을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -14,7 +14,7 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 `src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다. 홈 카드 전체가 button이므로 별도 파란색 `… 보기` action copy는 만들지 않고 제목·설명·방향 표시만 사용합니다.
 
-`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 시각 자료 registry입니다. 각 자료는 `flow`·`comparison`·`lanes` 유형과 접근 가능한 설명·caption, `sequence`·`contrast`·`branch`·`mapping`·`trend`·`replacement`·`parallel` 관계를 가진 lane·item으로만 구성됩니다. renderer는 이를 실제 제품 class와 분리된 정적 header·lane panel·card row·icon·text badge로 투영하고 `연습 데이터 · 읽기 전용`을 표시합니다. 외부 이미지 URL·고정 색상값·실제 form control·event handler 없이 밝음·어두움 panel token과 모바일 단일 열 재배치만 사용합니다.
+`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 topic registry입니다. 각 topic은 어떤 실제 화면 fragment를 보여 줄지와 접근 가능한 설명·caption만 선택합니다. `renderHelpTopicVisual()`은 `createOnboardingSession()`의 결정적 fixture를 사용하는 분리 preview facade에서 실제 explorer·timeline·diff·rules·search·settings renderer를 호출하고 필요한 fragment를 `cloneNode(true)`로 복제합니다. 문서에 삽입하기 전에 ID·label·ARIA 참조·tour 표식을 제거하고 wrapper에 `inert`·`aria-hidden`·`pointer-events: none`을 적용하므로 live UI event와 focus 경계가 섞이지 않습니다. 실제 snapshot store·저장 정책·Connection Manager·provider·network는 호출하지 않으며 AI·provider 평가는 고정 fixture와 no-op harness로만 표현합니다.
 
 짧은 `?` tooltip은 기능을 다시 떠올릴 한두 문장과 텍스트형 `자세히 보기`만 포함합니다. `자세히 보기`는 별도의 창이나 중간 목록을 거치지 않고 같은 도움말 dialog의 해당 topic ID로 deep link합니다. 도움말을 닫으면 deep link를 연 실제 control로 focus를 복원합니다.
 
@@ -26,7 +26,9 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.16.3의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+v0.16.4의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+
+단계가 바뀌어도 guide panel·dock·blocker는 DOM에서 즉시 제거하지 않고 `is-active`·`inert`·`aria-hidden` 상태만 바꿉니다. 이전 target의 spotlight 좌표를 유지한 채 새 target geometry를 계산해 opacity와 작은 translate로 교차 페이드하므로 모달이나 disclosure를 연 직후 안내가 빈 위치로 점프하지 않습니다. 본문·상세 펼침·button 상태도 같은 짧은 motion 계층을 사용하며 `prefers-reduced-motion`에서는 모든 전환을 제거합니다. 캡처처럼 패널 action이 있는 단계는 넓은 화면에서 본문 폭을 확보하고 520px 이하 container에서는 action을 설명 아래 full-width로 배치합니다.
 
 전체 안내만 첫 실행 상태의 `completed`·`skipped`를 기록합니다. 기능별 부분 투어와 고급 가이드는 독립 route로 실행하며 완료·중단·건너뛰기가 전역 온보딩 상태를 쓰거나 덮어쓰지 않습니다. 각 부분 투어는 필요한 snapshot 수·선택 항목·캡처 상태가 준비된 checkpoint에서 session을 만들기 때문에 중간 기능부터 시작해도 이전 장의 조작을 요구하지 않습니다.
 

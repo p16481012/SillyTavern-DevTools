@@ -143,6 +143,7 @@ import {
     shouldAutoStartOnboarding,
 } from './onboarding.js';
 import {
+    ONBOARDING_FIXTURE_SNAPSHOTS,
     TUTORIAL_COMPARISON_POLICY_SETTINGS,
     createOnboardingSession,
 } from './onboarding-fixture.js';
@@ -1098,11 +1099,20 @@ export class DevToolsWindow {
         this.onboardingViewportResizeHandler = () => {
             this.scheduleOnboardingGuidePosition({ refocus: true });
         };
+        this.onboardingMotionEndHandler = (event) => {
+            if (
+                !this.tutorialIsActive()
+                || !event.target?.closest?.('.st-devtools-page, details')
+            ) return;
+            this.scheduleOnboardingGuidePosition();
+        };
         this.onboardingInteractionHandler = (event) => {
             this.handleOnboardingInteraction(event);
         };
         this.onboardingCaptureTimer = null;
         this.onboardingCaptureWaitResolve = null;
+        this.onboardingCopyTransitionTimer = null;
+        this.onboardingTransitionLocked = false;
         this.onboardingSessionBadge = null;
         this.storageToolsStatus = null;
         this.activeBlockingTaskCount = 0;
@@ -4098,104 +4108,540 @@ export class DevToolsWindow {
         figure.setAttribute('aria-label', visual.ariaLabel);
         const caption = element('figcaption');
         caption.append(
-            element('strong', { text: '한눈에 보기' }),
+            element('strong', { text: '실제 화면으로 보기' }),
             element('span', { text: visual.caption }),
         );
         const preview = element('div', {
-            className: 'st-devtools-help-visual-preview',
+            className: 'st-devtools-help-visual-preview st-devtools-help-product-excerpt',
         });
         preview.setAttribute('aria-hidden', 'true');
-        const previewHeader = element('div', {
-            className: 'st-devtools-help-visual-preview-header',
-        });
-        const previewBrand = element('span', {
-            className: 'st-devtools-help-visual-preview-brand',
-        });
-        previewBrand.append(
-            element('i', { className: 'fa-solid fa-code' }),
-            element('strong', { text: 'ST DevTools 화면 예시' }),
-        );
-        const previewBadge = element('span', {
-            className: 'st-devtools-help-visual-preview-badge',
-            text: '연습 데이터 · 읽기 전용',
-        });
-        previewHeader.append(previewBrand, previewBadge);
-        const lanes = element('div', {
-            className: 'st-devtools-help-visual-lanes',
-        });
-        const stateLabels = {
-            neutral: '항목',
-            info: '정보',
-            success: '정상',
-            warning: '주의',
-            danger: '변경',
-        };
-        const stateIcons = {
-            neutral: 'fa-layer-group',
-            info: 'fa-circle-info',
-            success: 'fa-check',
-            warning: 'fa-triangle-exclamation',
-            danger: 'fa-minus',
-        };
-        const relationLabels = {
-            branch: '분기',
-            contrast: '비교',
-            mapping: '연결',
-            parallel: '동시 확인',
-            replacement: '옵션 교체',
-            trend: '변화',
-            sequence: '흐름',
-        };
-        for (const lane of visual.lanes) {
-            const laneNode = element('section', {
-                className: `st-devtools-help-visual-lane relation-${lane.relation}`,
-            });
-            const laneHeader = element('header', {
-                className: 'st-devtools-help-visual-lane-header',
-            });
-            laneHeader.append(
-                element('h4', { text: lane.label }),
-                element('span', {
-                    text: relationLabels[lane.relation] ?? '화면',
-                }),
-            );
-            laneNode.appendChild(laneHeader);
-            const items = element('ol');
-            for (const item of lane.items) {
-                const state = item.state ?? 'neutral';
-                const itemNode = element('li', {
-                    className: `is-${state}`,
-                });
-                const marker = element('span', {
-                    className: 'st-devtools-help-visual-marker',
-                });
-                marker.setAttribute('aria-hidden', 'true');
-                marker.appendChild(element('i', {
-                    className: `fa-solid ${stateIcons[state] ?? stateIcons.neutral}`,
-                }));
-                const copy = element('span', {
-                    className: 'st-devtools-help-visual-copy',
-                });
-                copy.appendChild(element('strong', { text: item.label }));
-                if (item.detail) {
-                    copy.appendChild(element('small', { text: item.detail }));
-                }
-                itemNode.append(
-                    marker,
-                    copy,
-                    element('span', {
-                        className: 'st-devtools-help-visual-status',
-                        text: stateLabels[state] ?? stateLabels.neutral,
-                    }),
-                );
-                items.appendChild(itemNode);
-            }
-            laneNode.appendChild(items);
-            lanes.appendChild(laneNode);
-        }
-        preview.append(previewHeader, lanes);
+        preview.setAttribute('inert', '');
+        preview.dataset.helpSource = 'product-renderer';
+        preview.appendChild(this.renderHelpProductExcerpt(visual.id));
         figure.append(caption, preview);
         return figure;
+    }
+
+    createHelpPreviewFacade({ includedOnly = false } = {}) {
+        const preview = Object.create(DevToolsWindow.prototype);
+        const session = createOnboardingSession({ checkpoint: 'search' });
+        session.timeline = [...ONBOARDING_FIXTURE_SNAPSHOTS];
+        session.availableTimeline = [...ONBOARDING_FIXTURE_SNAPSHOTS];
+        session.selectedId = ONBOARDING_FIXTURE_SNAPSHOTS.at(-1)?.id ?? null;
+        session.explorerIncludedOnly = includedOnly;
+        session.timelineSnapshotsOpen = true;
+        session.openSourceIds = new Set();
+        const blockedMutation = () => {
+            throw new Error('help-preview-read-only');
+        };
+        preview.getContext = () => ({
+            chatId: 'tutorial:chat',
+            getCurrentChatId: () => 'tutorial:chat',
+        });
+        preview.store = Object.freeze({
+            getStatus: () => ({
+                type: 'memory',
+                persistent: false,
+                fallbackReason: null,
+            }),
+        });
+        preview.capture = null;
+        preview.version = this.version;
+        preview.onboardingSession = session;
+        preview.onboardingPhase = 'steps';
+        preview.onboardingStepStage = 'idle';
+        preview.onboardingApplyingSkippedState = true;
+        preview.onboardingGuide = null;
+        preview.onboardingSteps = [];
+        preview.recordOnboardingAction = () => false;
+        preview.currentOnboardingStep = () => null;
+        preview.render = () => null;
+        preview.selectTab = () => false;
+        preview.refresh = blockedMutation;
+        preview.saveUiPreferences = blockedMutation;
+        preview.saveRuleSettings = blockedMutation;
+        preview.saveComparisonPolicySettings = blockedMutation;
+        preview.saveFindingReviewDocument = blockedMutation;
+        preview.saveRuleAuditLog = blockedMutation;
+        preview.advanceSemanticProviderEvaluation = blockedMutation;
+        preview.runSemanticProviderEvaluationStep = blockedMutation;
+        preview.clearCurrentTimeline = blockedMutation;
+        preview.clearAllSnapshots = blockedMutation;
+        preview.window = element('div', { className: 'st-devtools-window' });
+        preview.root = null;
+        preview.content = null;
+        preview.timeline = [];
+        preview.selectedId = null;
+        preview.timelineSelectionChatId = null;
+        preview.virtualListCleanups = new Set();
+        preview.virtualSourceLists = new Map();
+        preview.openSourceIds = new Set();
+        preview.explorerIncludedOnly = false;
+        preview.selectedTimelineIds = new Set();
+        preview.timelineTotalCount = session.timeline.length;
+        preview.timelineCorruptCount = 0;
+        preview.analysisRevision = 0;
+        preview.analysisControllers = new Set();
+        preview.analysisSnapshotDigestCache = new WeakMap();
+        preview.captureStatusRegion = null;
+        preview.captureStatus = { state: 'waiting', at: Date.now() };
+        preview.storageErrors = [];
+        preview.storageToolsStatus = null;
+        preview.storageSummary = {
+            type: 'memory',
+            persistent: false,
+            fallbackReason: null,
+            chatCount: 1,
+            snapshotCount: session.timeline.length,
+            localSettingCount: 0,
+            approximateBytes: null,
+            snapshotApproximateBytes: null,
+            complete: true,
+            rebuilding: false,
+        };
+        preview.importedDiagnostics = null;
+        preview.diagnosticImportError = null;
+        preview.diagnosticCompareFiles = [];
+        preview.preferences = normalizeUiPreferences({
+            ...DEFAULT_UI_PREFERENCES,
+            timelineRetentionLimit: 100,
+            timelineReadLimit: 20,
+            captureMode: 'full',
+            semanticResponseTokenCap: 256,
+        });
+        preview.ruleSettings = normalizeRuleSettings(DEFAULT_RULE_SETTINGS);
+        preview.ruleSettingsOpen = true;
+        preview.comparisonPolicySettings = normalizeComparisonPolicySettings(
+            TUTORIAL_COMPARISON_POLICY_SETTINGS,
+        );
+        preview.savedComparisonPolicySettings = normalizeComparisonPolicySettings(
+            TUTORIAL_COMPARISON_POLICY_SETTINGS,
+        );
+        preview.activeComparisonProfileId = (
+            preview.comparisonPolicySettings.profiles?.[0]?.id ?? 'global'
+        );
+        preview.comparisonPolicyOpen = true;
+        preview.comparisonPolicySectionOpen = {
+            profiles: true,
+            groups: true,
+            rules: true,
+            manual: false,
+            preview: true,
+            transfer: false,
+            reviewed: false,
+            audit: false,
+        };
+        preview.comparisonPolicyDirty = false;
+        preview.pendingImportedRuleSettings = null;
+        preview.pendingImportedReviews = null;
+        preview.policyPreviewCache = null;
+        preview.policyPreviewRevision = 0;
+        preview.findingReviewDocument = normalizeFindingReviewDocument(
+            DEFAULT_FINDING_REVIEW_DOCUMENT,
+        );
+        preview.findingHiddenOnce = new Set();
+        preview.ruleViewMode = 'local';
+        preview.ruleReviewStatus = '';
+        preview.ruleReviewStatusIsError = false;
+        preview.ruleAuditLog = normalizeAuditLog(DEFAULT_AUDIT_LOG);
+        preview.instructionModelOpen = true;
+        preview.instructionAtomsOpen = true;
+        preview.timelineSnapshotsOpen = true;
+        preview.semanticPromptSettings = { ...DEFAULT_SEMANTIC_PROMPT_SETTINGS };
+        preview.semanticInspectionState = {
+            snapshotId: session.selectedId,
+            analysisRevision: 0,
+            targetIds: new Set(),
+            status: 'idle',
+            result: null,
+            errorCode: null,
+            errorReason: null,
+            sequence: 0,
+            controller: null,
+        };
+        preview.semanticEvaluationSession = null;
+        preview.semanticEvaluationAdvancePromise = null;
+        preview.semanticEvaluationRepetitions = 1;
+        preview.semanticEvaluationHost = null;
+        preview.semanticEvaluationHarness = {
+            manifest: () => ({
+                corpusVersion: 2,
+                caseCount: 5,
+                digest: 'tutorial-product-preview',
+                pathCoverage: {
+                    structuredRelation: 2,
+                    structuredAtomBridge: 2,
+                    sourceBridge: 1,
+                },
+            }),
+        };
+        return preview;
+    }
+
+    cloneHelpProductNode(node) {
+        if (!node) return null;
+        const clone = node.cloneNode(true);
+        const nodes = [clone, ...clone.querySelectorAll('*')];
+        for (const entry of nodes) {
+            for (const attribute of [
+                'id',
+                'for',
+                'aria-controls',
+                'aria-describedby',
+                'aria-labelledby',
+                'aria-live',
+                'data-tour-id',
+                'autofocus',
+            ]) {
+                entry.removeAttribute?.(attribute);
+            }
+            if (entry.matches?.('button, input, select, textarea, summary, [tabindex]')) {
+                entry.setAttribute('tabindex', '-1');
+            }
+        }
+        return clone;
+    }
+
+    renderHelpProductExcerpt(visualId) {
+        const preview = this.createHelpPreviewFacade();
+        const snapshot = preview.selectedSnapshot();
+        const surface = element('div', {
+            className: `st-devtools-help-product-surface is-${visualId}`,
+        });
+        const append = (...nodes) => {
+            for (const node of nodes.flat()) {
+                const clone = this.cloneHelpProductNode(node);
+                if (clone) surface.appendChild(clone);
+            }
+        };
+        const openDetails = (details, { descendants = false } = {}) => {
+            if (!details) return null;
+            details.open = true;
+            mountDetailsContent(details);
+            if (descendants) {
+                for (const nested of details.querySelectorAll('details')) {
+                    nested.open = true;
+                    mountDetailsContent(nested);
+                }
+            }
+            return details;
+        };
+        const explorer = ({ includedOnly = false } = {}) => {
+            preview.onboardingSession.explorerIncludedOnly = includedOnly;
+            preview.virtualSourceLists = new Map();
+            return preview.renderExplorer(snapshot);
+        };
+        const captureStatus = (state) => {
+            preview.onboardingSession.captureState = state;
+            preview.captureStatusRegion = null;
+            const status = preview.buildCaptureStatus();
+            preview.captureStatusRegion = status;
+            preview.updateCaptureStatus();
+            return status;
+        };
+
+        try {
+            switch (visualId) {
+        case 'capture-status': {
+            const title = element('div', { className: 'st-devtools-title' });
+            const icon = element('i', { className: 'fa-solid fa-code' });
+            icon.setAttribute('aria-hidden', 'true');
+            title.append(
+                icon,
+                element('strong', { text: 'ST DevTools' }),
+                captureStatus('waiting'),
+                captureStatus('processing'),
+                captureStatus('saved'),
+                captureStatus('failed'),
+            );
+            append(title);
+            break;
+        }
+        case 'prompt-overview': {
+            const page = explorer();
+            append(
+                page.querySelector('.st-devtools-overview-card'),
+                page.querySelector('.st-devtools-explorer-filter'),
+                [...page.querySelectorAll('.st-devtools-source-group > summary')]
+                    .slice(0, 3),
+            );
+            break;
+        }
+        case 'prompt-included-filter': {
+            const allPrompts = explorer({ includedOnly: false });
+            const includedPrompts = explorer({ includedOnly: true });
+            append(
+                allPrompts.querySelector('.st-devtools-explorer-filter'),
+                allPrompts.querySelector(
+                    '.st-devtools-source-group[data-group="configured"]',
+                ),
+                includedPrompts.querySelector('.st-devtools-explorer-filter'),
+                includedPrompts.querySelector(
+                    '.st-devtools-source-group[data-group="configured"]',
+                ),
+            );
+            break;
+        }
+        case 'prompt-final-position': {
+            preview.onboardingSession.openSourceIds.add('tutorial:source:output');
+            preview.onboardingSession.openSourceIds.add('tutorial:source:final:3');
+            const page = explorer();
+            const configured = page.querySelector(
+                '.st-devtools-source-group[data-group="configured"]',
+            );
+            const final = page.querySelector(
+                '.st-devtools-source-group[data-group="final"]',
+            );
+            openDetails(configured);
+            openDetails(final);
+            const source = configured?.querySelector(
+                '.st-devtools-source[data-source-id="tutorial:source:output"]',
+            );
+            const finalSource = final?.querySelector('.st-devtools-source');
+            openDetails(source);
+            openDetails(finalSource);
+            append(source, finalSource);
+            break;
+        }
+        case 'rules-overview': {
+            const page = preview.renderRules(snapshot);
+            const card = page.querySelector('.st-devtools-rule-card');
+            const evidence = card?.querySelector('.st-devtools-rule-evidence');
+            if (evidence) evidence.open = true;
+            append(
+                page.querySelector('.st-devtools-rule-summary'),
+                page.querySelector('.st-devtools-rule-determination-summary'),
+                card,
+            );
+            break;
+        }
+        case 'comparison-policy': {
+            const settings = preview.renderComparisonPolicySettings(snapshot);
+            for (const section of settings.querySelectorAll(
+                '.st-devtools-policy-section',
+            )) {
+                if (!['groups', 'rules'].includes(section.dataset.policySection)) {
+                    section.remove();
+                } else {
+                    section.open = true;
+                }
+            }
+            settings.querySelector('.st-devtools-policy-actions')?.remove();
+            settings.querySelector('.st-devtools-policy-form-status')?.remove();
+            append(settings);
+            break;
+        }
+        case 'semantic-ai': {
+            const mainSource = snapshot.sources.find(({ id }) => (
+                id === 'tutorial:source:main'
+            ));
+            const outputSource = snapshot.sources.find(({ id }) => (
+                id === 'tutorial:source:output'
+            ));
+            const quote = outputSource?.content?.split('\n').at(-1) ?? '';
+            const includedSources = [mainSource, outputSource]
+                .filter(Boolean)
+                .map((source) => ({
+                    id: source.id,
+                    label: source.label ?? source.name ?? source.id,
+                    bytes: new Blob([source.content ?? '']).size,
+                    content: source.content ?? '',
+                }));
+            append(
+                preview.renderSemanticConsentPreview({
+                    providerIdentity: { status: 'verified' },
+                    provider: snapshot.provider,
+                    model: snapshot.model,
+                    inputTokenEstimate: 640,
+                    responseTokenCap: 256,
+                    systemPrompt: '두 지시가 함께 적용될 때 형식 충돌을 찾아 설명하세요.',
+                    userPrompt: [mainSource?.content, outputSource?.content]
+                        .filter(Boolean)
+                        .join('\n\n'),
+                    assistantPrefill: '{"suggestions": [',
+                    includedSources,
+                }),
+                preview.renderSemanticSuggestions({
+                    suggestions: [{
+                        severity: 'warning',
+                        title: '출력 형식 충돌 가능성',
+                        summary: 'JSON 지시와 XML 지시가 함께 적용될 수 있습니다.',
+                        rationale: '두 형식 중 하나를 명시적으로 선택하도록 정리하면 응답이 안정적입니다.',
+                        confidence: 0.92,
+                        targetIds: [mainSource?.id, outputSource?.id].filter(Boolean),
+                        evidence: [
+                            {
+                                sourceId: mainSource?.id,
+                                start: 0,
+                                end: mainSource?.content?.length ?? 0,
+                                quote: mainSource?.content?.split('\n').at(1) ?? '',
+                            },
+                            {
+                                sourceId: outputSource?.id,
+                                start: 0,
+                                end: quote.length,
+                                quote,
+                            },
+                        ],
+                    }],
+                }, snapshot),
+            );
+            break;
+        }
+        case 'timeline-overview': {
+            const page = preview.renderTimeline();
+            const snapshots = openDetails(page.querySelector(
+                '.st-devtools-timeline-snapshots',
+            ));
+            const cloned = this.cloneHelpProductNode(snapshots);
+            [...(cloned?.querySelectorAll('.st-devtools-timeline-entry') ?? [])]
+                .slice(2)
+                .forEach((entry) => entry.remove());
+            if (cloned) surface.appendChild(cloned);
+            break;
+        }
+        case 'timeline-growth': {
+            append(preview.renderTimeline().querySelector('.st-devtools-growth'));
+            break;
+        }
+        case 'diff-overview':
+        case 'diff-statuses': {
+            if (visualId === 'diff-statuses') {
+                preview.onboardingSession.timeline = [
+                    ...ONBOARDING_FIXTURE_SNAPSHOTS.slice(1),
+                ];
+                preview.onboardingSession.availableTimeline = [
+                    ...preview.onboardingSession.timeline,
+                ];
+                preview.onboardingSession.selectedId = (
+                    preview.onboardingSession.timeline.at(-1)?.id ?? null
+                );
+            }
+            const page = preview.renderDiff();
+            const full = page.querySelector('.st-devtools-full-diff');
+            if (visualId === 'diff-overview') {
+                openDetails(full);
+                full?.dispatchEvent(new Event('toggle'));
+                append(
+                    page.querySelector('.st-devtools-diff-selectors'),
+                    full,
+                );
+            } else {
+                const section = page.querySelector('.st-devtools-diff-section');
+                const cloned = this.cloneHelpProductNode(section);
+                [...(cloned?.querySelectorAll('.st-devtools-source-change') ?? [])]
+                    .slice(4)
+                    .forEach((entry) => entry.remove());
+                if (cloned) surface.appendChild(cloned);
+            }
+            break;
+        }
+        case 'search-overview': {
+            const page = preview.renderSearch(snapshot);
+            const query = '한국어';
+            const match = searchSnapshot(
+                { sources: snapshot.sources ?? [] },
+                query,
+                { regex: false, caseSensitive: false },
+            )[0];
+            const controls = page.querySelector('.st-devtools-search-controls');
+            const input = controls?.querySelector('input[type="search"]');
+            if (input) input.value = query;
+            const status = page.querySelector('.st-devtools-search-status');
+            if (status) {
+                status.textContent = t('search.matches', {
+                    count: match ? 1 : 0,
+                });
+            }
+            const results = page.querySelector('.st-devtools-search-results');
+            if (match) results?.appendChild(preview.renderSearchResult(match));
+            append(
+                controls,
+                status,
+                results,
+            );
+            break;
+        }
+        case 'settings-storage':
+        case 'settings-privacy': {
+            const settings = preview.buildSettingsPanel();
+            const fieldIds = visualId === 'settings-storage'
+                ? [
+                    'st-devtools-settings-retention-limit',
+                    'st-devtools-settings-timeline-limit',
+                ]
+                : ['st-devtools-settings-capture-mode'];
+            append(fieldIds.map((id) => settings.querySelector(`#${id}`)
+                ?.closest('.st-devtools-settings-field')));
+            break;
+        }
+        case 'request-details': {
+            const details = preview.renderPromptRequestData(snapshot);
+            openDetails(details, { descendants: true });
+            append(details);
+            break;
+        }
+        case 'rule-v3-structure': {
+            const analysis = analyzeSnapshotDetailed(
+                snapshot,
+                DEFAULT_RULE_SETTINGS,
+                TUTORIAL_COMPARISON_POLICY_SETTINGS,
+            );
+            append(preview.renderInstructionModel(analysis.instructions));
+            break;
+        }
+        case 'semantic-provider-evaluation': {
+            const controls = preview.renderSemanticProviderEvaluationControls();
+            if (controls) controls.open = true;
+            append(controls);
+            break;
+        }
+        case 'storage-data-tools': {
+            const tools = preview.buildStorageToolsPanel();
+            openDetails(tools);
+            const toolItems = [...tools.querySelectorAll(
+                '.st-devtools-settings-tool',
+            )];
+            const visibleToolIndexes = new Set([0, 3, 4, 8]);
+            toolItems.forEach((item, index) => {
+                if (visibleToolIndexes.has(index)) item.open = true;
+                else item.remove();
+            });
+            append(tools);
+            break;
+        }
+        case 'faq-common': {
+            const unknownSnapshot = {
+                ...snapshot,
+                stats: {
+                    ...snapshot.stats,
+                    maxContext: null,
+                    remainingContext: null,
+                    contextUsage: null,
+                },
+            };
+            append(
+                captureStatus('failed'),
+                preview.renderExplorerOverview(unknownSnapshot),
+                preview.renderEmpty(),
+            );
+            break;
+        }
+        default:
+            append(preview.renderExplorerOverview(snapshot));
+            }
+        } catch (error) {
+            surface.dataset.helpFallback = 'true';
+            surface.replaceChildren(proseElement(
+                'p',
+                t('common.unknown'),
+                { className: 'st-devtools-help-product-fallback' },
+            ));
+            console.warn?.('ST DevTools help preview failed', visualId, error);
+        } finally {
+            preview.disposeVirtualLists();
+        }
+        return surface;
     }
 
     startHelpLab(labId) {
@@ -4984,6 +5430,12 @@ export class DevToolsWindow {
         const liveDataChanged = Boolean(this.onboardingSession?.liveDataChanged);
         const latestLiveCaptureStatus = this.onboardingSession?.latestLiveCaptureStatus ?? null;
         this.cancelOnboardingCaptureWait();
+        if (this.onboardingCopyTransitionTimer != null) {
+            clearTimeout(this.onboardingCopyTransitionTimer);
+            this.onboardingCopyTransitionTimer = null;
+        }
+        this.onboardingTransitionLocked = false;
+        this.onboardingGuide?.classList.remove('is-transitioning');
         this.clearOnboardingTarget();
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
@@ -4998,6 +5450,14 @@ export class DevToolsWindow {
         this.content?.removeEventListener(
             'scroll',
             this.onboardingGuideRepositionHandler,
+        );
+        this.content?.removeEventListener(
+            'transitionend',
+            this.onboardingMotionEndHandler,
+        );
+        this.content?.removeEventListener(
+            'animationend',
+            this.onboardingMotionEndHandler,
         );
         globalThis.removeEventListener?.(
             'resize',
@@ -5015,6 +5475,9 @@ export class DevToolsWindow {
         this.onboardingPracticeExitButton.hidden = true;
         this.onboardingBlocker.hidden = true;
         this.onboardingSpotlight.hidden = true;
+        this.onboardingBody.replaceChildren();
+        this.onboardingPracticeCopy.replaceChildren();
+        this.onboardingPracticeActions.replaceChildren();
         delete this.onboardingGuide.dataset.step;
         delete this.onboardingGuide.dataset.group;
         delete this.onboardingGuide.dataset.stage;
@@ -5125,6 +5588,14 @@ export class DevToolsWindow {
             this.onboardingGuideRepositionHandler,
             { passive: true },
         );
+        this.content?.addEventListener(
+            'transitionend',
+            this.onboardingMotionEndHandler,
+        );
+        this.content?.addEventListener(
+            'animationend',
+            this.onboardingMotionEndHandler,
+        );
         globalThis.addEventListener?.(
             'resize',
             this.onboardingViewportResizeHandler,
@@ -5143,6 +5614,7 @@ export class DevToolsWindow {
 
     nextOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
+        if (this.onboardingTransitionLocked) return false;
         if (this.onboardingPhase === 'invitation') {
             return this.beginOnboardingPractice();
         }
@@ -5205,6 +5677,7 @@ export class DevToolsWindow {
 
     previousOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
+        if (this.onboardingTransitionLocked) return false;
         if (this.onboardingPhase === 'invitation') return false;
         const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
         const current = steps[this.onboardingStepIndex];
@@ -5346,6 +5819,8 @@ export class DevToolsWindow {
 
     updateOnboardingView() {
         if (!this.onboardingIsOpen()) return;
+        let preserveGuideGeometry = false;
+        let guidePanelHadFocus = false;
         if (this.onboardingPhase === 'invitation') {
             this.clearOnboardingTarget();
             this.onboardingGuide.hidden = true;
@@ -5362,6 +5837,7 @@ export class DevToolsWindow {
             const stepChanged = this.onboardingGuide.dataset.step !== step.id;
             const stageChanged = this.onboardingGuide.dataset.stage
                 !== this.onboardingStepStage;
+            preserveGuideGeometry = stepChanged || stageChanged;
             if (
                 !step.id.endsWith('-tab')
                 && step.target
@@ -5393,14 +5869,16 @@ export class DevToolsWindow {
                     : '',
             ].filter(Boolean).join(' ');
             const modalStage = this.onboardingStepStage !== 'practice';
+            guidePanelHadFocus = Boolean(
+                this.onboardingGuidePanel?.contains(document.activeElement),
+            );
             this.syncOnboardingModalState(modalStage);
-            this.onboardingGuidePanel.hidden = !modalStage;
-            this.onboardingPracticeDock.hidden = modalStage;
+            this.setOnboardingSurfaceActive(this.onboardingGuidePanel, modalStage);
+            this.setOnboardingSurfaceActive(this.onboardingPracticeDock, !modalStage);
             this.onboardingPracticeBackButton.hidden = modalStage;
             this.onboardingPracticeExitButton.hidden = modalStage;
-            this.onboardingBlocker.hidden = !modalStage;
-            this.onboardingSpotlight.hidden = true;
-            this.onboardingGuide.classList.remove('has-onboarding-spotlight');
+            this.onboardingBlocker.hidden = false;
+            this.onboardingBlocker.classList.toggle('is-active', modalStage);
             const canGoBack = this.onboardingStepIndex > 0;
             this.onboardingBackButton.disabled = !canGoBack;
             this.onboardingPracticeBackButton.disabled = !canGoBack;
@@ -5414,9 +5892,15 @@ export class DevToolsWindow {
             this.onboardingNextButton.disabled = false;
             this.window.classList.remove('is-onboarding-context-open');
             if (modalStage) {
-                this.onboardingBody.replaceChildren(
-                    this.renderOnboardingStep(step, this.onboardingStepStage),
-                );
+                if (
+                    stepChanged
+                    || stageChanged
+                    || !this.onboardingBody.firstElementChild
+                ) {
+                    this.replaceOnboardingGuideBody(
+                        this.renderOnboardingStep(step, this.onboardingStepStage),
+                    );
+                }
                 this.onboardingPracticeActions.replaceChildren();
                 if (stepChanged || stageChanged) this.onboardingBody.scrollTop = 0;
             } else {
@@ -5452,13 +5936,13 @@ export class DevToolsWindow {
                 this.currentOnboardingStep()?.id !== expectedStep
                 || this.onboardingStepStage !== expectedStage
             ) return;
-            this.refreshOnboardingTarget();
+            this.refreshOnboardingTarget({ preserveGuideGeometry });
             const targetAvailable = this.focusOnboardingTarget({
                 nearestOnly: this.onboardingStepStage === 'practice',
                 focus: false,
             });
             if (this.onboardingStepStage === 'practice') {
-                if (!targetAvailable) {
+                if (!targetAvailable || guidePanelHadFocus) {
                     this.onboardingPracticeDock?.focus({ preventScroll: true });
                 }
                 this.scheduleOnboardingGuidePosition({ refocus: true });
@@ -5476,6 +5960,85 @@ export class DevToolsWindow {
             if (modal) region.setAttribute('aria-hidden', 'true');
             else region.removeAttribute('aria-hidden');
         }
+    }
+
+    setOnboardingSurfaceActive(surface, active) {
+        if (!surface) return;
+        surface.hidden = false;
+        surface.classList.toggle('is-active', active);
+        surface.toggleAttribute('inert', !active);
+        surface.setAttribute('aria-hidden', String(!active));
+    }
+
+    replaceOnboardingGuideBody(content) {
+        const body = this.onboardingBody;
+        if (!body) return;
+        if (this.onboardingCopyTransitionTimer != null) {
+            clearTimeout(this.onboardingCopyTransitionTimer);
+            this.onboardingCopyTransitionTimer = null;
+        }
+        for (const stale of body.querySelectorAll(
+            ':scope > .st-devtools-onboarding-copy-leaving',
+        )) {
+            stale.remove();
+        }
+        const previous = body.firstElementChild;
+        previous?.classList.remove(
+            'st-devtools-onboarding-copy-entering',
+            'is-entered',
+        );
+        const reduceMotion = globalThis.matchMedia?.(
+            '(prefers-reduced-motion: reduce)',
+        )?.matches;
+        if (!previous || reduceMotion) {
+            this.onboardingTransitionLocked = false;
+            this.onboardingGuide?.classList.remove('is-transitioning');
+            body.style.removeProperty('min-height');
+            body.replaceChildren(content);
+            return;
+        }
+
+        this.onboardingTransitionLocked = true;
+        this.onboardingGuide?.classList.add('is-transitioning');
+        if (this.onboardingBackButton) this.onboardingBackButton.disabled = true;
+        if (this.onboardingNextButton) this.onboardingNextButton.disabled = true;
+        for (const identified of [previous, ...previous.querySelectorAll('[id]')]) {
+            identified.removeAttribute('id');
+        }
+        previous.classList.add('st-devtools-onboarding-copy-leaving');
+        previous.inert = true;
+        previous.setAttribute('aria-hidden', 'true');
+        content.classList.add('st-devtools-onboarding-copy-entering');
+        body.appendChild(content);
+        const transitionHeight = Math.max(
+            previous.getBoundingClientRect?.().height ?? 0,
+            content.getBoundingClientRect?.().height ?? 0,
+        );
+        if (transitionHeight > 0) body.style.minHeight = `${transitionHeight}px`;
+        const nextFrame = globalThis.requestAnimationFrame
+            ?? ((callback) => setTimeout(callback, 16));
+        nextFrame(() => {
+            if (!previous.isConnected || !content.isConnected) return;
+            previous.classList.add('is-leaving');
+            content.classList.add('is-entered');
+        });
+        this.onboardingCopyTransitionTimer = setTimeout(() => {
+            previous.remove();
+            content.classList.remove(
+                'st-devtools-onboarding-copy-entering',
+                'is-entered',
+            );
+            if (body.childElementCount <= 1) body.style.removeProperty('min-height');
+            this.onboardingCopyTransitionTimer = null;
+            this.onboardingTransitionLocked = false;
+            this.onboardingGuide?.classList.remove('is-transitioning');
+            if (this.onboardingBackButton) {
+                this.onboardingBackButton.disabled = this.onboardingStepIndex <= 0;
+            }
+            if (this.onboardingNextButton && this.onboardingIsOpen()) {
+                this.onboardingNextButton.disabled = false;
+            }
+        }, 220);
     }
 
     synchronizeOnboardingStepCompletion(step) {
@@ -5582,6 +6145,7 @@ export class DevToolsWindow {
 
     renderOnboardingPracticeActions(step) {
         this.onboardingPracticeActions.replaceChildren();
+        this.onboardingPracticeDock?.classList.remove('has-panel-action');
         if (!this.onboardingStepComplete && step.interaction?.event === 'panel') {
             const action = element('button', {
                 className: 'menu_button st-devtools-onboarding-practice-action',
@@ -5614,6 +6178,7 @@ export class DevToolsWindow {
             });
             action.disabled = this.onboardingStepComplete;
             this.onboardingPracticeActions.appendChild(action);
+            this.onboardingPracticeDock?.classList.add('has-panel-action');
         }
     }
 
@@ -5971,19 +6536,21 @@ export class DevToolsWindow {
         }
     }
 
-    clearOnboardingTarget() {
-        if (this.onboardingSpotlight) this.onboardingSpotlight.hidden = true;
-        this.onboardingGuide?.classList.remove(
-            'has-onboarding-spotlight',
-            'is-callout-over-target',
-        );
-        for (const callout of [
-            this.onboardingGuideBody,
-            this.onboardingPracticeDock,
-        ]) {
-            callout?.style.removeProperty('left');
-            callout?.style.removeProperty('top');
-            callout?.style.removeProperty('--st-devtools-onboarding-arrow-x');
+    clearOnboardingTarget({ preserveGuideGeometry = false } = {}) {
+        if (!preserveGuideGeometry) {
+            if (this.onboardingSpotlight) this.onboardingSpotlight.hidden = true;
+            this.onboardingGuide?.classList.remove(
+                'has-onboarding-spotlight',
+                'is-callout-over-target',
+            );
+            for (const callout of [
+                this.onboardingGuideBody,
+                this.onboardingPracticeDock,
+            ]) {
+                callout?.style.removeProperty('left');
+                callout?.style.removeProperty('top');
+                callout?.style.removeProperty('--st-devtools-onboarding-arrow-x');
+            }
         }
         this.onboardingTargetResizeObserver?.disconnect?.();
         this.onboardingTargetResizeObserver = null;
@@ -6036,9 +6603,9 @@ export class DevToolsWindow {
         return boundedReveal ?? revealed ?? disclosure ?? fallback;
     }
 
-    refreshOnboardingTarget() {
+    refreshOnboardingTarget({ preserveGuideGeometry = false } = {}) {
         if (!this.onboardingIsOpen()) return;
-        this.clearOnboardingTarget();
+        this.clearOnboardingTarget({ preserveGuideGeometry });
         if (!this.tutorialIsActive()) return;
         const step = this.currentOnboardingStep();
         const target = DevToolsWindow.prototype.onboardingVisualTarget.call(
@@ -6062,6 +6629,7 @@ export class DevToolsWindow {
                 this.onboardingTargetResizeObserver.observe(target);
             }
         }
+        if (preserveGuideGeometry && target) this.positionOnboardingGuide();
         this.scheduleOnboardingGuidePosition();
     }
 
@@ -6075,7 +6643,7 @@ export class DevToolsWindow {
         }
         queueMicrotask(() => {
             if (this.currentOnboardingStep()?.id !== step.id) return;
-            this.refreshOnboardingTarget();
+            this.refreshOnboardingTarget({ preserveGuideGeometry: true });
             this.focusOnboardingTarget({ focus: true });
         });
         return true;
@@ -7128,8 +7696,16 @@ export class DevToolsWindow {
         )].filter((node) => (
             !node.hidden
             && node.getAttribute('aria-hidden') !== 'true'
+            && !node.closest('[hidden], [inert], [aria-hidden="true"]')
             && node.tabIndex >= 0
             && typeof node.focus === 'function'
+            && (
+                typeof globalThis.getComputedStyle !== 'function'
+                || (
+                    globalThis.getComputedStyle(node).display !== 'none'
+                    && globalThis.getComputedStyle(node).visibility !== 'hidden'
+                )
+            )
             && (node.getClientRects().length > 0 || node === document.activeElement)
         ));
     }
@@ -7471,7 +8047,9 @@ export class DevToolsWindow {
             && this.onboardingSession?.guideKind === 'advanced'
         ) {
             this.content.appendChild(this.renderAdvancedOnboardingGuide());
-            queueMicrotask(() => this.refreshOnboardingTarget());
+            queueMicrotask(() => this.refreshOnboardingTarget({
+                preserveGuideGeometry: true,
+            }));
             return;
         }
 
@@ -7511,7 +8089,11 @@ export class DevToolsWindow {
             search: () => this.renderSearch(snapshot),
         };
         this.content.appendChild(renderers[activeTab]());
-        if (this.tutorialIsActive()) queueMicrotask(() => this.refreshOnboardingTarget());
+        if (this.tutorialIsActive()) {
+            queueMicrotask(() => this.refreshOnboardingTarget({
+                preserveGuideGeometry: true,
+            }));
+        }
     }
 
     renderSnapshotPrivacyNotice(snapshot) {
@@ -9821,7 +10403,9 @@ export class DevToolsWindow {
                 if (this.tutorialIsActive()) {
                     queueMicrotask(() => {
                         if (this.currentOnboardingStep()?.tabId === 'diff') {
-                            this.refreshOnboardingTarget();
+                            this.refreshOnboardingTarget({
+                                preserveGuideGeometry: true,
+                            });
                             this.scheduleOnboardingGuidePosition({ refocus: true });
                         }
                     });
@@ -15358,6 +15942,22 @@ export class DevToolsWindow {
         return page;
     }
 
+    renderSearchResult(match, activate = null) {
+        const item = element('button', {
+            className: 'st-devtools-search-result',
+            type: 'button',
+        });
+        item.dataset.sourceId = match.sourceId;
+        item.append(
+            element('strong', { text: match.sourceLabel }),
+            element('span', { text: match.snippet }),
+        );
+        if (typeof activate === 'function') {
+            item.addEventListener('click', () => activate(item));
+        }
+        return item;
+    }
+
     renderSearch(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         const tutorial = this.tutorialIsActive();
@@ -15478,13 +16078,7 @@ export class DevToolsWindow {
                     ? t('search.matchesLimited', { count: matches.length })
                     : t('search.matches', { count: matches.length });
                 for (const match of matches) {
-                    const item = element('button', { className: 'st-devtools-search-result', type: 'button' });
-                    item.dataset.sourceId = match.sourceId;
-                    item.append(
-                        element('strong', { text: match.sourceLabel }),
-                        element('span', { text: match.snippet }),
-                    );
-                    item.addEventListener('click', () => {
+                    const item = this.renderSearchResult(match, (activatedItem) => {
                         this.selectTab('explorer');
                         this.jumpToSourceCard(match.sourceId);
                         const source = [...this.window.querySelectorAll(
@@ -15497,14 +16091,18 @@ export class DevToolsWindow {
                             () => source?.classList.remove('search-focus'),
                             1500,
                         );
-                        if (tutorial) this.recordOnboardingAction('click', item);
+                        if (tutorial) {
+                            this.recordOnboardingAction('click', activatedItem);
+                        }
                     });
                     results.appendChild(item);
                 }
                 if (tutorial) {
                     this.recordOnboardingAction('input', input);
                     if (matches.length > 0) {
-                        queueMicrotask(() => this.refreshOnboardingTarget());
+                        queueMicrotask(() => this.refreshOnboardingTarget({
+                            preserveGuideGeometry: true,
+                        }));
                     }
                 }
             } catch (error) {

@@ -141,7 +141,7 @@ test('help home separates basic usage, advanced coachmarks, and detailed docs', 
     assert.match(docs, /helpTopicsFor/u);
 });
 
-test('detailed help articles render the registered product-token visual before prose', async () => {
+test('detailed help articles reuse inert product renderers with onboarding fixtures', async () => {
     const ui = await readFile(UI_URL, 'utf8');
     const article = sourceBlock(
         ui,
@@ -160,10 +160,28 @@ test('detailed help articles render the registered product-token visual before p
     assert.match(visual, /figure\.setAttribute\('role', 'img'\)/u);
     assert.match(visual, /figure\.setAttribute\('aria-label', visual\.ariaLabel\)/u);
     assert.match(visual, /st-devtools-help-visual-preview/u);
-    assert.match(visual, /연습 데이터 · 읽기 전용/u);
     assert.match(visual, /preview\.setAttribute\('aria-hidden', 'true'\)/u);
-    assert.doesNotMatch(visual, /element\('(button|input|select)'/u);
-    assert.match(visual, /for \(const lane of visual\.lanes\)/u);
+    assert.match(visual, /preview\.setAttribute\('inert', ''\)/u);
+    assert.match(visual, /preview\.dataset\.helpSource = 'product-renderer'/u);
+    assert.match(visual, /this\.renderHelpProductExcerpt\(visual\.id\)/u);
+    assert.match(visual, /Object\.create\(DevToolsWindow\.prototype\)/u);
+    assert.doesNotMatch(visual, /Object\.create\(this\)/u);
+    assert.match(visual, /preview\.importedDiagnostics = null/u);
+    assert.match(visual, /preview\.diagnosticImportError = null/u);
+    assert.match(visual, /preview\.timeline = \[\]/u);
+    assert.match(visual, /help-preview-read-only/u);
+    assert.match(visual, /ONBOARDING_FIXTURE_SNAPSHOTS/u);
+    assert.match(visual, /cloneNode\(true\)/u);
+    assert.match(visual, /preview\.renderExplorer\(snapshot\)/u);
+    assert.match(visual, /preview\.renderRules\(snapshot\)/u);
+    assert.match(visual, /preview\.renderTimeline\(\)/u);
+    assert.match(visual, /preview\.renderDiff\(\)/u);
+    assert.match(visual, /preview\.renderSearch\(snapshot\)/u);
+    assert.match(visual, /finally \{[\s\S]*?preview\.disposeVirtualLists\(\)/u);
+    assert.match(visual, /ONBOARDING_FIXTURE_SNAPSHOTS\.slice\(1\)/u);
+    assert.match(visual, /includedSources/u);
+    assert.match(visual, /input\.value = query/u);
+    assert.doesNotMatch(visual, /localStorage|fetch\(/u);
 });
 
 test('empty state and help indexes keep explicit mobile-safe vertical rhythm', async () => {
@@ -501,7 +519,7 @@ test('coachmark no-fit placement uses an opaque collision-safe callout', async (
     );
     const clearTarget = sourceBlock(
         ui,
-        '\n    clearOnboardingTarget() {',
+        '\n    clearOnboardingTarget({ preserveGuideGeometry = false } = {}) {',
         '\n    onboardingVisualTarget(',
     );
     const readability = sourceBlock(
@@ -529,6 +547,66 @@ test('coachmark no-fit placement uses an opaque collision-safe callout', async (
     assert.match(
         readability,
         /\.is-callout-over-target[\s\S]*?::before,[\s\S]*?\.is-callout-over-target[\s\S]*?::after \{[\s\S]*?display:\s*none/u,
+    );
+});
+
+test('coachmark stages crossfade continuously and stack the capture action on mobile', async () => {
+    const [ui, style] = await Promise.all([
+        readFile(UI_URL, 'utf8'),
+        readFile(STYLE_URL, 'utf8'),
+    ]);
+    const update = sourceBlock(
+        ui,
+        '\n    updateOnboardingView() {',
+        '\n    syncOnboardingModalState(',
+    );
+    const surface = sourceBlock(
+        ui,
+        '\n    setOnboardingSurfaceActive(',
+        '\n    synchronizeOnboardingStepCompletion(',
+    );
+    const focusable = sourceBlock(
+        ui,
+        '\n    focusableElements() {',
+        '\n    handleDialogKeydown(',
+    );
+    const navigation = sourceBlock(
+        ui,
+        '\n    nextOnboardingStep() {',
+        '\n    skipOnboardingStep() {',
+    );
+
+    assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingGuidePanel, modalStage\)/u);
+    assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingPracticeDock, !modalStage\)/u);
+    assert.match(update, /refreshOnboardingTarget\(\{ preserveGuideGeometry \}\)/u);
+    assert.match(surface, /surface\.hidden = false/u);
+    assert.match(surface, /classList\.toggle\('is-active', active\)/u);
+    assert.match(surface, /toggleAttribute\('inert', !active\)/u);
+    assert.match(surface, /st-devtools-onboarding-copy-leaving/u);
+    assert.match(surface, /st-devtools-onboarding-copy-entering/u);
+    assert.match(surface, /this\.onboardingTransitionLocked = true/u);
+    assert.match(surface, /this\.onboardingTransitionLocked = false/u);
+    assert.match(navigation, /if \(this\.onboardingTransitionLocked\) return false/u);
+    assert.match(
+        focusable,
+        /!node\.closest\('\[hidden\], \[inert\], \[aria-hidden="true"\]'\)/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-onboarding-guide-panel,[\s\S]*?transition:[\s\S]*?opacity 180ms[\s\S]*?visibility 0s/u,
+    );
+    assert.match(style, /@keyframes st-devtools-onboarding-copy-enter/u);
+    assert.match(style, /\.st-devtools-onboarding-copy-leaving\.is-leaving/u);
+    assert.match(style, /\.st-devtools-onboarding-copy-entering\.is-entered/u);
+    assert.match(style, /@supports \(interpolate-size: allow-keywords\)/u);
+    assert.match(style, /\.st-devtools-onboarding-practice-dock\.has-panel-action \{[\s\S]*?width: min\(560px/u);
+    assert.match(
+        style,
+        /@container \(max-width: 520px\) \{[\s\S]*?\.st-devtools-onboarding-practice-dock\.has-panel-action \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-onboarding-practice-dock\.has-panel-action[\s\S]*?> \.st-devtools-onboarding-practice-action \{[\s\S]*?width: 100% !important/u,
     );
 });
 

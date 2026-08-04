@@ -1,4 +1,13 @@
-# v0.16.3 기술 구현 현황
+# v0.16.4 기술 구현 현황
+
+## v0.16.4 좌표 유지형 코치마크·제품 renderer excerpt
+
+- 안내 surface는 단계 전환 때 DOM을 즉시 숨기지 않고 `is-active`·`inert`·`aria-hidden` 상태를 전환합니다. 직전 guide geometry를 유지한 상태에서 새 target을 계산해 패널·dock·blocker·spotlight가 opacity와 작은 translate로 교차 페이드합니다.
+- 안내 본문과 상세 disclosure에는 짧은 진입·펼침 animation을 적용하며 `prefers-reduced-motion: reduce`에서는 transition·animation을 제거합니다.
+- 캡처 단계의 action이 있는 coachmark는 넓은 화면에서 충분한 본문 폭을 확보하고, 520px 이하 container에서는 CTA가 설명 아래 full-width로 재배치됩니다.
+- `renderHelpTopicVisual()`은 19개 topic마다 `createOnboardingSession()`의 결정적 fixture로 분리된 preview facade를 만들고 실제 explorer·timeline·diff·rules·search·settings renderer에서 필요한 fragment를 렌더합니다.
+- 문서에 삽입하는 노드는 렌더 결과의 `cloneNode(true)`이며 `inert`·`aria-hidden`·`pointer-events: none`을 적용하고 ID·label·ARIA 참조·tour 표식을 제거합니다. 실제 UI DOM과 event handler를 공유하지 않습니다.
+- preview facade는 실제 timeline store, 저장 정책, Connection Manager, Semantic Inspector provider, clipboard, export와 network를 호출하지 않습니다. AI·평가 화면은 고정 fixture와 no-op harness만 사용합니다.
 
 ## v0.16.3 도움말 간격·제품형 정적 preview·교체 fixture
 

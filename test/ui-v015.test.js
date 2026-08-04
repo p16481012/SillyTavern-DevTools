@@ -913,9 +913,9 @@ test('briefing and debrief are modal and inert while practice is freely interact
     assert.match(guide, /className: 'menu_button st-devtools-onboarding-practice-back/u);
     assert.match(view, /const modalStage = this\.onboardingStepStage !== 'practice'/u);
     assert.match(view, /this\.syncOnboardingModalState\(modalStage\)/u);
-    assert.match(view, /this\.onboardingGuidePanel\.hidden = !modalStage/u);
-    assert.match(view, /this\.onboardingPracticeDock\.hidden = modalStage/u);
-    assert.match(view, /this\.onboardingBlocker\.hidden = !modalStage/u);
+    assert.match(view, /this\.setOnboardingSurfaceActive\(this\.onboardingGuidePanel, modalStage\)/u);
+    assert.match(view, /this\.setOnboardingSurfaceActive\(this\.onboardingPracticeDock, !modalStage\)/u);
+    assert.match(view, /this\.onboardingBlocker\.classList\.toggle\('is-active', modalStage\)/u);
     assert.match(modalSync, /region\.inert = modal/u);
     assert.match(modalSync, /if \(modal\) region\.setAttribute\('aria-hidden', 'true'\)/u);
     assert.match(modalSync, /else region\.removeAttribute\('aria-hidden'\)/u);
@@ -999,7 +999,7 @@ test('async diff rendering restores the active comparison spotlight target', asy
 
     assert.match(
         renderDiff,
-        /this\.renderLoreChanges\([\s\S]*?if \(this\.tutorialIsActive\(\)\)[\s\S]*?queueMicrotask\([\s\S]*?currentOnboardingStep\(\)\?\.tabId === 'diff'[\s\S]*?refreshOnboardingTarget\(\)[\s\S]*?scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u,
+        /this\.renderLoreChanges\([\s\S]*?if \(this\.tutorialIsActive\(\)\)[\s\S]*?queueMicrotask\([\s\S]*?currentOnboardingStep\(\)\?\.tabId === 'diff'[\s\S]*?refreshOnboardingTarget\(\{[\s\S]*?preserveGuideGeometry: true[\s\S]*?\}\)[\s\S]*?scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u,
     );
 });
 
@@ -1146,7 +1146,7 @@ test('unrelated practice interactions remain available and are never cancelled',
     const interaction = sourceBlock(
         ui,
         '\n    handleOnboardingInteraction(event) {',
-        '\n    clearOnboardingTarget() {',
+        '\n    clearOnboardingTarget({ preserveGuideGeometry = false } = {}) {',
     );
     assert.doesNotMatch(interaction, /preventDefault|stopImmediatePropagation/u);
 });
@@ -1464,7 +1464,7 @@ test('coachmarks expose a named capture action, richer copy, and finite success 
     const interactionHandler = sourceBlock(
         ui,
         '\n    handleOnboardingInteraction(event) {',
-        '\n    clearOnboardingTarget() {',
+        '\n    clearOnboardingTarget({ preserveGuideGeometry = false } = {}) {',
     );
 
     assert.match(renderer, /onboarding\.step\.\$\{step\.id\}\.what/u);

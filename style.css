@@ -9284,6 +9284,97 @@ i {
     }
 }
 
+/* v0.16.4 — manuals reuse read-only fragments rendered by the product UI. */
+.st-devtools-help-visual {
+    gap: 0.75rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.st-devtools-help-product-excerpt {
+    padding: 0.7rem;
+    border-radius: var(--st-devtools-radius-lg);
+    background: var(--st-devtools-app-bg);
+    pointer-events: none;
+    user-select: none;
+}
+
+.st-devtools-help-product-surface {
+    display: grid;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    gap: 0.7rem;
+    overflow: hidden;
+}
+
+.st-devtools-help-product-surface > * {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    margin: 0;
+}
+
+.st-devtools-help-product-surface.is-capture-status
+.st-devtools-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.7rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-help-product-surface.is-capture-status
+.st-devtools-title > strong {
+    margin-right: auto;
+}
+
+.st-devtools-help-product-surface
+:is(.st-devtools-context-payload, .st-devtools-final-prompt) {
+    max-height: 11rem;
+    overflow: hidden;
+    white-space: pre-wrap;
+}
+
+.st-devtools-help-product-surface.is-timeline-overview
+.st-devtools-timeline {
+    max-height: none;
+}
+
+.st-devtools-help-product-surface.is-semantic-ai
+.st-devtools-semantic-results > h3,
+.st-devtools-help-product-surface.is-semantic-ai
+.st-devtools-semantic-results > p {
+    margin-inline: 0;
+}
+
+.st-devtools-help-product-surface.is-rule-v3-structure
+.st-devtools-instruction-content,
+.st-devtools-help-product-surface.is-semantic-provider-evaluation
+.st-devtools-semantic-evaluation-body,
+.st-devtools-help-product-surface.is-storage-data-tools
+.st-devtools-settings-tool-controls {
+    max-height: 18rem;
+    overflow: hidden;
+}
+
+@media (max-width: 420px) {
+    .st-devtools-help-product-excerpt {
+        padding: 0.55rem;
+    }
+
+    .st-devtools-help-product-surface {
+        gap: 0.55rem;
+    }
+}
+
 /* Host themes can assign display to result cards, so preserve native hidden state. */
 .st-devtools-advanced-guide-page [hidden] {
     display: none !important;
@@ -9383,6 +9474,260 @@ i {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+}
+
+/* v0.16.4 — keep coachmark surfaces and geometry continuous between stages. */
+.st-devtools-onboarding-guide-panel,
+.st-devtools-onboarding-practice-dock,
+.st-devtools-onboarding-blocker {
+    transition:
+        opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        visibility 0s linear 180ms;
+}
+
+.st-devtools-onboarding-guide-body,
+.st-devtools-onboarding-practice-dock {
+    transition:
+        left 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        top 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        visibility 0s linear 220ms;
+}
+
+.st-devtools-onboarding-guide-panel:not(.is-active),
+.st-devtools-onboarding-practice-dock:not(.is-active),
+.st-devtools-onboarding-blocker:not(.is-active) {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none !important;
+}
+
+.st-devtools-onboarding-guide-panel.is-active,
+.st-devtools-onboarding-practice-dock.is-active,
+.st-devtools-onboarding-blocker.is-active {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
+}
+
+.st-devtools-onboarding-guide-panel:not(.is-active)
+.st-devtools-onboarding-guide-body,
+.st-devtools-onboarding-practice-dock:not(.is-active) {
+    opacity: 0;
+    translate: 0 7px;
+}
+
+.st-devtools-onboarding-guide-panel.is-active
+.st-devtools-onboarding-guide-body,
+.st-devtools-onboarding-practice-dock.is-active {
+    opacity: 1;
+    translate: 0 0;
+}
+
+.st-devtools-onboarding-guide-body {
+    isolation: isolate;
+}
+
+.st-devtools-onboarding-copy-leaving,
+.st-devtools-onboarding-copy-entering {
+    transition:
+        opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        translate 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.st-devtools-onboarding-copy-leaving {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    box-sizing: border-box;
+    width: 100%;
+    padding: inherit;
+    opacity: 1;
+    pointer-events: none;
+}
+
+.st-devtools-onboarding-copy-leaving.is-leaving {
+    opacity: 0;
+    translate: 0 -5px;
+}
+
+.st-devtools-onboarding-copy-entering {
+    position: relative;
+    z-index: 1;
+    opacity: 0;
+    translate: 0 6px;
+    animation: none !important;
+}
+
+.st-devtools-onboarding-copy-entering.is-entered {
+    opacity: 1;
+    translate: 0 0;
+}
+
+.st-devtools-onboarding-practice-dock {
+    animation: none;
+}
+
+.st-devtools-onboarding-practice-dock.has-panel-action {
+    width: min(560px, calc(100% - 2rem));
+}
+
+.st-devtools-window.is-onboarding-practice
+.st-devtools-page {
+    animation: st-devtools-onboarding-screen-enter 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.st-devtools-window.is-onboarding-practice
+.st-devtools-disclosure[open]
+> :not(summary) {
+    animation: st-devtools-onboarding-disclosure-enter 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.st-devtools-onboarding-guide-body
+> .st-devtools-onboarding-step,
+.st-devtools-onboarding-practice-copy > *,
+.st-devtools-onboarding-practice-actions > * {
+    animation: st-devtools-onboarding-copy-enter 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.st-devtools-onboarding-practice-copy > :nth-child(2) {
+    animation-delay: 30ms;
+}
+
+.st-devtools-onboarding-practice-copy > :nth-child(3) {
+    animation-delay: 55ms;
+}
+
+.st-devtools-onboarding-practice-copy > :nth-child(4),
+.st-devtools-onboarding-practice-actions > * {
+    animation-delay: 80ms;
+}
+
+.st-devtools-window.is-onboarding-practice
+:is(button, summary) {
+    transition:
+        transform 110ms ease,
+        background-color 160ms ease,
+        border-color 160ms ease,
+        color 160ms ease,
+        box-shadow 160ms ease;
+}
+
+.st-devtools-window.is-onboarding-practice
+:is(button, summary):active {
+    transform: scale(0.98);
+}
+
+@keyframes st-devtools-onboarding-screen-enter {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes st-devtools-onboarding-disclosure-enter {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@supports (interpolate-size: allow-keywords) {
+    .st-devtools-window.is-onboarding-practice details {
+        interpolate-size: allow-keywords;
+    }
+
+    .st-devtools-window.is-onboarding-practice details::details-content {
+        overflow: clip;
+        block-size: 0;
+        opacity: 0;
+        transition:
+            block-size 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+            opacity 180ms ease;
+    }
+
+    .st-devtools-window.is-onboarding-practice details[open]::details-content {
+        block-size: auto;
+        opacity: 1;
+    }
+}
+
+@keyframes st-devtools-onboarding-copy-enter {
+    from {
+        opacity: 0;
+        translate: 0 6px;
+    }
+
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+
+@container (max-width: 520px) {
+    .st-devtools-onboarding-practice-dock.has-panel-action {
+        display: grid;
+        width: min(330px, calc(100% - 2rem));
+        grid-template-columns: minmax(0, 1fr);
+        align-items: stretch;
+        gap: 0.58rem;
+        padding: 0.72rem;
+    }
+
+    .st-devtools-onboarding-practice-dock.has-panel-action
+    .st-devtools-onboarding-practice-actions {
+        width: 100%;
+    }
+
+    .st-devtools-window
+    .st-devtools-onboarding-guide
+    .st-devtools-onboarding-practice-dock.has-panel-action
+    .st-devtools-onboarding-practice-actions
+    > .st-devtools-onboarding-practice-action {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: none !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .st-devtools-onboarding-guide-panel,
+    .st-devtools-onboarding-guide-body,
+    .st-devtools-onboarding-practice-dock,
+    .st-devtools-onboarding-blocker,
+    .st-devtools-window.is-onboarding-practice .st-devtools-page,
+    .st-devtools-window.is-onboarding-practice
+    .st-devtools-disclosure[open]
+    > :not(summary),
+    .st-devtools-onboarding-guide-body
+    > .st-devtools-onboarding-step,
+    .st-devtools-onboarding-practice-copy > *,
+    .st-devtools-onboarding-practice-actions > *,
+    .st-devtools-onboarding-copy-leaving,
+    .st-devtools-onboarding-copy-entering,
+    .st-devtools-window.is-onboarding-practice :is(button, summary) {
+        animation: none !important;
+        transition-duration: 0.01ms !important;
+        transition-delay: 0s !important;
+    }
+
+    .st-devtools-window.is-onboarding-practice
+    :is(button, summary):active {
+        transform: none !important;
+    }
+
+    .st-devtools-window.is-onboarding-practice
+    details::details-content {
+        transition-duration: 0.01ms !important;
+        transition-delay: 0s !important;
+    }
 }
 
 .st-devtools-advanced-guide-card
