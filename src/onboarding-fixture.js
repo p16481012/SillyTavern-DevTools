@@ -31,6 +31,8 @@ const SOURCE_TEXT = {
     outputV3: '출력 규칙\nXML 형식으로 응답하세요. 핵심 내용을 먼저 제시하고 최대 5문장으로 작성하세요.',
     summary: '대화 요약\n이전 요청에서는 결과를 짧게 요약하고 확인할 항목을 함께 제시했습니다.',
     emotion: '표현 지침\n차분하고 명확한 말투를 유지하되 중요한 경고는 눈에 띄게 구분하세요.',
+    exampleCountOne: '예시 수 | 1개\n핵심 예시를 한 개만 제시하세요.',
+    exampleCountTwo: '예시 수 | 2개\n서로 다른 핵심 예시를 두 개 제시하세요.',
     disabledLanguage: '출력 언어 | 일본어\n모든 응답을 일본어로 작성하세요.',
 };
 
@@ -101,6 +103,28 @@ const SOURCE_DEFINITIONS = {
             role: 'system',
         },
     },
+    exampleCountOne: {
+        id: 'tutorial:source:example-count-one',
+        type: 'utility',
+        label: '예시 수 | 1개',
+        metadata: {
+            sourceKind: 'configuredPrompt',
+            identifier: 'tutorial:example-count-one',
+            promptOrder: 5,
+            role: 'system',
+        },
+    },
+    exampleCountTwo: {
+        id: 'tutorial:source:example-count-two',
+        type: 'utility',
+        label: '예시 수 | 2개',
+        metadata: {
+            sourceKind: 'configuredPrompt',
+            identifier: 'tutorial:example-count-two',
+            promptOrder: 5,
+            role: 'system',
+        },
+    },
     disabledLanguage: {
         id: 'tutorial:source:disabled-language',
         type: 'utility',
@@ -108,20 +132,49 @@ const SOURCE_DEFINITIONS = {
         metadata: {
             sourceKind: 'configuredPrompt',
             identifier: 'tutorial:disabled-language',
-            promptOrder: 5,
+            promptOrder: 6,
             role: 'system',
         },
     },
 };
+
+export const TUTORIAL_COMPARISON_POLICY_SETTINGS = deepFreeze({
+    version: 2,
+    profiles: [{
+        id: 'tutorial-global',
+        label: '연습용 비교 정책',
+        enabled: true,
+        priority: 0,
+        scope: { kind: 'global', key: null },
+        groupDefinitions: [{
+            id: 'tutorial-alternative-group',
+            label: '대안 그룹',
+            mode: 'alternative',
+            categories: ['*'],
+        }],
+        matchers: [{
+            id: 'tutorial-group-option-name',
+            enabled: true,
+            groupDefinitionId: 'tutorial-alternative-group',
+            kind: 'template',
+            pattern: '{group} | {option}',
+            fixedGroup: null,
+            fixedOption: null,
+            target: 'configured',
+        }],
+        manualAssignments: [],
+    }],
+});
 
 const SNAPSHOT_SPECS = [
     {
         totalTokens: 920,
         sources: [
             ['main', SOURCE_TEXT.main, 500],
-            ['output', SOURCE_TEXT.outputV1, 100],
+            ['output', SOURCE_TEXT.outputV1, 60],
             ['character', SOURCE_TEXT.character, 220],
             ['persona', SOURCE_TEXT.persona, 100],
+            ['exampleCountOne', SOURCE_TEXT.exampleCountOne, 40],
         ],
     },
     {
@@ -131,7 +184,8 @@ const SNAPSHOT_SPECS = [
             ['output', SOURCE_TEXT.outputV2, 180],
             ['character', SOURCE_TEXT.character, 220],
             ['persona', SOURCE_TEXT.persona, 100],
-            ['summary', SOURCE_TEXT.summary, 80],
+            ['summary', SOURCE_TEXT.summary, 40],
+            ['exampleCountOne', SOURCE_TEXT.exampleCountOne, 40],
         ],
     },
     {
@@ -141,7 +195,8 @@ const SNAPSHOT_SPECS = [
             ['output', SOURCE_TEXT.outputV3, 220],
             ['character', SOURCE_TEXT.character, 220],
             ['persona', SOURCE_TEXT.persona, 100],
-            ['emotion', SOURCE_TEXT.emotion, 208],
+            ['emotion', SOURCE_TEXT.emotion, 168],
+            ['exampleCountTwo', SOURCE_TEXT.exampleCountTwo, 40],
         ],
     },
 ];
@@ -238,7 +293,7 @@ function buildSnapshot(spec, index) {
 
     return {
         schemaVersion: FIXTURE_SCHEMA_VERSION,
-        extensionVersion: '0.16.2',
+        extensionVersion: '0.16.3',
         id: `tutorial:snapshot:${snapshotNumber}`,
         tutorialLabel: `연습 요청 ${snapshotNumber}`,
         timestamp,
@@ -332,7 +387,7 @@ function buildSnapshot(spec, index) {
     };
 }
 
-export const ONBOARDING_FIXTURE_VERSION = 1;
+export const ONBOARDING_FIXTURE_VERSION = 2;
 export const ONBOARDING_FIXTURE_SNAPSHOTS = deepFreeze(
     SNAPSHOT_SPECS.map(buildSnapshot),
 );

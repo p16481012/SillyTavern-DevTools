@@ -251,6 +251,16 @@ export const ONBOARDING_STEPS = Object.freeze([
     ),
     defineStep(
         'diff',
+        'diff-replaced',
+        '.st-devtools-source-change.status-replaced > summary',
+        defineInteraction(
+            'toggle',
+            '.st-devtools-source-change.status-replaced',
+            { state: 'open' },
+        ),
+    ),
+    defineStep(
+        'diff',
         'diff-full',
         '.st-devtools-full-diff > summary',
         defineInteraction('toggle', '.st-devtools-full-diff', { state: 'open' }),

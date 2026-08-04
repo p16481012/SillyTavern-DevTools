@@ -1324,7 +1324,16 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 0.5rem;
+    gap: 0.65rem;
+    width: min(36rem, 100%);
+    margin-top: 0.25rem;
+    padding-block: 0.25rem;
+}
+
+.st-devtools-overlay .st-devtools-window
+.st-devtools-empty-actions > .menu_button {
+    min-height: 44px !important;
+    padding: 0.65rem 0.9rem !important;
 }
 
 .st-devtools-empty-diagnostics {
@@ -1337,14 +1346,15 @@
 
 .st-devtools-empty-diagnostics > summary {
     min-height: 44px;
-    padding: 0.65rem 0.75rem;
+    padding: 0.72rem 0.8rem;
     cursor: pointer;
     font-weight: 700;
 }
 
 .st-devtools-empty-diagnostics > p {
     margin: 0;
-    padding: 0 0.75rem 0.75rem;
+    padding: 0.72rem 0.8rem 0.85rem;
+    border-top: 1px solid var(--st-devtools-border);
     line-height: 1.5;
 }
 
@@ -1529,10 +1539,18 @@
 }
 
 .st-devtools-empty {
+    display: grid;
+    justify-items: center;
+    gap: 0.75rem;
     margin: auto;
+    width: min(100%, 36rem);
     max-width: 34rem;
     padding: 1.5rem;
     text-align: center;
+}
+
+.st-devtools-empty > :is(h3, p) {
+    margin: 0;
 }
 
 .st-devtools-empty > p {
@@ -6329,6 +6347,15 @@
     border-bottom: 1px solid var(--st-devtools-border);
 }
 
+.st-devtools-overlay .st-devtools-window
+.st-devtools-help-full-start {
+    width: 100% !important;
+    min-height: 46px !important;
+    justify-self: start;
+    margin: 0.45rem 0 0.15rem !important;
+    padding: 0.7rem 1rem !important;
+}
+
 .st-devtools-help-index-header > :is(h3, p) {
     min-width: 0;
     margin: 0;
@@ -6721,26 +6748,53 @@
     font-size: 0.86rem;
 }
 
-.st-devtools-help-list {
+.st-devtools-help-doc-results {
+    display: grid;
     min-width: 0;
+    gap: 1.35rem;
+    margin-top: 0.85rem;
+}
+
+.st-devtools-help-doc-category {
+    display: grid;
+    min-width: 0;
+    gap: 0.65rem;
+    padding-top: 0;
+}
+
+.st-devtools-help-doc-category + .st-devtools-help-doc-category {
+    padding-top: 1.25rem;
     border-top: 1px solid var(--st-devtools-border);
 }
 
-.st-devtools-window .st-devtools-help-list-row {
+.st-devtools-help-doc-category > h4 {
+    margin: 0;
+    color: var(--st-devtools-text);
+    font-size: 0.98rem;
+    line-height: 1.45;
+}
+
+.st-devtools-help-list {
+    display: grid;
+    min-width: 0;
+    gap: 0.55rem;
+}
+
+.st-devtools-overlay .st-devtools-window
+button.st-devtools-help-list-row {
     box-sizing: border-box !important;
     display: grid !important;
     width: 100% !important;
     min-width: 0 !important;
-    min-height: 64px !important;
+    min-height: 72px !important;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center !important;
     gap: 0.75rem;
     margin: 0 !important;
-    padding: 0.75rem 0.25rem !important;
-    border: 0 !important;
-    border-bottom: 1px solid var(--st-devtools-border) !important;
-    border-radius: 0 !important;
-    background: transparent !important;
+    padding: 0.85rem 0.8rem !important;
+    border: 1px solid var(--st-devtools-border) !important;
+    border-radius: var(--st-devtools-radius-md) !important;
+    background: var(--st-devtools-surface) !important;
     box-shadow: none !important;
     color: var(--st-devtools-text) !important;
     text-align: left !important;
@@ -6835,12 +6889,12 @@
 
 .st-devtools-help-topic-section {
     min-width: 0;
-    padding-top: 1rem;
+    padding-top: 1.15rem;
     border-top: 1px solid var(--st-devtools-border);
 }
 
 .st-devtools-help-topic-section h4 {
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.55rem;
     color: var(--st-devtools-text);
     font-size: 0.96rem;
     line-height: 1.45;
@@ -8975,13 +9029,14 @@ i {
 .st-devtools-help-visual {
     display: grid;
     min-width: 0;
-    gap: 0.85rem;
+    gap: 1rem;
     margin: 0;
-    padding: 0.9rem;
+    padding: 1rem;
     border: 1px solid var(--st-devtools-border);
     border-radius: var(--st-devtools-radius-lg);
-    background: var(--st-devtools-surface-muted);
+    background: var(--st-devtools-surface);
     color: var(--st-devtools-text);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
 }
 
 .st-devtools-help-visual > figcaption {
@@ -9002,107 +9057,222 @@ i {
     line-height: 1.55;
 }
 
+.st-devtools-help-visual-preview {
+    display: grid;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-lg);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-help-visual-preview-header {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--st-devtools-border);
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-help-visual-preview-brand {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--st-devtools-text);
+    font-size: 0.76rem;
+    line-height: 1.4;
+}
+
+.st-devtools-help-visual-preview-brand > i {
+    color: var(--st-devtools-primary) !important;
+    font-size: 0.72rem;
+}
+
+.st-devtools-help-visual-preview-badge,
+.st-devtools-help-visual-lane-header > span,
+.st-devtools-help-visual-status {
+    display: inline-flex;
+    width: fit-content;
+    flex: none;
+    align-items: center;
+    border-radius: 999px;
+    font-weight: 760;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+
+.st-devtools-help-visual-preview-badge {
+    padding: 0.22rem 0.45rem;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary-strong);
+    font-size: 0.66rem;
+}
+
 .st-devtools-help-visual-lanes {
     display: grid;
     min-width: 0;
-    gap: 0.65rem;
+    gap: 0.75rem;
+    padding: 0.75rem;
 }
 
 .st-devtools-help-visual-lane {
+    display: grid;
     min-width: 0;
+    gap: 0.6rem;
     padding: 0.7rem;
     border: 1px solid var(--st-devtools-border);
     border-radius: var(--st-devtools-radius-md);
     background: var(--st-devtools-surface);
 }
 
-.st-devtools-help-visual-lane > h4 {
-    margin: 0 0 0.6rem;
+.st-devtools-help-visual-lane-header {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.st-devtools-help-visual-lane-header > h4 {
+    min-width: 0;
+    margin: 0;
     color: var(--st-devtools-text);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     font-weight: 800;
     line-height: 1.4;
+    word-break: keep-all;
+}
+
+.st-devtools-help-visual-lane-header > span {
+    padding: 0.18rem 0.42rem;
+    background: var(--st-devtools-surface-muted);
+    color: var(--st-devtools-text-muted);
+    font-size: 0.62rem;
 }
 
 .st-devtools-help-visual-lane > ol {
     display: grid;
     min-width: 0;
-    gap: 0.45rem;
+    gap: 0.5rem;
     margin: 0;
     padding: 0;
     list-style: none;
-    counter-reset: help-visual-step;
 }
 
 .st-devtools-help-visual-lane > ol > li {
-    position: relative;
     display: grid;
     min-width: 0;
-    grid-template-columns: 1.55rem minmax(0, 1fr);
-    gap: 0.1rem 0.5rem;
+    grid-template-columns: 1.7rem minmax(0, 1fr) auto;
+    gap: 0.5rem;
     align-items: center;
-    padding: 0.55rem 0.6rem;
-    border-left: 3px solid var(--st-devtools-border-strong);
+    padding: 0.62rem;
+    border: 1px solid var(--st-devtools-border);
+    border-left: 3px solid var(--st-devtools-border);
     border-radius: var(--st-devtools-radius-sm);
     background: var(--st-devtools-panel-bg);
-    counter-increment: help-visual-step;
-}
-
-.st-devtools-help-visual-lane > ol > li:not(:last-child)::after {
-    position: absolute;
-    bottom: -0.46rem;
-    left: 1.32rem;
-    z-index: 1;
-    color: var(--st-devtools-text-subtle);
-    content: '\2193';
-    font-size: 0.7rem;
-    line-height: 1;
 }
 
 .st-devtools-help-visual-marker {
     display: inline-grid;
-    width: 1.45rem;
-    height: 1.45rem;
-    grid-row: 1 / span 2;
+    width: 1.65rem;
+    height: 1.65rem;
     place-items: center;
-    border-radius: 50%;
+    border-radius: 7px;
     background: var(--st-devtools-primary-soft);
     color: var(--st-devtools-primary-strong);
-    font-size: 0.68rem;
-    font-weight: 850;
+    font-size: 0.64rem;
 }
 
-.st-devtools-help-visual-marker::before {
-    content: counter(help-visual-step);
+.st-devtools-help-visual-copy {
+    display: grid;
+    min-width: 0;
+    gap: 0.12rem;
 }
 
-.st-devtools-help-visual-lane > ol > li > strong {
+.st-devtools-help-visual-copy > strong {
     color: var(--st-devtools-text);
     font-size: 0.8rem;
     line-height: 1.4;
+    word-break: keep-all;
 }
 
-.st-devtools-help-visual-lane > ol > li > small {
-    grid-column: 2;
+.st-devtools-help-visual-copy > small {
     color: var(--st-devtools-text-muted);
     font-size: 0.7rem;
     line-height: 1.45;
+}
+
+.st-devtools-help-visual-status {
+    padding: 0.18rem 0.38rem;
+    background: var(--st-devtools-surface-muted);
+    color: var(--st-devtools-text-muted);
+    font-size: 0.6rem;
 }
 
 .st-devtools-help-visual-lane > ol > li.is-info {
     border-left-color: var(--st-devtools-status-info);
 }
 
+.st-devtools-help-visual-lane > ol > li.is-info
+.st-devtools-help-visual-status {
+    background: color-mix(in srgb, var(--st-devtools-status-info) 15%, var(--st-devtools-surface));
+    color: var(--st-devtools-status-info);
+}
+
 .st-devtools-help-visual-lane > ol > li.is-success {
     border-left-color: var(--st-devtools-status-success);
+}
+
+.st-devtools-help-visual-lane > ol > li.is-success
+.st-devtools-help-visual-status {
+    background: color-mix(in srgb, var(--st-devtools-status-success) 15%, var(--st-devtools-surface));
+    color: var(--st-devtools-status-success);
 }
 
 .st-devtools-help-visual-lane > ol > li.is-warning {
     border-left-color: var(--st-devtools-status-warning);
 }
 
+.st-devtools-help-visual-lane > ol > li.is-warning
+.st-devtools-help-visual-status {
+    background: color-mix(in srgb, var(--st-devtools-status-warning) 15%, var(--st-devtools-surface));
+    color: var(--st-devtools-status-warning);
+}
+
 .st-devtools-help-visual-lane > ol > li.is-danger {
     border-left-color: var(--st-devtools-status-danger);
+}
+
+.st-devtools-help-visual-lane > ol > li.is-danger
+.st-devtools-help-visual-status {
+    background: color-mix(in srgb, var(--st-devtools-status-danger) 15%, var(--st-devtools-surface));
+    color: var(--st-devtools-status-danger);
+}
+
+@media (max-width: 420px) {
+    .st-devtools-help-visual {
+        padding: 0.75rem;
+    }
+
+    .st-devtools-help-visual-lanes {
+        padding: 0.6rem;
+    }
+
+    .st-devtools-help-visual-lane > ol > li {
+        grid-template-columns: 1.7rem minmax(0, 1fr);
+    }
+
+    .st-devtools-help-visual-status {
+        grid-column: 2;
+    }
 }
 
 @media (min-width: 620px) {

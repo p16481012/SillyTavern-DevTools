@@ -1,4 +1,14 @@
-# v0.16.2 기술 구현 현황
+# v0.16.3 기술 구현 현황
+
+## v0.16.3 도움말 간격·제품형 정적 preview·교체 fixture
+
+- 빈 상태 root를 중앙 정렬 grid로 바꾸고 heading·설명·빠른 시작·진단 disclosure·action row 사이에 명시적 gap을 둡니다. action button은 host theme에서도 최소 44px 높이와 0.65rem block padding을 유지합니다.
+- 기본 사용법 전체 시작 CTA는 전용 `.st-devtools-help-full-start` class로 full-width·46px 높이를 보장합니다. 기능 설명서 index는 결과·category 전용 wrapper를 사용해 category 사이 1.35rem, 카드 사이 0.55rem, 카드 높이 72px을 유지합니다.
+- `renderHelpTopicVisual()`은 기존 19개 immutable lane data를 실제 ST DevTools와 분리된 정적 preview grammar로 변환합니다. preview에는 제품형 header, `연습 데이터 · 읽기 전용` badge, lane header, 상태 icon·text badge를 갖춘 card row가 있고 실제 `button`·`input`·`select`나 event handler는 없습니다.
+- preview는 기존 theme token과 `color-mix()`만 사용하고 420px 이하에서 status badge를 다음 행으로 이동합니다. 390px sandbox에서 help body·figure·preview의 `scrollWidth === clientWidth`를 확인했습니다.
+- onboarding fixture v2는 요청 1·2의 `예시 수 | 1개`와 요청 3의 `예시 수 | 2개`를 포함합니다. 각 source identity는 다르지만 튜토리얼 전용 immutable template policy가 `{group} | {option}`을 alternative group으로 주석화합니다.
+- `snapshotWithSavedComparisonPolicies()`는 활성 튜토리얼의 `tutorial:snapshot:*`에만 전용 정책을 사용하고 라이브 snapshot에는 계속 저장된 사용자 정책을 사용합니다. 따라서 기본 diff는 사용자 설정과 무관하게 `added`·`changed`·`removed`·`replaced`를 모두 재현하며 실제 정책을 읽거나 쓰지 않습니다.
+- 기본 비교 section은 교체 disclosure를 직접 펼치는 단계를 추가해 8단계가 되었고 전체 기본 안내는 39단계입니다. 전체 문자열 차이 단계도 유지합니다.
 
 ## v0.16.2 튜토리얼 안정화·설명서 도식·고급 가이드 확장
 
@@ -444,4 +454,4 @@
 
 1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
-3. 온보딩은 실제 초보자 검토 뒤 briefing·practice·debrief 카피와 모바일 sheet 흐름을 보정하되 6개 주제·38단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.
+3. 온보딩은 실제 초보자 검토 뒤 briefing·practice·debrief 카피와 모바일 sheet 흐름을 보정하되 6개 주제·39단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.

@@ -45,7 +45,7 @@ test('onboarding defines six immutable groups and a detailed immutable walkthrou
         explorer: 10,
         rules: 7,
         timeline: 6,
-        diff: 7,
+        diff: 8,
         search: 5,
     };
     const validGroups = new Set(ONBOARDING_GROUPS.map(({ id }) => id));

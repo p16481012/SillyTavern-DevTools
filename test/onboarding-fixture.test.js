@@ -5,8 +5,10 @@ import {
     ONBOARDING_FIXTURE,
     ONBOARDING_FIXTURE_SNAPSHOTS,
     ONBOARDING_INITIAL_SNAPSHOTS,
+    TUTORIAL_COMPARISON_POLICY_SETTINGS,
     createOnboardingSession,
 } from '../src/onboarding-fixture.js';
+import { annotateSourcesWithPolicies } from '../src/comparison-policy.js';
 import { searchSnapshot } from '../src/model.js';
 import { compareSnapshotSources } from '../src/pipeline-analysis.js';
 import { analyzeSnapshot } from '../src/rules.js';
@@ -36,6 +38,7 @@ test('onboarding fixture is deeply frozen, deterministic, and sessions remain mu
     assertDeepFrozen(ONBOARDING_FIXTURE_SNAPSHOTS);
     assertDeepFrozen(ONBOARDING_INITIAL_SNAPSHOTS);
     assertDeepFrozen(ONBOARDING_CAPTURE_SNAPSHOT);
+    assertDeepFrozen(TUTORIAL_COMPARISON_POLICY_SETTINGS);
 
     const serialized = JSON.stringify(ONBOARDING_FIXTURE);
     assert.equal(JSON.stringify(ONBOARDING_FIXTURE), serialized);
@@ -136,10 +139,18 @@ test('latest onboarding snapshot exercises the real static format-conflict rule'
     assert.equal(formatFinding.sourceIds.includes('tutorial:source:output'), true);
 });
 
-test('practice capture produces added, changed, and removed source differences', () => {
+test('practice capture produces added, changed, removed, and replacement differences', () => {
+    const withTutorialPolicy = (snapshot) => ({
+        ...snapshot,
+        sources: annotateSourcesWithPolicies(
+            snapshot.sources,
+            TUTORIAL_COMPARISON_POLICY_SETTINGS,
+            snapshot,
+        ),
+    });
     const differences = compareSnapshotSources(
-        ONBOARDING_INITIAL_SNAPSHOTS[1],
-        ONBOARDING_CAPTURE_SNAPSHOT,
+        withTutorialPolicy(ONBOARDING_INITIAL_SNAPSHOTS[1]),
+        withTutorialPolicy(ONBOARDING_CAPTURE_SNAPSHOT),
     );
     const bySourceId = new Map(differences.map((difference) => [
         difference.source.id,
@@ -149,9 +160,14 @@ test('practice capture produces added, changed, and removed source differences',
     assert.equal(bySourceId.get('tutorial:source:emotion')?.status, 'added');
     assert.equal(bySourceId.get('tutorial:source:output')?.status, 'changed');
     assert.equal(bySourceId.get('tutorial:source:summary')?.status, 'removed');
+    const replacement = bySourceId.get('tutorial:source:example-count-two');
+    assert.equal(replacement?.status, 'replaced');
+    assert.equal(replacement?.replacement?.group, '예시 수');
+    assert.equal(replacement?.replacement?.beforeOption, '1개');
+    assert.equal(replacement?.replacement?.afterOption, '2개');
     assert.deepEqual(
         [...new Set(differences.map(({ status }) => status))].sort(),
-        ['added', 'changed', 'removed'],
+        ['added', 'changed', 'removed', 'replaced'],
     );
 });
 

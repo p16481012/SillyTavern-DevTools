@@ -142,7 +142,10 @@ import {
     saveOnboardingState,
     shouldAutoStartOnboarding,
 } from './onboarding.js';
-import { createOnboardingSession } from './onboarding-fixture.js';
+import {
+    TUTORIAL_COMPARISON_POLICY_SETTINGS,
+    createOnboardingSession,
+} from './onboarding-fixture.js';
 import {
     HELP_CATEGORIES,
     HELP_LABS,
@@ -3887,7 +3890,7 @@ export class DevToolsWindow {
         const view = element('div', { className: 'st-devtools-help-view' });
         const header = element('section', { className: 'st-devtools-help-index-header' });
         const fullStart = element('button', {
-            className: 'menu_button st-devtools-primary-button',
+            className: 'menu_button st-devtools-primary-button st-devtools-help-full-start',
             text: '전체 사용 안내 시작',
             type: 'button',
         });
@@ -4005,7 +4008,9 @@ export class DevToolsWindow {
         search.value = this.helpQuery;
         search.placeholder = t('help.center.searchPlaceholder');
         search.setAttribute('aria-label', t('help.center.searchPlaceholder'));
-        const results = element('div');
+        const results = element('div', {
+            className: 'st-devtools-help-doc-results',
+        });
         const renderResults = () => {
             this.helpQuery = search.value;
             const topics = helpTopicsFor({ query: this.helpQuery });
@@ -4017,7 +4022,9 @@ export class DevToolsWindow {
             for (const category of HELP_CATEGORIES) {
                 const categoryTopics = topics.filter(({ category: id }) => id === category.id);
                 if (!categoryTopics.length) continue;
-                const group = element('section', { className: 'st-devtools-help-section' });
+                const group = element('section', {
+                    className: 'st-devtools-help-section st-devtools-help-doc-category',
+                });
                 group.append(
                     element('h4', { text: category.label }),
                     this.renderHelpTopicList(categoryTopics),
@@ -4094,36 +4101,100 @@ export class DevToolsWindow {
             element('strong', { text: '한눈에 보기' }),
             element('span', { text: visual.caption }),
         );
+        const preview = element('div', {
+            className: 'st-devtools-help-visual-preview',
+        });
+        preview.setAttribute('aria-hidden', 'true');
+        const previewHeader = element('div', {
+            className: 'st-devtools-help-visual-preview-header',
+        });
+        const previewBrand = element('span', {
+            className: 'st-devtools-help-visual-preview-brand',
+        });
+        previewBrand.append(
+            element('i', { className: 'fa-solid fa-code' }),
+            element('strong', { text: 'ST DevTools 화면 예시' }),
+        );
+        const previewBadge = element('span', {
+            className: 'st-devtools-help-visual-preview-badge',
+            text: '연습 데이터 · 읽기 전용',
+        });
+        previewHeader.append(previewBrand, previewBadge);
         const lanes = element('div', {
             className: 'st-devtools-help-visual-lanes',
         });
+        const stateLabels = {
+            neutral: '항목',
+            info: '정보',
+            success: '정상',
+            warning: '주의',
+            danger: '변경',
+        };
+        const stateIcons = {
+            neutral: 'fa-layer-group',
+            info: 'fa-circle-info',
+            success: 'fa-check',
+            warning: 'fa-triangle-exclamation',
+            danger: 'fa-minus',
+        };
+        const relationLabels = {
+            branch: '분기',
+            contrast: '비교',
+            mapping: '연결',
+            parallel: '동시 확인',
+            replacement: '옵션 교체',
+            trend: '변화',
+            sequence: '흐름',
+        };
         for (const lane of visual.lanes) {
             const laneNode = element('section', {
                 className: `st-devtools-help-visual-lane relation-${lane.relation}`,
             });
-            laneNode.appendChild(element('h4', { text: lane.label }));
+            const laneHeader = element('header', {
+                className: 'st-devtools-help-visual-lane-header',
+            });
+            laneHeader.append(
+                element('h4', { text: lane.label }),
+                element('span', {
+                    text: relationLabels[lane.relation] ?? '화면',
+                }),
+            );
+            laneNode.appendChild(laneHeader);
             const items = element('ol');
             for (const item of lane.items) {
+                const state = item.state ?? 'neutral';
                 const itemNode = element('li', {
-                    className: `is-${item.state ?? 'neutral'}`,
+                    className: `is-${state}`,
                 });
                 const marker = element('span', {
                     className: 'st-devtools-help-visual-marker',
                 });
                 marker.setAttribute('aria-hidden', 'true');
+                marker.appendChild(element('i', {
+                    className: `fa-solid ${stateIcons[state] ?? stateIcons.neutral}`,
+                }));
+                const copy = element('span', {
+                    className: 'st-devtools-help-visual-copy',
+                });
+                copy.appendChild(element('strong', { text: item.label }));
+                if (item.detail) {
+                    copy.appendChild(element('small', { text: item.detail }));
+                }
                 itemNode.append(
                     marker,
-                    element('strong', { text: item.label }),
+                    copy,
+                    element('span', {
+                        className: 'st-devtools-help-visual-status',
+                        text: stateLabels[state] ?? stateLabels.neutral,
+                    }),
                 );
-                if (item.detail) {
-                    itemNode.appendChild(element('small', { text: item.detail }));
-                }
                 items.appendChild(itemNode);
             }
             laneNode.appendChild(items);
             lanes.appendChild(laneNode);
         }
-        figure.append(caption, lanes);
+        preview.append(previewHeader, lanes);
+        figure.append(caption, preview);
         return figure;
     }
 
@@ -9571,11 +9642,17 @@ export class DevToolsWindow {
 
     snapshotWithSavedComparisonPolicies(snapshot) {
         if (!snapshot) return snapshot;
+        const comparisonSettings = (
+            this.tutorialIsActive()
+            && String(snapshot.id ?? '').startsWith('tutorial:snapshot:')
+        )
+            ? TUTORIAL_COMPARISON_POLICY_SETTINGS
+            : this.savedComparisonPolicySettings;
         return {
             ...snapshot,
             sources: annotateSourcesWithPolicies(
                 snapshot.sources ?? [],
-                this.savedComparisonPolicySettings,
+                comparisonSettings,
                 snapshot,
             ),
         };

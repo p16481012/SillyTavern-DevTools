@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.2의 세 갈래 도움말 정보 구조, 19개 기능 설명서 도식과 다섯 고급 coachmark, 직접 체험형 기본 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.3의 세 갈래 도움말 정보 구조, 19개 기능 설명서의 제품형 정적 preview와 다섯 고급 coachmark, 직접 체험형 기본 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -12,9 +12,9 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### 세 갈래 도움말 경계
 
-`src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다. 홈 카드 전체가 button이므로 별도 파란색 `… 보기` action copy는 만들지 않고 제목·설명·방향 표시만 사용합니다.
+`src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다. 홈 카드 전체가 button이므로 별도 파란색 `… 보기` action copy는 만들지 않고 제목·설명·방향 표시만 사용합니다.
 
-`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 시각 자료 registry입니다. 각 자료는 `flow`·`comparison`·`lanes` 유형과 접근 가능한 설명·caption, `sequence`·`contrast`·`branch`·`mapping`·`trend`·`replacement`·`parallel` 관계를 가진 lane·item으로만 구성됩니다. 외부 이미지 URL과 고정 색상값을 포함하지 않으며 renderer가 밝음·어두움 panel token, 의미 상태 label과 모바일 단일 열 재배치를 적용합니다. 따라서 캡처 상태, source→payload, 비교 정책 전후, AI 전송→검증→표시/폐기 같은 구조를 색상이나 원격 asset에 의존하지 않고 설명합니다.
+`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 시각 자료 registry입니다. 각 자료는 `flow`·`comparison`·`lanes` 유형과 접근 가능한 설명·caption, `sequence`·`contrast`·`branch`·`mapping`·`trend`·`replacement`·`parallel` 관계를 가진 lane·item으로만 구성됩니다. renderer는 이를 실제 제품 class와 분리된 정적 header·lane panel·card row·icon·text badge로 투영하고 `연습 데이터 · 읽기 전용`을 표시합니다. 외부 이미지 URL·고정 색상값·실제 form control·event handler 없이 밝음·어두움 panel token과 모바일 단일 열 재배치만 사용합니다.
 
 짧은 `?` tooltip은 기능을 다시 떠올릴 한두 문장과 텍스트형 `자세히 보기`만 포함합니다. `자세히 보기`는 별도의 창이나 중간 목록을 거치지 않고 같은 도움말 dialog의 해당 topic ID로 deep link합니다. 도움말을 닫으면 deep link를 연 실제 control로 focus를 복원합니다.
 
@@ -26,11 +26,11 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.16.2의 온보딩은 `src/onboarding.js`에 전체 38단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계입니다. 전체 안내도 같은 38단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+v0.16.3의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
 
 전체 안내만 첫 실행 상태의 `completed`·`skipped`를 기록합니다. 기능별 부분 투어와 고급 가이드는 독립 route로 실행하며 완료·중단·건너뛰기가 전역 온보딩 상태를 쓰거나 덮어쓰지 않습니다. 각 부분 투어는 필요한 snapshot 수·선택 항목·캡처 상태가 준비된 checkpoint에서 session을 만들기 때문에 중간 기능부터 시작해도 이전 장의 조작을 요구하지 않습니다.
 
-`src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개를 정의합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다. 따라서 실제 제품 renderer·control과 로컬 정적 rules/diff/search 경로를 그대로 사용하면서 live `timeline`·`selectedId`·`activeTab`은 바꾸지 않습니다.
+`src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개와 전용 immutable comparison policy를 정의합니다. 요청 2의 `예시 수 | 1개`와 요청 3의 `예시 수 | 2개`는 서로 다른 identity이지만 `{group} | {option}` 정책으로 같은 대안 그룹에 주석화되어 1:1 교체가 됩니다. 이 정책은 `tutorial:snapshot:*`에만 사용하고 실제 사용자 저장 정책과 분리합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다.
 
 실습 단계는 실제 탭·select·button·details·검색 입력을 click/change/input/toggle하게 하지만 snapshot store의 추가·삭제·보관 API, provider adapter·Semantic Inspector, 클립보드와 export를 호출하지 않습니다. 캡처 연습의 `대기 → 감지 → 저장 중 → 저장됨`도 session 내부 상태 전환이며 실제 요청을 저장하지 않습니다. 상태는 색상 점만 쓰지 않고 짧은 copy와 pill을 함께 갱신합니다. AI 의미 검사나 공식 Provider 평가가 실행 중이면 시작하지 않고 실습 중 새 AI 실행도 거부합니다.
 

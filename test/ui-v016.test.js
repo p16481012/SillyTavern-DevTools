@@ -159,7 +159,42 @@ test('detailed help articles render the registered product-token visual before p
     assert.match(visual, /className: `st-devtools-help-visual is-\$\{visual\.type\}`/u);
     assert.match(visual, /figure\.setAttribute\('role', 'img'\)/u);
     assert.match(visual, /figure\.setAttribute\('aria-label', visual\.ariaLabel\)/u);
+    assert.match(visual, /st-devtools-help-visual-preview/u);
+    assert.match(visual, /연습 데이터 · 읽기 전용/u);
+    assert.match(visual, /preview\.setAttribute\('aria-hidden', 'true'\)/u);
+    assert.doesNotMatch(visual, /element\('(button|input|select)'/u);
     assert.match(visual, /for \(const lane of visual\.lanes\)/u);
+});
+
+test('empty state and help indexes keep explicit mobile-safe vertical rhythm', async () => {
+    const [ui, style] = await Promise.all([
+        readFile(UI_URL, 'utf8'),
+        readFile(STYLE_URL, 'utf8'),
+    ]);
+
+    assert.match(ui, /st-devtools-help-full-start/u);
+    assert.match(ui, /st-devtools-help-doc-results/u);
+    assert.match(ui, /st-devtools-help-doc-category/u);
+    assert.match(
+        style,
+        /\.st-devtools-empty \{[\s\S]*?display: grid;[\s\S]*?gap: 0\.75rem;/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-empty-actions > \.menu_button \{[\s\S]*?min-height: 44px !important;[\s\S]*?padding: 0\.65rem 0\.9rem !important;/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-help-full-start \{[\s\S]*?width: 100% !important;[\s\S]*?min-height: 46px !important;/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-help-doc-results \{[\s\S]*?gap: 1\.35rem;/u,
+    );
+    assert.match(
+        style,
+        /button\.st-devtools-help-list-row \{[\s\S]*?min-height: 72px !important;/u,
+    );
 });
 
 test('basic sections cover the complete walkthrough once in the requested order', () => {
@@ -169,7 +204,7 @@ test('basic sections cover the complete walkthrough once in the requested order'
     );
     assert.deepEqual(
         BASIC_ONBOARDING_SECTIONS.map(({ steps }) => steps.length),
-        [13, 6, 7, 7, 5],
+        [13, 6, 8, 7, 5],
     );
     const stepIds = BASIC_ONBOARDING_SECTIONS.flatMap(({ steps }) => (
         steps.map(({ id }) => id)
@@ -368,6 +403,8 @@ test('source comparison annotates saved policies and renders option replacement'
     );
 
     assert.match(annotate, /annotateSourcesWithPolicies/u);
+    assert.match(annotate, /TUTORIAL_COMPARISON_POLICY_SETTINGS/u);
+    assert.match(annotate, /startsWith\('tutorial:snapshot:'\)/u);
     assert.match(annotate, /this\.savedComparisonPolicySettings/u);
     assert.match(diff, /source-lore-diff:v2/u);
     assert.match(diff, /comparisonPolicyDigest/u);
