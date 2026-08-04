@@ -7342,3 +7342,231 @@
         animation: none;
     }
 }
+
+/* v0.15.6 — clearer coaching, visible actions, and gentle success feedback. */
+.st-devtools-onboarding-spotlight {
+    transition:
+        left 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        top 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        height 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        box-shadow 180ms ease,
+        border-color 180ms ease;
+}
+
+.st-devtools-onboarding-blocker:not([hidden]) {
+    animation: st-devtools-coachmark-scrim-in 180ms ease-out both;
+}
+
+.st-devtools-onboarding-step {
+    animation: st-devtools-coachmark-copy-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.st-devtools-onboarding-step-copy + .st-devtools-onboarding-step-copy {
+    margin-top: 0.08rem;
+    color: rgb(255 255 255 / 72%);
+    font-size: 0.82rem;
+}
+
+.st-devtools-onboarding-result-context {
+    color: rgb(187 247 208 / 88%);
+    font-size: 0.72rem;
+    font-weight: 760;
+    line-height: 1.35;
+    text-align: center;
+    text-wrap: balance;
+    word-break: keep-all;
+}
+
+.st-devtools-onboarding-step.is-debrief > h2 {
+    color: #dcfce7;
+}
+
+.st-devtools-onboarding-step.is-debrief
+.st-devtools-onboarding-result-mark {
+    animation: st-devtools-coachmark-success-pop 360ms cubic-bezier(0.2, 0.9, 0.2, 1.25) both;
+}
+
+.st-devtools-onboarding-guide[data-stage='debrief']
+.st-devtools-onboarding-spotlight {
+    border-color: #fff;
+    box-shadow:
+        0 0 0 4px #22c55e,
+        0 0 26px rgb(34 197 94 / 58%),
+        0 0 0 9999px rgb(3 7 18 / 80%);
+    animation: st-devtools-coachmark-success-halo 420ms ease-out both;
+}
+
+.st-devtools-onboarding-guide[data-stage='debrief']
+.st-devtools-onboarding-guide-body {
+    border-color: rgb(134 239 172 / 72%);
+    background: rgb(4 20 16 / 72%);
+}
+
+.st-devtools-onboarding-guide[data-stage='debrief']
+.st-devtools-onboarding-guide-body::before {
+    border-left-color: #4ade80;
+}
+
+.st-devtools-onboarding-guide[data-stage='debrief']
+.st-devtools-onboarding-guide-body::after {
+    color: #4ade80;
+    text-shadow: 0 0 8px rgb(74 222 128 / 55%);
+}
+
+.st-devtools-onboarding-practice-dock {
+    animation: st-devtools-coachmark-practice-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.st-devtools-window
+.st-devtools-onboarding-guide
+.st-devtools-onboarding-practice-dock
+.st-devtools-onboarding-practice-actions
+> .st-devtools-onboarding-practice-action {
+    display: inline-flex !important;
+    width: auto !important;
+    min-width: 132px !important;
+    max-width: 190px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    max-height: 44px !important;
+    flex: 0 0 auto !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.45rem !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+    padding: 0 0.9rem !important;
+    border: 2px solid #facc15 !important;
+    border-radius: 999px !important;
+    background: #facc15 !important;
+    color: #171717 !important;
+    font-size: 0.8rem !important;
+    font-weight: 800 !important;
+    line-height: 1.1 !important;
+    white-space: nowrap !important;
+    box-shadow: 0 5px 16px rgb(0 0 0 / 20%) !important;
+    writing-mode: horizontal-tb !important;
+}
+
+.st-devtools-window
+.st-devtools-onboarding-practice-action[aria-busy='true']
+i {
+    animation: st-devtools-coachmark-spin 760ms linear infinite;
+}
+
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-target.is-locating,
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-target {
+    animation: st-devtools-reference-target-pulse 900ms ease-out 2;
+}
+
+@keyframes st-devtools-coachmark-copy-in {
+    from {
+        opacity: 0;
+        translate: 0 6px;
+    }
+
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+
+@keyframes st-devtools-coachmark-scrim-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes st-devtools-coachmark-practice-in {
+    from {
+        opacity: 0;
+        translate: 0 8px;
+    }
+
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+
+@keyframes st-devtools-coachmark-success-pop {
+    from {
+        opacity: 0;
+        scale: 0.72;
+    }
+
+    to {
+        opacity: 1;
+        scale: 1;
+    }
+}
+
+@keyframes st-devtools-coachmark-success-halo {
+    0% {
+        filter: brightness(1.45);
+    }
+
+    100% {
+        filter: brightness(1);
+    }
+}
+
+@keyframes st-devtools-coachmark-spin {
+    to {
+        rotate: 1turn;
+    }
+}
+
+@container (max-width: 360px) {
+    .st-devtools-onboarding-guide-body,
+    .st-devtools-onboarding-practice-dock {
+        width: calc(100% - 1.25rem);
+        max-width: calc(100% - 1.25rem);
+    }
+
+    .st-devtools-onboarding-practice-dock {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.58rem;
+        padding: 0.72rem;
+    }
+
+    .st-devtools-onboarding-practice-actions {
+        width: 100%;
+    }
+
+    .st-devtools-window
+    .st-devtools-onboarding-guide
+    .st-devtools-onboarding-practice-dock
+    .st-devtools-onboarding-practice-actions
+    > .st-devtools-onboarding-practice-action {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: none !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .st-devtools-onboarding-step,
+    .st-devtools-onboarding-blocker,
+    .st-devtools-onboarding-practice-dock,
+    .st-devtools-window[data-onboarding-stage='practice']
+    .st-devtools-onboarding-target,
+    .st-devtools-onboarding-guide[data-stage='debrief']
+    .st-devtools-onboarding-spotlight,
+    .st-devtools-onboarding-step.is-debrief
+    .st-devtools-onboarding-result-mark,
+    .st-devtools-window
+    .st-devtools-onboarding-practice-action[aria-busy='true']
+    i {
+        animation: none !important;
+        transition-duration: 0.01ms !important;
+    }
+}

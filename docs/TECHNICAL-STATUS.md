@@ -1,4 +1,14 @@
-# v0.15.5 기술 구현 현황
+# v0.15.6 기술 구현 현황
+
+## v0.15.6 코치마크 설명·상태·성공 피드백
+
+- 첫 초대는 구체 사례의 JSON·XML 용어보다 사용자가 해결할 ‘예상과 다른 답변의 원인 찾기’를 먼저 설명합니다. JSON·XML은 실제 원문을 읽는 단계에서만 사례로 소개합니다.
+- briefing renderer는 기존 `what` 첫 문장과 `when` 또는 읽기 단계의 `task` 첫 문장을 분리해 기능 의미와 사용·확인 맥락을 함께 보여 줍니다.
+- panel형 캡처 action은 이름이 보이는 44px 가로 버튼이며 실행 중에는 `aria-busy`, 비활성 상태, spinner와 `캡처 진행 중…`을 표시합니다. 320px에서는 지시문 아래 전폭 버튼으로 배치합니다.
+- `synchronizeOnboardingStepCompletion()`은 practice 진입 때 value·checked·open 조건이 이미 충족됐는지 일반적으로 검사합니다. panel형 action은 실제 실행 전 자동 완료하지 않습니다.
+- toggle 완료 뒤 `onboardingVisualTarget()`은 열린 disclosure의 첫 non-summary body를 결과 target으로 선택합니다. spotlight geometry는 body와 콘텐츠 viewport의 교차 영역을 사용해 긴 본문이 전체 화면을 덮지 않습니다.
+- interactive debrief는 단계 제목과 `잘했어요!`·관찰 결과를 분리하고 녹색 result spotlight를 사용합니다. 마지막 읽기 단계도 사용자가 익힌 조사 흐름과 연습 데이터 종료를 명시합니다.
+- copy·practice dock·spotlight geometry·success mark는 180~420ms one-shot animation만 사용하며 practice target pulse는 2회 뒤 정적 ring으로 남습니다. `prefers-reduced-motion`에서는 모든 새 animation을 제거합니다.
 
 ## v0.15.5 레퍼런스형 코치마크
 

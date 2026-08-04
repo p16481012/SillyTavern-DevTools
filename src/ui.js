@@ -4153,20 +4153,27 @@ export class DevToolsWindow {
     synchronizeOnboardingStepCompletion(step) {
         if (
             this.onboardingStepStage !== 'practice'
-            || step?.id !== 'search-query-korean'
+            || !step?.interaction
             || this.onboardingStepComplete
         ) return;
+        const hasStateContract = step.interaction.value !== undefined
+            || step.interaction.state !== undefined;
+        if (!hasStateContract || step.interaction.event === 'panel') return;
         queueMicrotask(() => {
-            if (this.currentOnboardingStep()?.id !== step.id) return;
-            const input = this.window?.querySelector(step.interaction.selector);
-            const hasResult = Boolean(
-                this.window?.querySelector('.st-devtools-search-result'),
-            );
             if (
-                hasResult
-                && String(input?.value ?? '') === String(step.interaction.value)
-            ) {
-                this.recordOnboardingAction(step.interaction.event, input);
+                this.currentOnboardingStep()?.id !== step.id
+                || this.onboardingStepStage !== 'practice'
+            ) return;
+            const candidate = this.window?.querySelector(step.interaction.selector);
+            if (
+                step.id === 'search-query-korean'
+                && !this.window?.querySelector('.st-devtools-search-result')
+            ) return;
+            if (DevToolsWindow.prototype.onboardingInteractionSatisfied.call(
+                this,
+                step.interaction,
+            )) {
+                this.recordOnboardingAction(step.interaction.event, candidate);
             }
         });
     }
@@ -4199,23 +4206,42 @@ export class DevToolsWindow {
                 text: '\u2713',
             });
             mark.setAttribute('aria-hidden', 'true');
-            content.appendChild(mark);
+            content.append(
+                mark,
+                element('span', {
+                    className: 'st-devtools-onboarding-result-context',
+                    text: t(`onboarding.step.${step.id}.title`),
+                }),
+            );
         }
         const title = element('h2', {
-            text: t(`onboarding.step.${step.id}.title`),
+            text: stage === 'debrief'
+                ? t('onboarding.successTitle')
+                : t(`onboarding.step.${step.id}.title`),
         });
         title.id = 'st-devtools-onboarding-step-title';
-        const description = proseElement(
-            'p',
-            stage === 'debrief'
-                ? onboardingSentence(t(`onboarding.step.${step.id}.task`), 'last')
-                : step.interaction
+        const descriptions = stage === 'debrief'
+            ? [onboardingSentence(t(`onboarding.step.${step.id}.task`), 'last')]
+            : [
+                onboardingSentence(t(`onboarding.step.${step.id}.what`)),
+                step.interaction
                     ? t(`onboarding.step.${step.id}.when`)
                     : onboardingSentence(t(`onboarding.step.${step.id}.task`)),
-            { className: 'st-devtools-onboarding-step-copy' },
-        );
-        description.id = 'st-devtools-onboarding-description';
-        content.append(title, description);
+            ];
+        content.appendChild(title);
+        descriptions
+            .filter((text, index, items) => text && items.indexOf(text) === index)
+            .forEach((text, index) => {
+                const description = proseElement('p', text, {
+                    className: `st-devtools-onboarding-step-copy ${
+                        index === 0 ? 'is-core' : 'is-supporting'
+                    }`,
+                });
+                if (index === 0) {
+                    description.id = 'st-devtools-onboarding-description';
+                }
+                content.appendChild(description);
+            });
         this.onboardingTaskStatus = null;
         return content;
     }
@@ -4224,17 +4250,20 @@ export class DevToolsWindow {
         this.onboardingPracticeActions.replaceChildren();
         if (!this.onboardingStepComplete && step.interaction?.event === 'panel') {
             const action = element('button', {
-                className: 'menu_button st-devtools-primary-button st-devtools-onboarding-practice-action st-devtools-onboarding-round-button',
+                className: 'menu_button st-devtools-onboarding-practice-action',
                 type: 'button',
             });
             action.setAttribute('aria-label', t(`onboarding.step.${step.id}.action`));
             action.title = t(`onboarding.step.${step.id}.action`);
-            const icon = element('span', {
-                className: 'st-devtools-button-glyph',
-                text: '\u25b6',
+            const icon = element('i', {
+                className: 'fa-solid fa-play',
             });
             icon.setAttribute('aria-hidden', 'true');
-            action.appendChild(icon);
+            const label = element('span', {
+                className: 'st-devtools-onboarding-practice-action-label',
+                text: t(`onboarding.step.${step.id}.action`),
+            });
+            action.append(icon, label);
             action.dataset.onboardingAction = step.id === 'capture-practice'
                 ? 'run-capture-demo'
                 : 'finish';
@@ -4459,6 +4488,19 @@ export class DevToolsWindow {
             return false;
         }
         session.capturePhase = 'running';
+        const action = this.onboardingPracticeDock?.querySelector(
+            '[data-onboarding-action="run-capture-demo"]',
+        );
+        if (action) {
+            action.disabled = true;
+            action.setAttribute('aria-busy', 'true');
+            const label = action.querySelector(
+                '.st-devtools-onboarding-practice-action-label',
+            );
+            if (label) label.textContent = t('onboarding.step.capture-practice.running');
+            const icon = action.querySelector('i');
+            if (icon) icon.className = 'fa-solid fa-spinner';
+        }
         const delay = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
             ? 120
             : 650;
@@ -4510,19 +4552,38 @@ export class DevToolsWindow {
         return this.window?.querySelector(interaction.selector) ?? null;
     }
 
-    recordOnboardingAction(eventType, node = null) {
-        if (this.onboardingApplyingSkippedState) return false;
-        if (this.onboardingStepStage !== 'practice') return false;
-        const step = this.currentOnboardingStep();
-        const interaction = step?.interaction;
-        if (!interaction || interaction.event !== eventType) return false;
-        const eventCandidate = this.onboardingInteractionCandidate(interaction, node);
+    onboardingInteractionSatisfied(interaction, node = null) {
+        const eventCandidate = DevToolsWindow.prototype.onboardingInteractionCandidate.call(
+            this,
+            interaction,
+            node,
+        );
         if (!eventCandidate) return false;
         const candidate = (
             (interaction.value !== undefined || interaction.state !== undefined)
             && interaction.selector
             && this.window?.querySelector(interaction.selector)
         ) || eventCandidate;
+        if (
+            interaction.value !== undefined
+            && String(candidate.value ?? candidate.dataset?.value ?? '')
+                !== String(interaction.value)
+        ) return false;
+        if (interaction.state === 'open' && candidate.open !== true) return false;
+        if (
+            interaction.state === 'checked'
+            && candidate.checked !== true
+            && candidate.getAttribute?.('aria-checked') !== 'true'
+        ) return false;
+        return true;
+    }
+
+    recordOnboardingAction(eventType, node = null) {
+        if (this.onboardingApplyingSkippedState) return false;
+        if (this.onboardingStepStage !== 'practice') return false;
+        const step = this.currentOnboardingStep();
+        const interaction = step?.interaction;
+        if (!interaction || interaction.event !== eventType) return false;
         const revokeCompletion = () => {
             if (this.onboardingSession.completedActions.delete(step.id)) {
                 this.onboardingSession.skippedActions?.delete(step.id);
@@ -4532,19 +4593,11 @@ export class DevToolsWindow {
             }
             return false;
         };
-        if (
-            interaction.value !== undefined
-            && String(candidate.value ?? candidate.dataset?.value ?? '')
-                !== String(interaction.value)
-        ) return revokeCompletion();
-        if (interaction.state === 'open' && candidate.open !== true) {
-            return revokeCompletion();
-        }
-        if (
-            interaction.state === 'checked'
-            && candidate.checked !== true
-            && candidate.getAttribute?.('aria-checked') !== 'true'
-        ) return revokeCompletion();
+        if (!DevToolsWindow.prototype.onboardingInteractionSatisfied.call(
+            this,
+            interaction,
+            node,
+        )) return revokeCompletion();
         this.onboardingSession.completedActions.add(step.id);
         this.onboardingSession.skippedActions?.delete(step.id);
         this.onboardingStepComplete = true;
@@ -4608,12 +4661,32 @@ export class DevToolsWindow {
         this.onboardingTargetAddedTabIndex = false;
     }
 
+    onboardingVisualTarget(step = this.currentOnboardingStep()) {
+        const fallback = step?.target
+            ? this.window?.querySelector(step.target)
+            : null;
+        if (
+            this.onboardingStepStage !== 'debrief'
+            || step?.interaction?.event !== 'toggle'
+            || step.interaction.state !== 'open'
+        ) return fallback;
+        const disclosure = this.window?.querySelector(step.interaction.selector);
+        if (!disclosure?.open) return fallback;
+        mountDetailsContent(disclosure);
+        const revealed = Array.from(disclosure.children ?? [])
+            .find((child) => child?.tagName !== 'SUMMARY');
+        return revealed ?? disclosure ?? fallback;
+    }
+
     refreshOnboardingTarget() {
         if (!this.onboardingIsOpen()) return;
         this.clearOnboardingTarget();
         if (!this.tutorialIsActive()) return;
         const step = this.currentOnboardingStep();
-        const target = step?.target ? this.window?.querySelector(step.target) : null;
+        const target = DevToolsWindow.prototype.onboardingVisualTarget.call(
+            this,
+            step,
+        );
         if (target) {
             this.onboardingTarget = target;
             this.onboardingTargetDescriptionId = target.getAttribute('aria-describedby');
@@ -4726,8 +4799,26 @@ export class DevToolsWindow {
         const callout = isPractice
             ? this.onboardingPracticeDock
             : this.onboardingGuideBody;
-        const targetRect = this.onboardingTarget?.getBoundingClientRect?.();
+        const rawTargetRect = this.onboardingTarget?.getBoundingClientRect?.();
         const windowRect = this.window?.getBoundingClientRect?.();
+        const targetViewportRect = this.content?.contains?.(this.onboardingTarget)
+            ? this.content?.getBoundingClientRect?.()
+            : windowRect;
+        const visibleTargetRect = rawTargetRect && targetViewportRect
+            ? {
+                left: Math.max(rawTargetRect.left, targetViewportRect.left),
+                top: Math.max(rawTargetRect.top, targetViewportRect.top),
+                right: Math.min(rawTargetRect.right, targetViewportRect.right),
+                bottom: Math.min(rawTargetRect.bottom, targetViewportRect.bottom),
+            }
+            : null;
+        const targetRect = visibleTargetRect
+            ? {
+                ...visibleTargetRect,
+                width: Math.max(0, visibleTargetRect.right - visibleTargetRect.left),
+                height: Math.max(0, visibleTargetRect.bottom - visibleTargetRect.top),
+            }
+            : rawTargetRect;
         if (
             !targetRect
             || !windowRect

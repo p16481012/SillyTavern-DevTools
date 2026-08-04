@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.15.5 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.15.6 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.15.5 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.15\.5'/);
+    assert.match(harness, /extensionVersion:\s*'0\.15\.6'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.15\.5'/);
+    assert.match(harness, /version:\s*'0\.15\.6'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);

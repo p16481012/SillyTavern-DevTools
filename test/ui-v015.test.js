@@ -429,6 +429,94 @@ test('returning to the Korean search step restores completion from existing resu
     assert.deepEqual(calls, [[step.interaction.event, input]]);
 });
 
+test('practice recognizes value, open, and checked states that are already satisfied', async () => {
+    const exercise = async (stepId, candidate) => {
+        const step = onboardingStep(stepId);
+        const calls = [];
+        const state = {
+            onboardingStepStage: 'practice',
+            onboardingStepComplete: false,
+            currentOnboardingStep: () => step,
+            window: {
+                querySelector(selector) {
+                    return selector === step.interaction.selector ? candidate : null;
+                },
+            },
+            recordOnboardingAction(event, node) {
+                calls.push([event, node]);
+                return true;
+            },
+        };
+        DevToolsWindow.prototype.synchronizeOnboardingStepCompletion.call(state, step);
+        await new Promise((resolve) => queueMicrotask(resolve));
+        return { calls, step };
+    };
+
+    const checkedCandidate = {
+        checked: false,
+        getAttribute: (name) => name === 'aria-checked' ? 'true' : null,
+    };
+    const checked = await exercise('explorer-included-filter', checkedCandidate);
+    assert.deepEqual(checked.calls, [[checked.step.interaction.event, checkedCandidate]]);
+
+    const openCandidate = { open: true };
+    const open = await exercise('explorer-configured-group', openCandidate);
+    assert.deepEqual(open.calls, [[open.step.interaction.event, openCandidate]]);
+
+    const valueStep = onboardingStep('explorer-snapshot-3');
+    const valueCandidate = { value: valueStep.interaction.value, dataset: {} };
+    const value = await exercise(valueStep.id, valueCandidate);
+    assert.deepEqual(value.calls, [[value.step.interaction.event, valueCandidate]]);
+
+    checkedCandidate.getAttribute = () => 'false';
+    const incomplete = await exercise('explorer-included-filter', checkedCandidate);
+    assert.equal(incomplete.calls.length, 0);
+
+    const captureStep = onboardingStep('capture-practice');
+    const panel = await exercise(captureStep.id, {
+        value: captureStep.interaction.value,
+        dataset: { value: captureStep.interaction.value },
+    });
+    assert.equal(panel.calls.length, 0);
+});
+
+test('an opened disclosure highlights its revealed result instead of only its summary', () => {
+    const step = onboardingStep('explorer-configured-group');
+    const summary = { tagName: 'SUMMARY' };
+    const revealed = { tagName: 'DIV' };
+    const disclosure = {
+        open: true,
+        children: [summary, revealed],
+    };
+    const state = {
+        onboardingStepStage: 'debrief',
+        currentOnboardingStep: () => step,
+        window: {
+            querySelector(selector) {
+                if (selector === step.target) return summary;
+                if (selector === step.interaction.selector) return disclosure;
+                return null;
+            },
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
+        revealed,
+    );
+    state.onboardingStepStage = 'practice';
+    assert.equal(
+        DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
+        summary,
+    );
+    state.onboardingStepStage = 'debrief';
+    disclosure.open = false;
+    assert.equal(
+        DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
+        summary,
+    );
+});
+
 test('briefing, practice, and debrief form one ordered step flow', async () => {
     const stepIndex = ONBOARDING_STEPS.findIndex(({ id }) => id === 'explorer-tab');
     assert.ok(stepIndex >= 0);
@@ -1087,4 +1175,35 @@ test('coachmarks use a panel-free overlay with mobile-safe icon navigation', asy
     assert.match(actions, /grid-template-columns:\s*52px minmax\(0, 1fr\) 52px/u);
     assert.match(coachmarkStyle, /min-width:\s*52px[\s\S]*?min-height:\s*44px/u);
     assert.match(coachmarkStyle, /@container \(max-width: 520px\)/u);
+});
+
+test('coachmarks expose a named capture action, richer copy, and finite success motion', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const style = await readFile(STYLE_URL, 'utf8');
+    const patchStyle = sourceTail(
+        style,
+        '/* v0.15.6 — clearer coaching, visible actions, and gentle success feedback. */',
+    );
+    const renderer = sourceBlock(
+        ui,
+        '\n    renderOnboardingStep(step, stage = \'briefing\') {',
+        '\n    renderOnboardingPracticeActions(step) {',
+    );
+    const actionRenderer = sourceBlock(
+        ui,
+        '\n    renderOnboardingPracticeActions(step) {',
+        '\n    renderOnboardingDemo(kind) {',
+    );
+
+    assert.match(renderer, /onboarding\.step\.\$\{step\.id\}\.what/u);
+    assert.match(renderer, /onboarding\.successTitle/u);
+    assert.match(renderer, /st-devtools-onboarding-result-context/u);
+    assert.match(actionRenderer, /st-devtools-onboarding-practice-action-label/u);
+    assert.doesNotMatch(actionRenderer, /st-devtools-onboarding-round-button/u);
+    assert.match(patchStyle, /min-width:\s*132px !important/u);
+    assert.match(patchStyle, /data-stage='debrief'/u);
+    assert.match(patchStyle, /st-devtools-coachmark-success-pop/u);
+    assert.match(patchStyle, /900ms ease-out 2/u);
+    assert.match(patchStyle, /@container \(max-width: 360px\)/u);
+    assert.match(patchStyle, /prefers-reduced-motion: reduce/u);
 });
