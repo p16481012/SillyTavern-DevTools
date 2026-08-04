@@ -397,6 +397,95 @@ test('interaction validation enforces value, open, and checked contracts', () =>
     }
 });
 
+test('switch completion waits until the control event has committed its new state', async () => {
+    const step = onboardingStep('explorer-included-filter');
+    const toggle = (checked) => ({
+        ariaChecked: String(checked),
+        matches: (selector) => selector === step.interaction.selector,
+        closest: () => null,
+        getAttribute(name) {
+            return name === 'aria-checked' ? this.ariaChecked : null;
+        },
+    });
+    const scenario = (checked) => {
+        let renderedToggle = toggle(checked);
+        const state = {
+            onboardingSession: {
+                completedActions: new Set(),
+                skippedActions: new Set(),
+            },
+            onboardingApplyingSkippedState: false,
+            onboardingStepStage: 'practice',
+            onboardingStepComplete: false,
+            onboardingStepSkipped: false,
+            onboardingGuide: { contains: () => false },
+            tutorialIsActive: () => true,
+            currentOnboardingStep: () => step,
+            window: { querySelector: () => renderedToggle },
+            onboardingInteractionCandidate(interaction, node) {
+                return DevToolsWindow.prototype.onboardingInteractionCandidate.call(
+                    { window: this.window },
+                    interaction,
+                    node,
+                );
+            },
+            recordOnboardingAction(eventType, node) {
+                return DevToolsWindow.prototype.recordOnboardingAction.call(
+                    this,
+                    eventType,
+                    node,
+                );
+            },
+            updateOnboardingView() {},
+        };
+        return {
+            initial: renderedToggle,
+            state,
+            commit(nextChecked) {
+                renderedToggle = toggle(nextChecked);
+            },
+        };
+    };
+
+    const enabled = scenario(false);
+    DevToolsWindow.prototype.handleOnboardingInteraction.call(enabled.state, {
+        type: 'click',
+        target: enabled.initial,
+    });
+    await Promise.resolve();
+    assert.equal(enabled.state.onboardingStepStage, 'practice');
+    enabled.commit(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(enabled.state.onboardingStepStage, 'debrief');
+    assert.equal(enabled.state.onboardingSession.completedActions.has(step.id), true);
+
+    const disabled = scenario(true);
+    DevToolsWindow.prototype.handleOnboardingInteraction.call(disabled.state, {
+        type: 'click',
+        target: disabled.initial,
+    });
+    await Promise.resolve();
+    disabled.commit(false);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(disabled.state.onboardingStepStage, 'practice');
+    assert.equal(disabled.state.onboardingSession.completedActions.has(step.id), false);
+
+    const stale = scenario(false);
+    DevToolsWindow.prototype.handleOnboardingInteraction.call(stale.state, {
+        type: 'click',
+        target: stale.initial,
+    });
+    await Promise.resolve();
+    stale.commit(true);
+    stale.state.onboardingSession = {
+        completedActions: new Set(),
+        skippedActions: new Set(),
+    };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(stale.state.onboardingStepStage, 'practice');
+    assert.equal(stale.state.onboardingSession.completedActions.has(step.id), false);
+});
+
 test('returning to the Korean search step restores completion from existing results', async () => {
     const step = onboardingStep('search-query-korean');
     const input = { value: step.interaction.value };
@@ -517,13 +606,13 @@ test('an opened disclosure highlights its revealed result instead of only its su
     );
 });
 
-test('briefing, practice, and debrief form one ordered step flow', async () => {
+test('interactive steps enter practice directly and keep one result acknowledgement', async () => {
     const stepIndex = ONBOARDING_STEPS.findIndex(({ id }) => id === 'explorer-tab');
     assert.ok(stepIndex >= 0);
     const nextState = {
         onboardingPhase: 'steps',
-        onboardingStepStage: 'briefing',
-        onboardingStepIndex: stepIndex,
+        onboardingStepStage: 'debrief',
+        onboardingStepIndex: stepIndex - 1,
         onboardingStepComplete: false,
         onboardingStepSkipped: false,
         onboardingIsOpen: () => true,
@@ -547,7 +636,7 @@ test('briefing, practice, and debrief form one ordered step flow', async () => {
 
     assert.equal(DevToolsWindow.prototype.nextOnboardingStep.call(nextState), true);
     assert.equal(nextState.onboardingStepIndex, stepIndex + 1);
-    assert.equal(nextState.onboardingStepStage, 'briefing');
+    assert.equal(nextState.onboardingStepStage, 'practice');
     assert.equal(nextState.onboardingStepComplete, false);
     assert.equal(nextState.updateOnboardingViewCalls, 3);
 
@@ -579,7 +668,7 @@ test('briefing, practice, and debrief form one ordered step flow', async () => {
     assert.equal(DevToolsWindow.prototype.previousOnboardingStep.call(firstState), false);
 });
 
-test('read-only coachmarks advance once without fake practice or debrief screens', () => {
+test('read-only coachmarks advance once into the next step entry stage', () => {
     const passiveStepIndex = ONBOARDING_STEPS.findIndex(
         ({ id }) => id === 'capture-purpose',
     );
@@ -602,7 +691,7 @@ test('read-only coachmarks advance once without fake practice or debrief screens
 
     assert.equal(DevToolsWindow.prototype.nextOnboardingStep.call(state), true);
     assert.equal(state.onboardingStepIndex, passiveStepIndex + 1);
-    assert.equal(state.onboardingStepStage, 'briefing');
+    assert.equal(state.onboardingStepStage, 'practice');
     assert.equal(state.onboardingStepComplete, false);
     assert.equal(state.onboardingSession.completedActions.has('capture-purpose'), true);
     assert.equal(state.updateOnboardingViewCalls, 1);
@@ -704,7 +793,7 @@ test('Escape skips the walkthrough from every step stage', async () => {
     const next = sourceBlock(ui, '\n    nextOnboardingStep() {', '\n    previousOnboardingStep() {');
     assert.match(next, /onboardingStepStage === 'briefing'[\s\S]*?= 'practice'/u);
     assert.match(next, /onboardingStepStage === 'practice'[\s\S]*?!this\.onboardingStepComplete[\s\S]*?= 'debrief'/u);
-    assert.match(next, /onboardingStepStage !== 'debrief'[\s\S]*?onboardingStepIndex \+= 1[\s\S]*?= 'briefing'/u);
+    assert.match(next, /onboardingStepStage !== 'debrief'[\s\S]*?onboardingStepIndex \+= 1[\s\S]*?onboardingEntryStage/u);
 });
 
 test('briefing and debrief are modal and inert while practice is freely interactive', async () => {
@@ -743,6 +832,9 @@ test('briefing and debrief are modal and inert while practice is freely interact
     assert.match(guide, /className: 'st-devtools-onboarding-practice-dock'/u);
     assert.match(guide, /practiceDock\.setAttribute\('role', 'region'\)/u);
     assert.doesNotMatch(guide, /practiceDock\.setAttribute\('aria-modal'/u);
+    assert.match(guide, /actions\.append\(progress, next\)/u);
+    assert.doesNotMatch(guide, /actions\.append\(exit/u);
+    assert.match(guide, /panel\.append\(announcement, exit, body, actions\)/u);
     assert.match(view, /const modalStage = this\.onboardingStepStage !== 'practice'/u);
     assert.match(view, /this\.syncOnboardingModalState\(modalStage\)/u);
     assert.match(view, /this\.onboardingGuidePanel\.hidden = !modalStage/u);
@@ -1172,7 +1264,7 @@ test('coachmarks use a panel-free overlay with mobile-safe icon navigation', asy
     );
     assert.doesNotMatch(body, /overflow-y:\s*auto/u);
     assert.match(actions, /bottom:\s*max\(1rem, env\(safe-area-inset-bottom\)\)/u);
-    assert.match(actions, /grid-template-columns:\s*52px minmax\(0, 1fr\) 52px/u);
+    assert.match(actions, /grid-template-columns:\s*minmax\(0, 1fr\) 52px/u);
     assert.match(coachmarkStyle, /min-width:\s*52px[\s\S]*?min-height:\s*44px/u);
     assert.match(coachmarkStyle, /@container \(max-width: 520px\)/u);
 });
@@ -1194,12 +1286,33 @@ test('coachmarks expose a named capture action, richer copy, and finite success 
         '\n    renderOnboardingPracticeActions(step) {',
         '\n    renderOnboardingDemo(kind) {',
     );
+    const view = sourceBlock(
+        ui,
+        '\n    updateOnboardingView() {',
+        '\n    syncOnboardingModalState(modal) {',
+    );
+    const interactionHandler = sourceBlock(
+        ui,
+        '\n    handleOnboardingInteraction(event) {',
+        '\n    clearOnboardingTarget() {',
+    );
 
     assert.match(renderer, /onboarding\.step\.\$\{step\.id\}\.what/u);
     assert.match(renderer, /onboarding\.successTitle/u);
     assert.match(renderer, /st-devtools-onboarding-result-context/u);
     assert.match(actionRenderer, /st-devtools-onboarding-practice-action-label/u);
     assert.doesNotMatch(actionRenderer, /st-devtools-onboarding-round-button/u);
+    assert.match(view, /st-devtools-onboarding-practice-title/u);
+    assert.match(view, /st-devtools-onboarding-practice-meaning/u);
+    assert.match(view, /st-devtools-onboarding-practice-context/u);
+    assert.match(view, /st-devtools-onboarding-practice-task/u);
+    assert.match(interactionHandler, /setTimeout\(\(\) => \{/u);
+    assert.match(interactionHandler, /this\.onboardingSession !== session/u);
+    assert.match(interactionHandler, /currentOnboardingStep\(\)\?\.id !== stepId/u);
+    assert.match(
+        style,
+        /> \.st-devtools-onboarding-practice-exit\[hidden\]\s*\{[\s\S]*?display:\s*none !important/u,
+    );
     assert.match(patchStyle, /min-width:\s*132px !important/u);
     assert.match(patchStyle, /data-stage='debrief'/u);
     assert.match(patchStyle, /st-devtools-coachmark-success-pop/u);

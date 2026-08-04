@@ -7106,7 +7106,7 @@
     left: 1rem;
     z-index: 6;
     display: grid;
-    grid-template-columns: 52px minmax(0, 1fr) 52px;
+    grid-template-columns: minmax(0, 1fr) 52px;
     align-items: center;
     gap: 0.75rem;
     padding: 0;
@@ -7198,8 +7198,10 @@
 }
 
 .st-devtools-onboarding-practice-copy {
+    display: grid;
     min-width: 0;
     flex: 1 1 auto;
+    gap: 0.2rem;
     margin: 0;
     color: #fff;
     font-size: 0.85rem;
@@ -7208,6 +7210,34 @@
     text-align: start;
     text-wrap: pretty;
     word-break: keep-all;
+}
+
+.st-devtools-onboarding-practice-copy > strong,
+.st-devtools-onboarding-practice-copy > p {
+    margin: 0;
+}
+
+.st-devtools-onboarding-practice-title {
+    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 820;
+    line-height: 1.4;
+}
+
+.st-devtools-onboarding-practice-meaning,
+.st-devtools-onboarding-practice-context {
+    color: rgb(255 255 255 / 76%);
+    font-size: 0.76rem;
+    font-weight: 560;
+    line-height: 1.42;
+}
+
+.st-devtools-onboarding-practice-task {
+    margin-top: 0.1rem !important;
+    color: #fde68a;
+    font-size: 0.8rem;
+    font-weight: 760;
+    line-height: 1.45;
 }
 
 .st-devtools-onboarding-practice-actions {
@@ -7235,6 +7265,7 @@
     font-size: 0.95rem !important;
 }
 
+.st-devtools-window .st-devtools-onboarding-exit,
 .st-devtools-window .st-devtools-onboarding-practice-exit {
     position: absolute;
     top: max(0.75rem, env(safe-area-inset-top));
@@ -7250,6 +7281,9 @@
 }
 
 .st-devtools-window
+.st-devtools-onboarding-guide-panel
+> .st-devtools-onboarding-exit.st-devtools-onboarding-round-button,
+.st-devtools-window
 .st-devtools-onboarding-guide
 > .st-devtools-onboarding-practice-exit.st-devtools-onboarding-round-button {
     display: inline-grid !important;
@@ -7261,6 +7295,15 @@
     max-height: 46px !important;
     box-sizing: border-box !important;
     flex: 0 0 46px !important;
+}
+
+.st-devtools-window
+.st-devtools-onboarding-guide-panel
+> .st-devtools-onboarding-exit[hidden],
+.st-devtools-window
+.st-devtools-onboarding-guide
+> .st-devtools-onboarding-practice-exit[hidden] {
+    display: none !important;
 }
 
 .st-devtools-window[data-onboarding-stage='practice']
@@ -7318,7 +7361,7 @@
     }
 
     .st-devtools-onboarding-guide-actions {
-        grid-template-columns: 50px minmax(0, 1fr) 50px;
+        grid-template-columns: minmax(0, 1fr) 50px;
     }
 
     .st-devtools-window .st-devtools-onboarding-round-button {

@@ -71,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.15.6',
+        extensionVersion: '0.15.7',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1450,7 +1450,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.15.6',
+    version: '0.15.7',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1661,7 +1661,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.15.6',
+        extensionVersion: '0.15.7',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1708,7 +1708,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.15.6',
+        version: '0.15.7',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -2076,8 +2076,11 @@ const sandboxOnboardingHook = Object.freeze({
         return { advanced, status: sandboxOnboardingStatus() };
     },
     enterPractice() {
-        const entered = devTools.onboardingStepStage === 'briefing'
-            && devTools.nextOnboardingStep();
+        const entered = devTools.onboardingStepStage === 'practice'
+            || (
+                devTools.onboardingStepStage === 'briefing'
+                && devTools.nextOnboardingStep()
+            );
         return { entered: Boolean(entered), status: sandboxOnboardingStatus() };
     },
     acknowledge() {

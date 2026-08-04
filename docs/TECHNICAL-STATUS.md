@@ -1,4 +1,13 @@
-# v0.15.6 기술 구현 현황
+# v0.15.7 기술 구현 현황
+
+## v0.15.7 직접 체험 진입·이벤트 판정 보정
+
+- interaction이 있는 단계의 entry stage는 `practice`, 읽기 전용 단계는 `briefing`으로 계산합니다. interactive 단계에는 별도 `직접 해보기` 화면을 만들지 않고 실제 target과 기능 이름·의미·사용 맥락·할 일을 함께 렌더링합니다.
+- practice에서 정확한 control을 조작하면 자동으로 `debrief`에 들어가며, 사용자가 `다음`을 누르는 곳은 읽기 전용 briefing과 조작 완료 debrief뿐입니다.
+- 설명·결과 panel의 종료 control을 footer에서 panel 우측 상단으로 옮겼습니다. practice 종료 control도 같은 위치를 사용하고, host theme의 `display` 강제 규칙보다 높은 `[hidden] { display: none !important; }` 경계로 동시에 두 개가 보이지 않게 합니다.
+- capture phase에서 받은 click은 `setTimeout(0)`의 다음 task에서 판정합니다. callback은 같은 onboarding session, 같은 step ID, `practice` phase를 다시 확인해 이전 상태 판정과 지연 callback의 다음 단계 오완료를 모두 방지합니다.
+- `explorer-included-filter`는 `aria-checked="true"` 계약을 유지하고 실제 pointer 한 번의 `false → true` 전환 뒤 debrief로 이동합니다. 반대 `true → false` 전환은 완료로 인정하지 않습니다.
+- 320×640과 390×844 브라우저 viewport에서 단일 우측 상단 종료 control, 가로 overflow 없음, practice dock 내부 scroll 없음과 실제 pointer 상호작용을 검증했습니다.
 
 ## v0.15.6 코치마크 설명·상태·성공 피드백
 

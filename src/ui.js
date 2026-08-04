@@ -300,6 +300,10 @@ function onboardingSentence(text, edge = 'first') {
     return edge === 'last' ? sentences.at(-1) : sentences[0];
 }
 
+function onboardingEntryStage(step) {
+    return step?.interaction ? 'practice' : 'briefing';
+}
+
 function tooltipClippingRect(wrapper) {
     const boundary = {
         left: 0,
@@ -3614,8 +3618,8 @@ export class DevToolsWindow {
         nextIcon.setAttribute('aria-hidden', 'true');
         next.appendChild(nextIcon);
         next.addEventListener('click', () => this.nextOnboardingStep());
-        actions.append(exit, progress, next);
-        panel.append(announcement, body, actions);
+        actions.append(progress, next);
+        panel.append(announcement, exit, body, actions);
 
         const practiceDock = element('section', {
             className: 'st-devtools-onboarding-practice-dock',
@@ -3624,7 +3628,7 @@ export class DevToolsWindow {
         practiceDock.tabIndex = -1;
         practiceDock.setAttribute('role', 'region');
         practiceDock.setAttribute('aria-label', t('onboarding.currentTaskLabel'));
-        const practiceCopy = element('p', {
+        const practiceCopy = element('div', {
             className: 'st-devtools-onboarding-practice-copy',
         });
         practiceCopy.id = 'st-devtools-onboarding-practice-copy';
@@ -3853,7 +3857,7 @@ export class DevToolsWindow {
         this.onboardingSession = createOnboardingSession();
         this.onboardingSession.skippedActions = new Set();
         this.onboardingPhase = 'steps';
-        this.onboardingStepStage = 'briefing';
+        this.onboardingStepStage = onboardingEntryStage(ONBOARDING_STEPS[0]);
         this.onboardingStepIndex = 0;
         this.onboardingStepComplete = false;
         this.onboardingStepSkipped = false;
@@ -3903,7 +3907,9 @@ export class DevToolsWindow {
                     return this.closeOnboarding({ persist: 'completed' });
                 }
                 this.onboardingStepIndex += 1;
-                this.onboardingStepStage = 'briefing';
+                this.onboardingStepStage = onboardingEntryStage(
+                    ONBOARDING_STEPS[this.onboardingStepIndex],
+                );
                 this.onboardingStepComplete = false;
                 this.updateOnboardingView();
                 return true;
@@ -3923,7 +3929,9 @@ export class DevToolsWindow {
             return this.closeOnboarding({ persist: 'completed' });
         }
         this.onboardingStepIndex += 1;
-        this.onboardingStepStage = 'briefing';
+        this.onboardingStepStage = onboardingEntryStage(
+            ONBOARDING_STEPS[this.onboardingStepIndex],
+        );
         this.onboardingStepComplete = false;
         this.onboardingStepSkipped = false;
         this.updateOnboardingView();
@@ -4110,8 +4118,26 @@ export class DevToolsWindow {
                 this.onboardingPracticeActions.replaceChildren();
                 if (stepChanged || stageChanged) this.onboardingBody.scrollTop = 0;
             } else {
-                this.onboardingPracticeCopy.textContent = onboardingSentence(
-                    t(`onboarding.step.${step.id}.task`),
+                this.onboardingPracticeCopy.replaceChildren(
+                    element('strong', {
+                        className: 'st-devtools-onboarding-practice-title',
+                        text: t(`onboarding.step.${step.id}.title`),
+                    }),
+                    proseElement(
+                        'p',
+                        onboardingSentence(t(`onboarding.step.${step.id}.what`)),
+                        { className: 'st-devtools-onboarding-practice-meaning' },
+                    ),
+                    proseElement(
+                        'p',
+                        t(`onboarding.step.${step.id}.when`),
+                        { className: 'st-devtools-onboarding-practice-context' },
+                    ),
+                    proseElement(
+                        'p',
+                        onboardingSentence(t(`onboarding.step.${step.id}.task`)),
+                        { className: 'st-devtools-onboarding-practice-task' },
+                    ),
                 );
                 this.renderOnboardingPracticeActions(step);
                 this.synchronizeOnboardingStepCompletion(step);
@@ -4621,7 +4647,17 @@ export class DevToolsWindow {
         );
         if (!candidate) return;
         if (step.id !== 'search-query-korean' || event.type !== 'input') {
-            queueMicrotask(() => this.recordOnboardingAction(event.type, candidate));
+            const stepId = step.id;
+            const eventType = event.type;
+            const session = this.onboardingSession;
+            setTimeout(() => {
+                if (
+                    this.onboardingSession !== session
+                    || this.currentOnboardingStep()?.id !== stepId
+                    || this.onboardingStepStage !== 'practice'
+                ) return;
+                this.recordOnboardingAction(eventType, candidate);
+            }, 0);
         }
     }
 
