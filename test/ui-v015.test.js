@@ -596,7 +596,7 @@ test('an opened disclosure highlights its revealed result instead of only its su
     state.onboardingStepStage = 'practice';
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
-        summary,
+        disclosure,
     );
     state.onboardingStepStage = 'debrief';
     disclosure.open = false;
@@ -616,6 +616,10 @@ test('interactive steps enter practice directly and keep one result acknowledgem
         onboardingStepComplete: false,
         onboardingStepSkipped: false,
         onboardingIsOpen: () => true,
+        onboardingSession: {
+            completedActions: new Set(),
+            skippedActions: new Set(),
+        },
         updateOnboardingViewCalls: 0,
         updateOnboardingView() {
             this.updateOnboardingViewCalls += 1;
@@ -642,9 +646,15 @@ test('interactive steps enter practice directly and keep one result acknowledgem
 
     const backState = {
         onboardingPhase: 'steps',
-        onboardingStepStage: 'briefing',
+        onboardingStepStage: 'practice',
         onboardingStepIndex: stepIndex + 1,
         onboardingIsOpen: () => true,
+        onboardingSession: {
+            completedActions: new Set(
+                ONBOARDING_STEPS.slice(0, stepIndex + 1).map(({ id }) => id),
+            ),
+            skippedActions: new Set(),
+        },
         updateOnboardingViewCalls: 0,
         updateOnboardingView() {
             this.updateOnboardingViewCalls += 1;
@@ -654,10 +664,51 @@ test('interactive steps enter practice directly and keep one result acknowledgem
     assert.equal(backState.onboardingStepIndex, stepIndex);
     assert.equal(backState.onboardingStepStage, 'debrief');
     assert.equal(DevToolsWindow.prototype.previousOnboardingStep.call(backState), true);
-    assert.equal(backState.onboardingStepStage, 'practice');
+    assert.equal(backState.onboardingStepIndex, stepIndex - 1);
+    assert.equal(
+        backState.onboardingStepStage,
+        ONBOARDING_STEPS[stepIndex - 1].interaction ? 'debrief' : 'briefing',
+    );
     assert.equal(DevToolsWindow.prototype.previousOnboardingStep.call(backState), true);
-    assert.equal(backState.onboardingStepStage, 'briefing');
+    assert.equal(backState.onboardingStepIndex, stepIndex - 2);
+    assert.equal(
+        backState.onboardingStepStage,
+        ONBOARDING_STEPS[stepIndex - 2].interaction ? 'debrief' : 'briefing',
+    );
     assert.equal(backState.updateOnboardingViewCalls, 3);
+
+    const roundTripState = {
+        onboardingPhase: 'steps',
+        onboardingStepStage: 'debrief',
+        onboardingStepIndex: stepIndex + 1,
+        onboardingStepComplete: true,
+        onboardingStepSkipped: false,
+        onboardingIsOpen: () => true,
+        onboardingSession: {
+            completedActions: new Set([
+                ONBOARDING_STEPS[stepIndex].id,
+                ONBOARDING_STEPS[stepIndex + 1].id,
+            ]),
+            skippedActions: new Set(),
+        },
+        updateOnboardingViewCalls: 0,
+        updateOnboardingView() {
+            this.updateOnboardingViewCalls += 1;
+        },
+    };
+    assert.equal(
+        DevToolsWindow.prototype.previousOnboardingStep.call(roundTripState),
+        true,
+    );
+    assert.equal(roundTripState.onboardingStepIndex, stepIndex);
+    assert.equal(roundTripState.onboardingStepStage, 'debrief');
+    assert.equal(
+        DevToolsWindow.prototype.nextOnboardingStep.call(roundTripState),
+        true,
+    );
+    assert.equal(roundTripState.onboardingStepIndex, stepIndex + 1);
+    assert.equal(roundTripState.onboardingStepStage, 'debrief');
+    assert.equal(roundTripState.onboardingStepComplete, true);
 
     const firstState = {
         onboardingPhase: 'steps',
@@ -695,6 +746,30 @@ test('read-only coachmarks advance once into the next step entry stage', () => {
     assert.equal(state.onboardingStepComplete, false);
     assert.equal(state.onboardingSession.completedActions.has('capture-purpose'), true);
     assert.equal(state.updateOnboardingViewCalls, 1);
+
+    const completedNext = ONBOARDING_STEPS[passiveStepIndex + 1];
+    const restoredState = {
+        ...state,
+        onboardingStepIndex: passiveStepIndex,
+        onboardingStepStage: 'briefing',
+        onboardingStepComplete: true,
+        onboardingSession: {
+            completedActions: new Set([
+                ONBOARDING_STEPS[passiveStepIndex].id,
+                completedNext.id,
+            ]),
+            skippedActions: new Set(),
+        },
+        updateOnboardingViewCalls: 0,
+    };
+    assert.equal(
+        DevToolsWindow.prototype.nextOnboardingStep.call(restoredState),
+        true,
+    );
+    assert.equal(restoredState.onboardingStepIndex, passiveStepIndex + 1);
+    assert.equal(restoredState.onboardingStepStage, 'debrief');
+    assert.equal(restoredState.onboardingStepComplete, true);
+    assert.equal(restoredState.updateOnboardingViewCalls, 1);
 });
 
 test('passive confirmation and step skip finish in debrief without advancing', async () => {
@@ -832,9 +907,10 @@ test('briefing and debrief are modal and inert while practice is freely interact
     assert.match(guide, /className: 'st-devtools-onboarding-practice-dock'/u);
     assert.match(guide, /practiceDock\.setAttribute\('role', 'region'\)/u);
     assert.doesNotMatch(guide, /practiceDock\.setAttribute\('aria-modal'/u);
-    assert.match(guide, /actions\.append\(progress, next\)/u);
+    assert.match(guide, /actions\.append\(back, progress, next\)/u);
     assert.doesNotMatch(guide, /actions\.append\(exit/u);
     assert.match(guide, /panel\.append\(announcement, exit, body, actions\)/u);
+    assert.match(guide, /className: 'menu_button st-devtools-onboarding-practice-back/u);
     assert.match(view, /const modalStage = this\.onboardingStepStage !== 'practice'/u);
     assert.match(view, /this\.syncOnboardingModalState\(modalStage\)/u);
     assert.match(view, /this\.onboardingGuidePanel\.hidden = !modalStage/u);
@@ -913,6 +989,20 @@ test('capture growth and every hands-on selector have a matching product marker'
     assert.match(onboardingStep('search-result-main-source').target, /data-source-id/u);
 });
 
+test('async diff rendering restores the active comparison spotlight target', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const renderDiff = sourceBlock(
+        ui,
+        '\n    renderDiff() {',
+        '\n    appendDiffMarkup(',
+    );
+
+    assert.match(
+        renderDiff,
+        /this\.renderLoreChanges\([\s\S]*?if \(this\.tutorialIsActive\(\)\)[\s\S]*?queueMicrotask\([\s\S]*?currentOnboardingStep\(\)\?\.tabId === 'diff'[\s\S]*?refreshOnboardingTarget\(\)[\s\S]*?scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u,
+    );
+});
+
 test('automatic invitation is offered at most once per panel session', async () => {
     let starts = 0;
     const state = {
@@ -969,7 +1059,7 @@ test('spotlight guide overlays the unchanged product workspace', async () => {
     assert.match(guideBuilder, /className: 'st-devtools-onboarding-guide'/u);
     assert.match(
         guideBuilder,
-        /guide\.append\(blocker, spotlight, panel, practiceDock, practiceExit\)/u,
+        /guide\.append\([\s\S]*?blocker,[\s\S]*?spotlight,[\s\S]*?panel,[\s\S]*?practiceDock,[\s\S]*?practiceBack,[\s\S]*?practiceExit/u,
     );
     assert.match(guideStyle, /position: absolute/u);
     assert.match(guideStyle, /inset: 0/u);
@@ -1007,8 +1097,19 @@ test('spotlight geometry never overrides the real target position', async () => 
 
     assert.match(position, /Object\.assign\(this\.onboardingSpotlight\.style,\s*\{/u);
     assert.match(position, /left:[\s\S]*?top:[\s\S]*?width:[\s\S]*?height:/u);
+    assert.doesNotMatch(position, /if \(isPractice\) \{[\s\S]*?onboardingSpotlight\.hidden = true/u);
+    assert.match(position, /--st-devtools-onboarding-nav-clearance/u);
+    assert.match(
+        position,
+        /this\.window\.style\.setProperty\([\s\S]*?--st-devtools-onboarding-nav-clearance/u,
+    );
+    assert.match(position, /reservedBottom = navigationClearance \+ 70/u);
     assert.doesNotMatch(position, /onboardingTarget\.style|target\.style/u);
     assert.match(spotlightStyle, /\.st-devtools-onboarding-spotlight\s*\{[\s\S]*?position: absolute/u);
+    assert.match(
+        style,
+        /\[data-onboarding-stage='practice'\][\s\S]*?\.st-devtools-onboarding-spotlight\s*\{[\s\S]*?box-shadow:[\s\S]*?0 0 22px/u,
+    );
     assert.match(practiceTarget, /outline:/u);
     assert.match(practiceTarget, /box-shadow:/u);
     assert.doesNotMatch(practiceTarget, /position\s*:|top\s*:|right\s*:|bottom\s*:|left\s*:/u);
@@ -1113,6 +1214,20 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
     );
     assert.equal(scrollOptions[0].block, 'nearest');
 
+    state.onboardingStepStage = 'practice';
+    state.onboardingPracticeBackButton = {
+        hidden: false,
+        getBoundingClientRect: () => ({ top: 450 }),
+    };
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(
+            state,
+            { nearestOnly: true },
+        ),
+        true,
+    );
+    assert.equal(scrollOptions[1].block, 'center');
+
     assert.equal(
         DevToolsWindow.prototype.focusOnboardingTarget.call(
             state,
@@ -1120,10 +1235,40 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         ),
         true,
     );
-    assert.equal(scrollOptions[1].block, 'start');
+    assert.equal(scrollOptions[2].block, 'start');
     assert.deepEqual(focusOptions, [{ preventScroll: true }]);
     assert.equal(classNames.has('is-locating'), true);
     clearTimeout(state.onboardingLocateTimer);
+});
+
+test('viewport resizing measures clearance before refocusing and repositioning', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const constructor = sourceBlock(
+        ui,
+        '\n    constructor({',
+        '\n    activeTimeline()',
+    );
+    const close = sourceBlock(ui, '\n    closeOnboarding(', '\n    beginOnboardingPractice()');
+    const begin = sourceBlock(ui, '\n    beginOnboardingPractice()', '\n    nextOnboardingStep()');
+
+    assert.match(
+        constructor,
+        /onboardingViewportResizeHandler = \(\) => \{[\s\S]*?scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u,
+    );
+    assert.match(begin, /addEventListener\?\.\([\s\S]*?'resize',[\s\S]*?onboardingViewportResizeHandler/u);
+    assert.match(close, /removeEventListener\?\.\([\s\S]*?'resize',[\s\S]*?onboardingViewportResizeHandler/u);
+
+    const schedule = sourceBlock(
+        ui,
+        '\n    scheduleOnboardingGuidePosition(',
+        '\n    positionOnboardingGuide()',
+    );
+    assert.match(schedule, /\{ refocus = false \} = \{\}/u);
+    assert.match(schedule, /if \(refocus\) this\.onboardingRefocusAfterPosition = true/u);
+    assert.match(
+        schedule,
+        /this\.positionOnboardingGuide\(\);[\s\S]*?if \(shouldRefocus\)[\s\S]*?focusOnboardingTarget\(\{ nearestOnly: true, focus: false \}\)[\s\S]*?this\.positionOnboardingGuide\(\)/u,
+    );
 });
 
 test('target descriptions are stage-specific and temporary tabindex is restored exactly', () => {
@@ -1263,8 +1408,12 @@ test('coachmarks use a panel-free overlay with mobile-safe icon navigation', asy
         /\.st-devtools-onboarding-guide-body,[\s\S]*?overflow:\s*visible/u,
     );
     assert.doesNotMatch(body, /overflow-y:\s*auto/u);
-    assert.match(actions, /bottom:\s*max\(1rem, env\(safe-area-inset-bottom\)\)/u);
-    assert.match(actions, /grid-template-columns:\s*minmax\(0, 1fr\) 52px/u);
+    assert.match(actions, /bottom:\s*var\(--st-devtools-onboarding-nav-clearance, 76px\)/u);
+    assert.match(actions, /grid-template-columns:\s*52px minmax\(0, 1fr\) 52px/u);
+    assert.match(
+        style,
+        /\.st-devtools-window\.is-onboarding-practice \.st-devtools-content\s*\{[\s\S]*?padding-bottom:[\s\S]*?--st-devtools-onboarding-nav-clearance/u,
+    );
     assert.match(coachmarkStyle, /min-width:\s*52px[\s\S]*?min-height:\s*44px/u);
     assert.match(coachmarkStyle, /@container \(max-width: 520px\)/u);
 });

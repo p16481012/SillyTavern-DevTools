@@ -6932,6 +6932,23 @@
         height 150ms ease;
 }
 
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-spotlight {
+    box-shadow:
+        0 0 0 4px #facc15,
+        0 0 22px rgb(250 204 21 / 58%);
+}
+
+.st-devtools-window.is-onboarding-practice .st-devtools-content {
+    box-sizing: border-box;
+    padding-bottom: calc(
+        var(--st-devtools-onboarding-nav-clearance, 76px) + 70px
+    );
+    scroll-padding-block-end: calc(
+        var(--st-devtools-onboarding-nav-clearance, 76px) + 70px
+    );
+}
+
 .st-devtools-onboarding-guide-panel {
     position: absolute;
     inset: 0;
@@ -7102,11 +7119,11 @@
 .st-devtools-onboarding-guide-actions {
     position: absolute;
     right: 1rem;
-    bottom: max(1rem, env(safe-area-inset-bottom));
+    bottom: var(--st-devtools-onboarding-nav-clearance, 76px);
     left: 1rem;
     z-index: 6;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 52px;
+    grid-template-columns: 52px minmax(0, 1fr) 52px;
     align-items: center;
     gap: 0.75rem;
     padding: 0;
@@ -7153,6 +7170,18 @@
     color: #171717 !important;
 }
 
+.st-devtools-window .st-devtools-onboarding-nav-back,
+.st-devtools-window .st-devtools-onboarding-practice-back {
+    border-color: rgb(255 255 255 / 86%) !important;
+    background: rgb(3 7 18 / 74%) !important;
+    color: #fff !important;
+}
+
+.st-devtools-window .st-devtools-onboarding-round-button:disabled {
+    opacity: 0.38 !important;
+    cursor: default !important;
+}
+
 .st-devtools-window
 .st-devtools-onboarding-guide-actions
 > .st-devtools-onboarding-round-button {
@@ -7174,7 +7203,7 @@
     display: none !important;
 }
 
-.st-devtools-window .st-devtools-onboarding-round-button:hover,
+.st-devtools-window .st-devtools-onboarding-round-button:not(:disabled):hover,
 .st-devtools-window .st-devtools-onboarding-round-button:focus-visible {
     transform: scale(1.06);
     outline: 3px solid rgb(255 255 255 / 32%) !important;
@@ -7280,9 +7309,25 @@
     background: rgb(3 7 18 / 74%) !important;
 }
 
+.st-devtools-window .st-devtools-onboarding-practice-back {
+    position: absolute;
+    bottom: var(--st-devtools-onboarding-nav-clearance, 76px);
+    left: 0.75rem;
+    z-index: 7;
+    width: 46px !important;
+    min-width: 46px !important;
+    max-width: 46px !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    max-height: 46px !important;
+}
+
 .st-devtools-window
 .st-devtools-onboarding-guide-panel
 > .st-devtools-onboarding-exit.st-devtools-onboarding-round-button,
+.st-devtools-window
+.st-devtools-onboarding-guide
+> .st-devtools-onboarding-practice-back.st-devtools-onboarding-round-button,
 .st-devtools-window
 .st-devtools-onboarding-guide
 > .st-devtools-onboarding-practice-exit.st-devtools-onboarding-round-button {
@@ -7300,6 +7345,9 @@
 .st-devtools-window
 .st-devtools-onboarding-guide-panel
 > .st-devtools-onboarding-exit[hidden],
+.st-devtools-window
+.st-devtools-onboarding-guide
+> .st-devtools-onboarding-practice-back[hidden],
 .st-devtools-window
 .st-devtools-onboarding-guide
 > .st-devtools-onboarding-practice-exit[hidden] {
@@ -7361,7 +7409,7 @@
     }
 
     .st-devtools-onboarding-guide-actions {
-        grid-template-columns: minmax(0, 1fr) 50px;
+        grid-template-columns: 50px minmax(0, 1fr) 50px;
     }
 
     .st-devtools-window .st-devtools-onboarding-round-button {

@@ -18,7 +18,7 @@ import { SnapshotStore } from './src/storage.js';
 import { DevToolsWindow } from './src/ui.js';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.15.7';
+const VERSION = '0.15.8';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',

@@ -1,4 +1,13 @@
-# v0.15.7 기술 구현 현황
+# v0.15.8 기술 구현 현황
+
+## v0.15.8 이전 이동·비교 spotlight 보정
+
+- 설명·결과 modal footer와 practice 화면에 같은 `previousOnboardingStep()`을 사용하는 이전 control을 둡니다. 첫 단계에서는 비활성화하고, 완료한 상호작용 단계로 돌아갈 때는 `debrief`, 아직 수행하지 않은 단계에서는 해당 entry stage로 복귀합니다.
+- 이전 이동이 실행 중인 연습 캡처를 벗어나면 timer와 대기를 취소하고 안전한 대기 상태로 되돌립니다. 종료 시 modal·practice 이전 control과 viewport listener도 함께 정리합니다.
+- `positionOnboardingGuide()`는 `.st-devtools-app-nav`의 실제 높이를 읽어 CSS 변수로 공유합니다. 이전·다음 control은 이 높이 위에 놓이고 본문에는 같은 값만큼 임시 하단 공간을 만들어 마지막 target도 control 뒤에 숨지 않습니다.
+- `focusOnboardingTarget()`은 practice 이전 control의 상단을 본문 가시 영역 하한으로 사용합니다. viewport 크기가 바뀌면 활성 target을 다시 보이는 위치로 옮긴 뒤 spotlight를 재계산합니다.
+- toggle practice는 interaction selector인 `<details>` 전체를 강조해 `.st-devtools-source-change { overflow: hidden; }` 안에서 summary outline이 잘리는 문제를 피합니다. 완료 debrief는 기존처럼 새로 펼쳐진 본문을 강조합니다.
+- 비교 결과의 비동기 렌더가 끝나면 현재 단계가 comparison인지 확인해 target을 다시 연결합니다. 320×640·390×844에서 6개 comparison 조작 target이 각각 하나이며 spotlight가 보이고 target·dock·이전 control이 겹치지 않음을 검증했습니다.
 
 ## v0.15.7 직접 체험 진입·이벤트 판정 보정
 

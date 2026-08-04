@@ -997,6 +997,7 @@ export class DevToolsWindow {
         this.onboardingPracticeDock = null;
         this.onboardingPracticeCopy = null;
         this.onboardingPracticeActions = null;
+        this.onboardingPracticeBackButton = null;
         this.onboardingPracticeExitButton = null;
         this.onboardingWorkspace = null;
         this.onboardingProgress = null;
@@ -1022,9 +1023,13 @@ export class DevToolsWindow {
         this.onboardingTargetAddedTabIndex = false;
         this.onboardingLocateTimer = null;
         this.onboardingGuidePositionFrame = null;
+        this.onboardingRefocusAfterPosition = false;
         this.onboardingTargetResizeObserver = null;
         this.onboardingGuideRepositionHandler = () => {
             this.scheduleOnboardingGuidePosition();
+        };
+        this.onboardingViewportResizeHandler = () => {
+            this.scheduleOnboardingGuidePosition({ refocus: true });
         };
         this.onboardingInteractionHandler = (event) => {
             this.handleOnboardingInteraction(event);
@@ -3607,6 +3612,19 @@ export class DevToolsWindow {
         const actions = element('footer', {
             className: 'st-devtools-onboarding-guide-actions',
         });
+        const back = element('button', {
+            className: 'menu_button st-devtools-onboarding-round-button st-devtools-onboarding-nav-back',
+            type: 'button',
+        });
+        back.setAttribute('aria-label', t('onboarding.back'));
+        back.title = t('onboarding.back');
+        const backIcon = element('span', {
+            className: 'st-devtools-button-glyph',
+            text: '\u2039',
+        });
+        backIcon.setAttribute('aria-hidden', 'true');
+        back.appendChild(backIcon);
+        back.addEventListener('click', () => this.previousOnboardingStep());
         const next = element('button', {
             className: 'menu_button st-devtools-primary-button st-devtools-onboarding-round-button st-devtools-onboarding-nav-next',
             type: 'button',
@@ -3618,7 +3636,7 @@ export class DevToolsWindow {
         nextIcon.setAttribute('aria-hidden', 'true');
         next.appendChild(nextIcon);
         next.addEventListener('click', () => this.nextOnboardingStep());
-        actions.append(progress, next);
+        actions.append(back, progress, next);
         panel.append(announcement, exit, body, actions);
 
         const practiceDock = element('section', {
@@ -3647,7 +3665,28 @@ export class DevToolsWindow {
         practiceExit.addEventListener('click', () => {
             this.closeOnboarding({ persist: 'skipped' });
         });
-        guide.append(blocker, spotlight, panel, practiceDock, practiceExit);
+        const practiceBack = element('button', {
+            className: 'menu_button st-devtools-onboarding-practice-back st-devtools-onboarding-round-button',
+            type: 'button',
+        });
+        practiceBack.hidden = true;
+        practiceBack.setAttribute('aria-label', t('onboarding.back'));
+        practiceBack.title = t('onboarding.back');
+        const practiceBackIcon = element('span', {
+            className: 'st-devtools-button-glyph',
+            text: '\u2039',
+        });
+        practiceBackIcon.setAttribute('aria-hidden', 'true');
+        practiceBack.appendChild(practiceBackIcon);
+        practiceBack.addEventListener('click', () => this.previousOnboardingStep());
+        guide.append(
+            blocker,
+            spotlight,
+            panel,
+            practiceDock,
+            practiceBack,
+            practiceExit,
+        );
         this.onboardingGuide = guide;
         this.onboardingBlocker = blocker;
         this.onboardingSpotlight = spotlight;
@@ -3658,6 +3697,7 @@ export class DevToolsWindow {
         this.onboardingPracticeDock = practiceDock;
         this.onboardingPracticeCopy = practiceCopy;
         this.onboardingPracticeActions = practiceActions;
+        this.onboardingPracticeBackButton = practiceBack;
         this.onboardingPracticeExitButton = practiceExit;
         this.onboardingProgress = progress;
         this.onboardingGroupName = null;
@@ -3666,7 +3706,7 @@ export class DevToolsWindow {
         this.onboardingProgressFill = null;
         this.onboardingAnnouncement = announcement;
         this.onboardingBody = body;
-        this.onboardingBackButton = null;
+        this.onboardingBackButton = back;
         this.onboardingNextButton = next;
         this.onboardingStepSkipButton = null;
         return guide;
@@ -3779,6 +3819,7 @@ export class DevToolsWindow {
             cancelFrame(this.onboardingGuidePositionFrame);
             this.onboardingGuidePositionFrame = null;
         }
+        this.onboardingRefocusAfterPosition = false;
         this.window?.removeEventListener('click', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('change', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('input', this.onboardingInteractionHandler, true);
@@ -3789,16 +3830,17 @@ export class DevToolsWindow {
         );
         globalThis.removeEventListener?.(
             'resize',
-            this.onboardingGuideRepositionHandler,
+            this.onboardingViewportResizeHandler,
         );
         globalThis.visualViewport?.removeEventListener?.(
             'resize',
-            this.onboardingGuideRepositionHandler,
+            this.onboardingViewportResizeHandler,
         );
         this.onboardingInvitationOverlay.hidden = true;
         this.onboardingGuide.hidden = true;
         this.onboardingGuidePanel.hidden = true;
         this.onboardingPracticeDock.hidden = true;
+        this.onboardingPracticeBackButton.hidden = true;
         this.onboardingPracticeExitButton.hidden = true;
         this.onboardingBlocker.hidden = true;
         this.onboardingSpotlight.hidden = true;
@@ -3877,12 +3919,12 @@ export class DevToolsWindow {
         );
         globalThis.addEventListener?.(
             'resize',
-            this.onboardingGuideRepositionHandler,
+            this.onboardingViewportResizeHandler,
             { passive: true },
         );
         globalThis.visualViewport?.addEventListener?.(
             'resize',
-            this.onboardingGuideRepositionHandler,
+            this.onboardingViewportResizeHandler,
             { passive: true },
         );
         this.updateCaptureStatus();
@@ -3907,10 +3949,17 @@ export class DevToolsWindow {
                     return this.closeOnboarding({ persist: 'completed' });
                 }
                 this.onboardingStepIndex += 1;
-                this.onboardingStepStage = onboardingEntryStage(
-                    ONBOARDING_STEPS[this.onboardingStepIndex],
+                const next = ONBOARDING_STEPS[this.onboardingStepIndex];
+                const nextCompleted = Boolean(
+                    this.onboardingSession.completedActions.has(next?.id),
                 );
-                this.onboardingStepComplete = false;
+                this.onboardingStepStage = next?.interaction && nextCompleted
+                    ? 'debrief'
+                    : onboardingEntryStage(next);
+                this.onboardingStepComplete = nextCompleted;
+                this.onboardingStepSkipped = Boolean(
+                    this.onboardingSession.skippedActions?.has(next?.id),
+                );
                 this.updateOnboardingView();
                 return true;
             }
@@ -3929,11 +3978,17 @@ export class DevToolsWindow {
             return this.closeOnboarding({ persist: 'completed' });
         }
         this.onboardingStepIndex += 1;
-        this.onboardingStepStage = onboardingEntryStage(
-            ONBOARDING_STEPS[this.onboardingStepIndex],
+        const next = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const nextCompleted = Boolean(
+            this.onboardingSession.completedActions.has(next?.id),
         );
-        this.onboardingStepComplete = false;
-        this.onboardingStepSkipped = false;
+        this.onboardingStepStage = next?.interaction && nextCompleted
+            ? 'debrief'
+            : onboardingEntryStage(next);
+        this.onboardingStepComplete = nextCompleted;
+        this.onboardingStepSkipped = Boolean(
+            this.onboardingSession.skippedActions?.has(next?.id),
+        );
         this.updateOnboardingView();
         return true;
     }
@@ -3941,11 +3996,6 @@ export class DevToolsWindow {
     previousOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
         if (this.onboardingPhase === 'invitation') return false;
-        if (this.onboardingStepStage === 'debrief') {
-            this.onboardingStepStage = 'practice';
-            this.updateOnboardingView();
-            return true;
-        }
         const current = ONBOARDING_STEPS[this.onboardingStepIndex];
         if (
             this.onboardingStepStage === 'practice'
@@ -3957,16 +4007,19 @@ export class DevToolsWindow {
             this.onboardingSession.capturePhase = 'awaiting-practice';
             this.updateCaptureStatus();
         }
-        if (this.onboardingStepStage === 'practice') {
-            this.onboardingStepStage = 'briefing';
-            this.updateOnboardingView();
-            return true;
-        }
-        if (this.onboardingStepStage !== 'briefing' || this.onboardingStepIndex <= 0) {
-            return false;
-        }
+        if (this.onboardingStepIndex <= 0) return false;
         this.onboardingStepIndex -= 1;
-        this.onboardingStepStage = 'debrief';
+        const previous = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const previousCompleted = Boolean(
+            this.onboardingSession.completedActions.has(previous?.id),
+        );
+        this.onboardingStepStage = previous?.interaction && previousCompleted
+            ? 'debrief'
+            : onboardingEntryStage(previous);
+        this.onboardingStepComplete = previousCompleted;
+        this.onboardingStepSkipped = Boolean(
+            this.onboardingSession.skippedActions?.has(previous?.id),
+        );
         this.updateOnboardingView();
         return true;
     }
@@ -4098,10 +4151,14 @@ export class DevToolsWindow {
             this.syncOnboardingModalState(modalStage);
             this.onboardingGuidePanel.hidden = !modalStage;
             this.onboardingPracticeDock.hidden = modalStage;
+            this.onboardingPracticeBackButton.hidden = modalStage;
             this.onboardingPracticeExitButton.hidden = modalStage;
             this.onboardingBlocker.hidden = !modalStage;
             this.onboardingSpotlight.hidden = true;
             this.onboardingGuide.classList.remove('has-onboarding-spotlight');
+            const canGoBack = this.onboardingStepIndex > 0;
+            this.onboardingBackButton.disabled = !canGoBack;
+            this.onboardingPracticeBackButton.disabled = !canGoBack;
             const nextLabel = this.onboardingStepStage === 'briefing' && step.interaction
                 ? t('onboarding.startPractice')
                 : this.onboardingStepIndex === ONBOARDING_STEPS.length - 1
@@ -4159,7 +4216,7 @@ export class DevToolsWindow {
                 if (!targetAvailable) {
                     this.onboardingPracticeDock?.focus({ preventScroll: true });
                 }
-                this.scheduleOnboardingGuidePosition();
+                this.scheduleOnboardingGuidePosition({ refocus: true });
             } else {
                 this.scheduleOnboardingGuidePosition();
                 this.onboardingGuidePanel?.focus({ preventScroll: true });
@@ -4702,6 +4759,12 @@ export class DevToolsWindow {
             ? this.window?.querySelector(step.target)
             : null;
         if (
+            this.onboardingStepStage === 'practice'
+            && step?.interaction?.event === 'toggle'
+        ) {
+            return this.window?.querySelector(step.interaction.selector) ?? fallback;
+        }
+        if (
             this.onboardingStepStage !== 'debrief'
             || step?.interaction?.event !== 'toggle'
             || step.interaction.state !== 'open'
@@ -4761,21 +4824,32 @@ export class DevToolsWindow {
 
     focusOnboardingTarget({ nearestOnly = false, focus = false } = {}) {
         const target = this.onboardingTarget;
-        const viewport = this.content?.contains(target) ? this.content : this.window;
+        const targetInContent = Boolean(this.content?.contains(target));
+        const viewport = targetInContent ? this.content : this.window;
         const viewportRect = viewport?.getBoundingClientRect?.();
         const targetRect = target?.getBoundingClientRect?.();
         if (!target || !viewportRect || !targetRect) return false;
         const inset = 12;
+        const practiceBackRect = targetInContent
+            && this.onboardingStepStage === 'practice'
+            && !this.onboardingPracticeBackButton?.hidden
+            ? this.onboardingPracticeBackButton?.getBoundingClientRect?.()
+            : null;
+        const visibleBottom = practiceBackRect?.top
+            ? Math.min(viewportRect.bottom - inset, practiceBackRect.top - inset)
+            : viewportRect.bottom - inset;
         const fullyVisible = (
             targetRect.top >= viewportRect.top + inset
             && targetRect.right <= viewportRect.right - inset
-            && targetRect.bottom <= viewportRect.bottom - inset
+            && targetRect.bottom <= visibleBottom
             && targetRect.left >= viewportRect.left + inset
         );
         if (!nearestOnly || !fullyVisible) {
             target.scrollIntoView?.({
                 block: nearestOnly
-                    ? 'nearest'
+                    ? targetInContent && practiceBackRect
+                        ? 'center'
+                        : 'nearest'
                     : this.content?.contains(target)
                         ? 'start'
                         : 'center',
@@ -4810,8 +4884,9 @@ export class DevToolsWindow {
         return true;
     }
 
-    scheduleOnboardingGuidePosition() {
+    scheduleOnboardingGuidePosition({ refocus = false } = {}) {
         if (!this.tutorialIsActive()) return false;
+        if (refocus) this.onboardingRefocusAfterPosition = true;
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
             cancelFrame(this.onboardingGuidePositionFrame);
@@ -4820,7 +4895,16 @@ export class DevToolsWindow {
             ?? ((callback) => setTimeout(callback, 0));
         this.onboardingGuidePositionFrame = requestFrame(() => {
             this.onboardingGuidePositionFrame = null;
+            const shouldRefocus = Boolean(
+                this.onboardingRefocusAfterPosition
+                && this.onboardingStepStage === 'practice'
+            );
+            this.onboardingRefocusAfterPosition = false;
             this.positionOnboardingGuide();
+            if (shouldRefocus) {
+                this.focusOnboardingTarget({ nearestOnly: true, focus: false });
+                this.positionOnboardingGuide();
+            }
         });
         return true;
     }
@@ -4837,6 +4921,21 @@ export class DevToolsWindow {
             : this.onboardingGuideBody;
         const rawTargetRect = this.onboardingTarget?.getBoundingClientRect?.();
         const windowRect = this.window?.getBoundingClientRect?.();
+        const navigationRect = this.window
+            ?.querySelector?.('.st-devtools-app-nav')
+            ?.getBoundingClientRect?.();
+        const navigationClearance = Math.max(
+            76,
+            Math.ceil(Number(navigationRect?.height) || 0) + 12,
+        );
+        this.onboardingGuide.style.setProperty(
+            '--st-devtools-onboarding-nav-clearance',
+            `${navigationClearance}px`,
+        );
+        this.window.style.setProperty(
+            '--st-devtools-onboarding-nav-clearance',
+            `${navigationClearance}px`,
+        );
         const targetViewportRect = this.content?.contains?.(this.onboardingTarget)
             ? this.content?.getBoundingClientRect?.()
             : windowRect;
@@ -4895,19 +4994,14 @@ export class DevToolsWindow {
         );
         const right = left + spotlightWidth;
         const bottom = top + spotlightHeight;
-        if (isPractice) {
-            this.onboardingSpotlight.hidden = true;
-            this.onboardingGuide.classList.remove('has-onboarding-spotlight');
-        } else {
-            Object.assign(this.onboardingSpotlight.style, {
-                left: `${left}px`,
-                top: `${top}px`,
-                width: `${spotlightWidth}px`,
-                height: `${spotlightHeight}px`,
-            });
-            this.onboardingSpotlight.hidden = false;
-            this.onboardingGuide.classList.add('has-onboarding-spotlight');
-        }
+        Object.assign(this.onboardingSpotlight.style, {
+            left: `${left}px`,
+            top: `${top}px`,
+            width: `${spotlightWidth}px`,
+            height: `${spotlightHeight}px`,
+        });
+        this.onboardingSpotlight.hidden = false;
+        this.onboardingGuide.classList.add('has-onboarding-spotlight');
         const calloutRect = callout?.getBoundingClientRect?.();
         const calloutWidth = Math.min(
             Math.max(0, windowRect.width - 32),
@@ -4917,7 +5011,7 @@ export class DevToolsWindow {
         const margin = 16;
         const pointerGap = 32;
         const reservedTop = 58;
-        const reservedBottom = isPractice ? 18 : 82;
+        const reservedBottom = navigationClearance + 70;
         const topSpace = top - reservedTop;
         const bottomSpace = windowRect.height - bottom - reservedBottom;
         const placement = (
@@ -8347,6 +8441,14 @@ export class DevToolsWindow {
                         changed: [],
                     },
                 );
+                if (this.tutorialIsActive()) {
+                    queueMicrotask(() => {
+                        if (this.currentOnboardingStep()?.tabId === 'diff') {
+                            this.refreshOnboardingTarget();
+                            this.scheduleOnboardingGuidePosition({ refocus: true });
+                        }
+                    });
+                }
             } catch (error) {
                 if (
                     controller.signal.aborted

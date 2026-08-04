@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.15.7의 직접 체험형 coachmark hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.15.8의 직접 체험형 coachmark hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -12,7 +12,7 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩의 view-session 격리 경계
 
-v0.15.7의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적하고 JSON·XML은 해당 원문을 처음 읽는 단계에서 구체 사례로 소개합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다.
+v0.15.8의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적하고 JSON·XML은 해당 원문을 처음 읽는 단계에서 구체 사례로 소개합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 논리 단계 단위로 이동하며 이미 완료한 상호작용은 debrief로 복귀합니다.
 
 `src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개를 정의합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다. 따라서 실제 제품 renderer·control과 로컬 정적 rules/diff/search 경로를 그대로 사용하면서 live `timeline`·`selectedId`·`activeTab`은 바꾸지 않습니다.
 
@@ -309,7 +309,7 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 
 설정 모달은 열 때 입력칸을 자동 focus하지 않고 패널 컨테이너로 focus를 옮기며 기존 focus trap·복원 경계를 유지합니다. 상단 닫기 버튼, 바로 보이는 자주 쓰는 설정과 접힌 고급 설정을 유지하고 테마 선택은 해당 preference만 즉시 저장합니다. AI opt-in·연결 프로필·응답 상한은 규칙 검사 화면의 AI 모드에서 변경하며 대상 선택·미리보기·호출별 동의 전에는 네트워크 경로를 열지 않습니다. 규칙·비교 정책 설정은 제목의 설정 버튼이 여는 별도 dialog에 렌더링합니다. 430px 이하의 프롬프트 비교는 같은 diff 데이터를 간결한 표로 재배치하며 분석 결과나 비교 의미를 바꾸지 않습니다.
 
-v0.15.7의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. 읽기 전용 briefing은 dim·target ring·점선 화살표와 두 개의 짧은 설명을, interactive practice는 밝은 실제 화면에서 기능 의미·사용 맥락·할 일과 DOM control을 한 번에, debrief는 녹색 result ring·성공 문구·관찰 결과를 제공합니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
+v0.15.8의 선택형 hands-on 실습은 위 정보 구조에 분리 더미 view session을 연결하고 실제 control로 캡처와 다섯 화면을 연습하게 합니다. 읽기 전용 briefing은 dim·target ring·점선 화살표와 두 개의 짧은 설명을, interactive practice는 밝은 실제 화면에서 기능 의미·사용 맥락·할 일과 DOM control을 한 번에, debrief는 녹색 result ring·성공 문구·관찰 결과를 제공합니다. 하단 기능 내비게이션의 측정 높이를 이전·다음 위치와 본문 scroll 여백에 공유하고 comparison disclosure는 practice에서 카드 전체를 강조합니다. 빠른 시작과 tooltip은 hands-on 실습을 대체하지 않고 각 화면에서 필요한 짧은 보조 설명으로 유지합니다.
 
 ## 내부 고대비 테마와 호스트 격리
 
