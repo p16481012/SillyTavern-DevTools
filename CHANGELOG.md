@@ -1,5 +1,20 @@
 # 변경 기록
 
+## 0.15.4 - 2026-08-04
+
+### briefing → practice → debrief 실습 흐름
+
+- 38개 단계 내내 공간을 차지하던 v0.15.3 guided rail을 제거하고 각 단계를 `briefing → practice → debrief` 3개 phase로 전환
+- briefing에서는 화면을 dim 처리하고 실제 target만 spotlight로 드러낸 뒤 이번 단계의 목적과 짧은 설명을 먼저 전달
+- practice에서는 dim·modal 차단을 모두 해제하고 실제 화면과 compact task dock만 남겨 사용자가 button·input·select·disclosure `summary`를 직접 조작하도록 변경
+- 정확한 연습 동작 뒤 debrief에서 다시 target을 spotlight하고 방금 확인된 결과·의미·다음 조사와 연결되는 추가 설명을 표시
+- 모바일의 190~260px 고정 rail 높이 제한을 제거하고 320px·390px 폭에서 내용만큼 커지되 viewport 안에 머무는 responsive auto-height sheet로 교체
+- target이 없거나 늦게 나타나는 단계도 전체 dim을 유지하고, target과 설명 sheet가 겹치지 않도록 가용 공간을 계산하며 스크롤·화면 크기·글꼴 로딩 뒤에도 spotlight 위치를 다시 맞춤
+- 헤더 캡처 상태에 색상 점뿐 아니라 짧은 copy와 pill을 함께 표시해 `대기 → 감지 → 저장 중 → 저장됨` 전환을 색에 의존하지 않고 확인 가능
+- briefing·debrief와 첫 초대의 modal·`inert`·focus trap/복원 경계, practice의 실제 control 접근성, 종료 시 원래 focus 복구를 phase별로 분리
+- 기존 6개 주제·38단계, JSON → XML 사건 흐름, 920·1,080·1,248 토큰 fixture와 실제 snapshot store·provider·Semantic Inspector·clipboard·export 비접근 계약 유지
+- 새 학습 흐름을 다시 제안할 수 있도록 최소 온보딩 상태 키를 `st-devtools:onboarding:v4`로 갱신하고 건너뛰기·완료만 저장
+
 ## 0.15.3 - 2026-08-04
 
 ### guided learning rail 전면 재설계

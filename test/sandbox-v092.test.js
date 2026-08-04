@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.15.3 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.15.4 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.15.3 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.15\.3'/);
+    assert.match(harness, /extensionVersion:\s*'0\.15\.4'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.15\.3'/);
+    assert.match(harness, /version:\s*'0\.15\.4'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -89,12 +89,35 @@ test('v0.15.3 sandbox exposes every browser review fixture deterministically', a
         /startOnboarding\(\{\s*invitation:\s*false,\s*force:\s*true\s*\}\)/,
     );
     assert.match(harness, /skipStep\(\)/);
+    assert.match(harness, /enterPractice\(\)/);
+    assert.match(harness, /acknowledge\(\)/);
     assert.match(harness, /performCurrentAction:\s*performSandboxOnboardingAction/);
     assert.match(harness, /isolationStatus:\s*sandboxOnboardingIsolationStatus/);
-    assert.match(
-        harness,
-        /function sandboxOnboardingStatus\(\)[\s\S]*?phase:[\s\S]*?stepId:[\s\S]*?group:[\s\S]*?index:[\s\S]*?complete:[\s\S]*?target:[\s\S]*?tab:[\s\S]*?selectedId:[\s\S]*?timelineCount:[\s\S]*?captureState:/,
+    const onboardingStatus = harness.slice(
+        harness.indexOf('function sandboxOnboardingStatus()'),
+        harness.indexOf('function sandboxOnboardingIsolationStatus()'),
     );
+    for (const field of [
+        'phase',
+        'stepStage',
+        'stepId',
+        'group',
+        'index',
+        'complete',
+        'target',
+        'guideVisible',
+        'guidePanelVisible',
+        'primaryRegionsInert',
+        'spotlightVisible',
+        'practiceDockVisible',
+        'tab',
+        'selectedId',
+        'timelineCount',
+        'captureState',
+    ]) {
+        assert.match(onboardingStatus, new RegExp(`\\b${field}:`));
+    }
+    assert.match(harness, /interaction\.event === 'panel'[\s\S]*?devTools\.onboardingPracticeDock/);
     assert.match(harness, /interaction\.event === 'click' \|\| interaction\.event === 'panel'/);
     assert.match(harness, /new Event\(interaction\.event,\s*\{/);
     assert.match(harness, /new Event\('toggle',\s*\{\s*bubbles:\s*true\s*\}\)/);

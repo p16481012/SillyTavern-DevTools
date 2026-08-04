@@ -1,5 +1,5 @@
-export const ONBOARDING_VERSION = 3;
-export const ONBOARDING_STORAGE_KEY = 'st-devtools:onboarding:v3';
+export const ONBOARDING_VERSION = 4;
+export const ONBOARDING_STORAGE_KEY = 'st-devtools:onboarding:v4';
 
 const VALID_STATUSES = new Set(['new', 'skipped', 'completed']);
 const SCHEMA_VERSION = 1;

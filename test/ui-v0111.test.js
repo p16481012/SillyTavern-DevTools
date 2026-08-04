@@ -372,7 +372,7 @@ test('compact mobile layout skips restored geometry, persisted resize, and dragg
     );
     assert.match(
         observe,
-        /const save = \(\) => \{\s*if \(this\.usesCompactLayout\(\) \|\| this\.tutorialIsActive\(\)\) return;/u,
+        /const save = \(\) => \{\s*if \(this\.tutorialIsActive\(\)\) \{\s*this\.scheduleOnboardingGuidePosition\(\);\s*return;\s*\}\s*if \(this\.usesCompactLayout\(\)\) return;/u,
     );
     assert.match(
         dragging,

@@ -1,4 +1,15 @@
-# v0.15.3 기술 구현 현황
+# v0.15.4 기술 구현 현황
+
+## v0.15.4 briefing → practice → debrief 단계 흐름
+
+- v0.15.3의 항상 표시되는 guided rail을 제거하고 38개 단계 각각에 `briefing → practice → debrief` phase state를 둡니다.
+- briefing은 제품 화면을 dim하고 실제 target만 spotlight한 modal surface에서 목적·위치·짧은 설명을 제공합니다. debrief는 같은 시각 경계에서 감지된 결과와 의미·다음 조사 연결을 표시합니다.
+- practice는 dim·modal·`inert`를 해제하고 실제 제품 화면과 compact task dock만 유지합니다. 현재 단계와 관계없는 control도 사용할 수 있고 실제 button·input·select·disclosure `summary` 이벤트만 관찰해 완료를 판정합니다.
+- 첫 초대·briefing·debrief는 focus trap과 제품 영역 `inert`/`aria-hidden`을 사용하고, practice 진입과 이전·다음·건너뛰기·종료 때 phase별 focus를 정리하거나 시작 전 위치로 복구합니다.
+- 모바일의 190~260px rail clamp를 제거했습니다. 320px·390px 폭에서는 briefing·task dock·debrief를 내용 기반 auto-height sheet로 표시하고 viewport를 넘는 본문만 내부 스크롤합니다.
+- 캡처 상태는 색상 점과 함께 짧은 copy·pill을 표시하며 연습 session에서 `대기 → 감지 → 저장 중 → 저장됨` 순서가 눈에 보이도록 갱신합니다.
+- 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5의 6개 주제·38단계, JSON → XML 사건, 920·1,080·1,248 토큰 fixture는 유지합니다.
+- 현재 최소 상태 키는 `st-devtools:onboarding:v4`이고 `skipped` 또는 `completed`만 저장합니다. 실제 snapshot store·provider·Semantic Inspector·clipboard·export 비접근과 종료 시 live 상태 복구 계약도 유지합니다.
 
 ## v0.15.3 guided learning rail 전면 재설계
 
@@ -8,7 +19,7 @@
 - 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5의 6개 주제·38단계는 유지합니다. 전체 흐름은 `답변 형식이 JSON에서 XML로 바뀐 이유 찾기` 한 사건을 캡처부터 원본 검색까지 추적하도록 연결했습니다.
 - 단계 완료 감지는 click/change/input/toggle 이벤트를 관찰할 뿐 현재 단계와 관계없는 control을 비활성화하거나 click/focus를 차단하지 않습니다. 사용자는 분리 연습 session 안에서 다른 제품 화면도 안전하게 탐색할 수 있습니다.
 - target은 전체 카드가 아니라 실제 button·input·select 또는 disclosure의 직접 `summary`를 가리킵니다. rail의 `화면에서 보기`는 필요한 탭을 선택하고 target을 스크롤한 뒤 가능한 요소에 focus합니다.
-- 새 rail 제안을 한 번 표시할 수 있도록 현재 최소 상태 키는 `st-devtools:onboarding:v3`이며 `skipped` 또는 `completed`만 저장합니다.
+- 새 rail 제안을 한 번 표시할 수 있도록 당시 최소 상태 키를 `st-devtools:onboarding:v3`로 올렸고 `skipped` 또는 `completed`만 저장했습니다.
 - 920·1,080·1,248 토큰 fixture와 별도 mutable view session, 실제 snapshot store·provider·Semantic Inspector·clipboard·export 비접근, 종료 시 live 탭·선택·타임라인·캡처 상태 복구 계약을 유지합니다.
 
 ## v0.15.2 hands-on 안내 위치·가독성 안정화
@@ -356,12 +367,12 @@
 
 - 말투·안전 의미의 정적 atom·relation 양성/음성 경계를 과잉 탐지 없이 추가하는 분류 설계
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
-- 실제 초보자 검토에서 확인되는 rail의 장별 질문·할 일·완료 기준·예시 밀도 보정
+- 실제 초보자 검토에서 확인되는 briefing 길이·practice task dock·debrief 결과 설명과 모바일 sheet 밀도 보정
 
-선택형 온보딩의 기본 계약은 v0.15.1에서 완료했고 v0.15.2의 floating 안내 위치 보완은 v0.15.3에서 제품 레이아웃 안의 guided learning rail로 교체했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
+선택형 온보딩의 기본 계약은 v0.15.1에서 완료했고 v0.15.3의 고정 guided rail은 v0.15.4에서 단계별 briefing·practice·debrief 흐름으로 교체했습니다. hands-on 실습은 실제 제품 renderer와 control을 사용하지만 분리 더미 session만 조작하며 실제 store·provider·clipboard·export에는 접근하지 않습니다. Prompt Playground, Dependency Graph, Lore Trigger Simulator와 Extension Debug Panel은 현재 구현 범위가 아니며 특정 버전 완료 항목으로 약속하지 않습니다.
 
 ## 다음 구현 우선순위
 
 1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
 2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
-3. 온보딩은 실제 초보자 검토 뒤 rail 카피와 장 흐름을 보정하되 6개 주제·38단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.
+3. 온보딩은 실제 초보자 검토 뒤 briefing·practice·debrief 카피와 모바일 sheet 흐름을 보정하되 6개 주제·38단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.

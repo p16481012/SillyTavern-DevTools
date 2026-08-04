@@ -71,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.15.3',
+        extensionVersion: '0.15.4',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1450,7 +1450,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.15.3',
+    version: '0.15.4',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1661,7 +1661,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.15.3',
+        extensionVersion: '0.15.4',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1708,7 +1708,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.15.3',
+        version: '0.15.4',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1868,8 +1868,32 @@ function sandboxOnboardingStatus() {
         ? [...(devTools.window?.querySelectorAll(step.target) ?? [])]
         : [];
     const target = targetMatches[0] ?? null;
+    const primaryRegionStates = devTools.primaryRegions.map((region) => ({
+        inert: Boolean(region.inert),
+        ariaHidden: region.getAttribute?.('aria-hidden') === 'true',
+    }));
+    const guideVisible = Boolean(
+        devTools.onboardingGuide
+        && !devTools.onboardingGuide.hidden
+    );
+    const guidePanelVisible = Boolean(
+        guideVisible
+        && devTools.onboardingGuidePanel
+        && !devTools.onboardingGuidePanel.hidden
+    );
+    const spotlightVisible = Boolean(
+        guideVisible
+        && devTools.onboardingSpotlight
+        && !devTools.onboardingSpotlight.hidden
+    );
+    const practiceDockVisible = Boolean(
+        guideVisible
+        && devTools.onboardingPracticeDock
+        && !devTools.onboardingPracticeDock.hidden
+    );
     return {
         phase: devTools.onboardingPhase,
+        stepStage: devTools.onboardingStepStage,
         stepId: step?.id ?? null,
         group: step?.group ?? null,
         index: devTools.tutorialIsActive() ? devTools.onboardingStepIndex : null,
@@ -1883,16 +1907,27 @@ function sandboxOnboardingStatus() {
         targetState: {
             found: Boolean(target),
             count: targetMatches.length,
-            inRail: Boolean(target && devTools.onboardingRail?.contains(target)),
+            inGuide: Boolean(target && devTools.onboardingGuide?.contains(target)),
             describedByTask: target?.getAttribute?.('aria-describedby')
-                === 'st-devtools-onboarding-task',
+                === (devTools.onboardingStepStage === 'practice'
+                    ? 'st-devtools-onboarding-practice-copy'
+                    : 'st-devtools-onboarding-guide-body'),
         },
-        rail: {
-            mounted: Boolean(devTools.onboardingRail?.isConnected),
-            visible: Boolean(devTools.onboardingRail && !devTools.onboardingRail.hidden),
-            group: devTools.onboardingRail?.dataset?.group ?? null,
-            step: devTools.onboardingRail?.dataset?.step ?? null,
+        guide: {
+            mounted: Boolean(devTools.onboardingGuide?.isConnected),
+            visible: guideVisible,
+            panelVisible: guidePanelVisible,
+            group: devTools.onboardingGuide?.dataset?.group ?? null,
+            step: devTools.onboardingGuide?.dataset?.step ?? null,
+            stage: devTools.onboardingGuide?.dataset?.stage ?? null,
         },
+        guideVisible: guideVisible,
+        guidePanelVisible: guidePanelVisible,
+        primaryRegionsInert: primaryRegionStates.length > 0
+            && primaryRegionStates.every(({ inert, ariaHidden }) => inert && ariaHidden),
+        primaryRegionStates,
+        spotlightVisible: spotlightVisible,
+        practiceDockVisible: practiceDockVisible,
         invitationVisible: Boolean(
             devTools.onboardingInvitationOverlay
             && !devTools.onboardingInvitationOverlay.hidden
@@ -1967,7 +2002,7 @@ async function performSandboxOnboardingAction() {
     }
 
     const scope = interaction.event === 'panel'
-        ? devTools.onboardingRail
+        ? devTools.onboardingPracticeDock
         : devTools.window;
     const target = scope?.querySelector(interaction.selector) ?? null;
     if (!target) {
@@ -2039,6 +2074,15 @@ const sandboxOnboardingHook = Object.freeze({
     next() {
         const advanced = devTools.nextOnboardingStep();
         return { advanced, status: sandboxOnboardingStatus() };
+    },
+    enterPractice() {
+        const entered = devTools.onboardingStepStage === 'briefing'
+            && devTools.nextOnboardingStep();
+        return { entered: Boolean(entered), status: sandboxOnboardingStatus() };
+    },
+    acknowledge() {
+        const acknowledged = devTools.completePassiveOnboardingStep();
+        return { acknowledged, status: sandboxOnboardingStatus() };
     },
     back() {
         const moved = devTools.previousOnboardingStep();

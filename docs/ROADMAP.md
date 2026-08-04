@@ -1,10 +1,22 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.15.3 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.15.4 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.15.3은 기존 읽기 전용 탐색·복사·AI 동의 경계와 분리 더미 session의 6개 주제·38단계를 유지하면서 실습 표시 방식을 guided learning rail로 교체합니다. 첫 초대만 modal이고, 이후에는 데스크톱 side rail 또는 좁은 화면 top rail에서 `답변 형식이 JSON에서 XML로 바뀐 이유 찾기` 한 사건을 캡처부터 원본 검색까지 추적합니다. floating overlay·spotlight·geometry 추적이나 제품 control 차단은 사용하지 않습니다.
+v0.15.4는 기존 읽기 전용 탐색·복사·AI 동의 경계와 분리 더미 session의 6개 주제·38단계를 유지하면서 고정 guided rail을 단계별 `briefing → practice → debrief` 흐름으로 교체합니다. briefing에서 target과 목적을 짧게 확인하고, 밝아진 실제 화면과 compact task dock에서 직접 수행한 뒤, debrief에서 결과와 의미를 확인합니다. 모바일은 190~260px 높이 제한 없이 320px·390px에 맞는 auto-height sheet를 사용합니다.
+
+## v0.15.4 — 단계별 briefing·practice·debrief · 완료
+
+- 38개 단계에 briefing·practice·debrief phase를 적용하고 항상 표시되던 desktop side/mobile top rail 제거
+- briefing의 screen dim·실제 target spotlight·짧은 목적 설명과 debrief의 결과·추가 설명을 분리
+- practice에서 dim·modal·`inert`를 해제하고 compact task dock만 남겨 실제 control을 직접 조작
+- 정확한 click/change/input/toggle 관찰로 완료를 판정하되 현재 단계와 관계없는 control의 click/focus를 차단하지 않음
+- 320px·390px 모바일에서 190~260px clamp 대신 내용 기반 auto-height sheet와 viewport 초과 본문 스크롤 적용
+- 캡처 상태의 점·copy·pill로 `대기 → 감지 → 저장 중 → 저장됨` 전환을 색상 외 정보로 표시
+- 초대·briefing·debrief의 modal/inert/focus trap, practice의 interactive focus, 종료 시 시작 focus 복구 경계를 phase별로 분리
+- 기존 6개 주제·38단계·JSON → XML 사건·3개 fixture와 store/provider/clipboard/export 비접근 계약 유지
+- 최소 온보딩 상태 키를 `st-devtools:onboarding:v4`로 갱신하고 건너뛰기·완료만 저장
 
 ## v0.15.3 — guided learning rail 전면 재설계 · 완료
 
@@ -346,11 +358,11 @@ v0.12.0의 4개 그룹과 조건부 하위 탭은 실제 기능을 다시 숨기
 
 ## v0.15.x 후속 후보 — 온보딩 문구·동선 보정
 
-- 실제 초보자 검토에서 막히는 장의 질문·현재 할 일·완료 기준·예시 밀도와 side/top rail 흐름 보정
+- 실제 초보자 검토에서 막히는 단계의 briefing 길이·practice 할 일·debrief 결과 설명과 320px·390px sheet 밀도 보정
 - 제품 기능 추가 시 새 단계를 무조건 늘리지 않고 기존 6개 주제·38단계 중 가장 가까운 개념에 우선 편입
 - 실제 snapshot store·provider·clipboard·export 비변경, 종료 시 live view 복구와 최소 상태 저장 경계 유지
 
-guided learning rail은 프롬프트 원문이나 AI 전송을 자동 실행하지 않습니다.
+hands-on 흐름은 프롬프트 원문이나 AI 전송을 자동 실행하지 않습니다.
 
 ## 장기 후보 · 버전 미정
 
