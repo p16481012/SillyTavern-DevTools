@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.0의 도움말·격리 연습실과 직접 체험형 coachmark hands-on 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.1의 세 갈래 도움말 정보 구조와 직접 체험형 coachmark 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -10,19 +10,23 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
 
-### 도움말·연습실 경계
+### 세 갈래 도움말 경계
 
-`src/help-center.js`는 사용자 화면별 기능 문서와 두 연습실의 순수 상태 전이를 정의하고 `src/help-fixture.js`는 출력 언어 비교 정책과 AI 의미 검사의 결정적 더미 사례를 제공합니다. 상단 기존 안내 control은 `현재 화면`·`전체 기능`·`연습실`을 가진 하나의 modal dialog를 열며, 각 화면 제목의 별도 책 아이콘은 같은 registry의 상세 문서로 이동합니다. 짧은 `?` tooltip은 기억을 돕는 비대화형 설명으로 유지합니다.
+`src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다.
 
-비교 정책 연습은 이름 matcher·그룹 mode·적용 전후를 메모리의 `helpLabSession`에서만 바꿉니다. AI 의미 검사 연습은 선택·미리보기·동의·실행·완료 상태를 고정 응답과 짧은 UI timer로 재현하지만 `SemanticInspector`, Connection Manager, `fetch`, snapshot store, 실제 비교 정책 저장 함수를 호출하지 않습니다. dialog를 닫거나 다른 문서·연습으로 이동하면 timer를 취소하고 session을 버립니다. 최근 읽은 문서 ID만 별도 bounded localStorage key에 최대 3개 저장합니다.
+짧은 `?` tooltip은 기능을 다시 떠올릴 한두 문장과 텍스트형 `자세히 보기`만 포함합니다. `자세히 보기`는 별도의 창이나 중간 목록을 거치지 않고 같은 도움말 dialog의 해당 topic ID로 deep link합니다. 도움말을 닫으면 deep link를 연 실제 control로 focus를 복원합니다.
 
-도움말 dialog가 열리면 제품의 header·workspace·bottom navigation을 `inert`·`aria-hidden` 처리하고 dialog 안에서 focus를 순환합니다. Escape와 닫기는 timer와 격리 session을 정리하고 원래 focus를 복원합니다. 모바일은 dialog 전체 화면을 사용하며 고정 header 아래 `.st-devtools-help-body` 하나만 scroll owner입니다.
+고급 기능 가이드는 비교 정책과 AI 의미 검사를 별도 연습장 renderer로 복제하지 않고 실제 규칙 검사 화면과 같은 control·레이아웃 위에서 coachmark 단계로 실행합니다. 비교 정책은 고정 이름 규칙·대안 그룹·미리보기 결과를, AI 의미 검사는 고정 profile·prompt·prefill·동의·결과를 session 메모리에서만 전환합니다. `SemanticInspector`, Connection Manager, `fetch`, snapshot store, 실제 비교 정책 저장 함수와 비용 경로는 호출하지 않습니다.
+
+도움말 dialog가 열리면 제품의 header·workspace·bottom navigation을 `inert`·`aria-hidden` 처리하고 dialog 안에서 focus를 순환합니다. Escape와 닫기는 더미 session·timer를 정리하고 원래 focus를 복원합니다. 모바일은 dialog 전체 화면을 사용하며 고정 header 아래 `.st-devtools-help-body` 하나만 scroll owner입니다. 320px·390px, 밝음·어두움 테마와 keyboard focus에서 세 경로·문서 deep link·코치마크 control이 가로로 넘치거나 호스트 테마에 의해 변형되지 않는 것을 회귀 대상으로 둡니다.
 
 변경 비교는 렌더 시 저장된 비교 정책을 두 snapshot source에 다시 주석화합니다. 같은 source identity가 유지된 상태에서 내용·토큰·귀속·메타데이터 또는 alternative group·option 분류가 바뀌면 `changed`, 동일한 `alternative` group에서 기준과 비교 각각 활성 옵션이 정확히 하나이고 option도 서로 다르면 removed+added 한 쌍을 `replaced`로 결합합니다. 정책 누락, 동일 option, 다대다나 추가 활성 옵션처럼 모호한 경우에는 결합하지 않습니다.
 
-### hands-on 온보딩의 view-session 격리 경계
+### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.15.8의 온보딩은 `src/onboarding.js`에 캡처 3·전송 프롬프트 10·규칙 검사 7·기록 6·변경 비교 7·검색 5로 구성된 6개 주제·38단계를 고정합니다. ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적하고 JSON·XML은 해당 원문을 처음 읽는 단계에서 구체 사례로 소개합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 논리 단계 단위로 이동하며 이미 완료한 상호작용은 debrief로 복귀합니다.
+v0.16.1의 온보딩은 `src/onboarding.js`에 전체 38단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계입니다. 전체 안내도 같은 38단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+
+전체 안내만 첫 실행 상태의 `completed`·`skipped`를 기록합니다. 기능별 부분 투어와 고급 가이드는 독립 route로 실행하며 완료·중단·건너뛰기가 전역 온보딩 상태를 쓰거나 덮어쓰지 않습니다. 각 부분 투어는 필요한 snapshot 수·선택 항목·캡처 상태가 준비된 checkpoint에서 session을 만들기 때문에 중간 기능부터 시작해도 이전 장의 조작을 요구하지 않습니다.
 
 `src/onboarding-fixture.js`는 920·1,080·1,248 토큰의 immutable 스냅샷 3개를 정의합니다. `createOnboardingSession()`은 초기 두 스냅샷만 보이는 별도 mutable view state를 매번 만들고, 연습 캡처가 끝나면 세 번째 스냅샷을 그 session의 timeline에만 추가합니다. `DevToolsWindow`의 `activeTimeline()`·`activeSelectedId()`·`activeTabId()`·열림/필터 상태 접근자는 실습 중에만 이 session을 선택합니다. 따라서 실제 제품 renderer·control과 로컬 정적 rules/diff/search 경로를 그대로 사용하면서 live `timeline`·`selectedId`·`activeTab`은 바꾸지 않습니다.
 

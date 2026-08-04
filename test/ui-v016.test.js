@@ -8,6 +8,12 @@ import {
     createHelpLabSession,
     updateHelpLabSession,
 } from '../src/help-center.js';
+import {
+    ADVANCED_ONBOARDING_GUIDES,
+    BASIC_ONBOARDING_SECTIONS,
+    ONBOARDING_STEPS,
+} from '../src/onboarding.js';
+import { DevToolsWindow } from '../src/ui.js';
 
 const UI_URL = new URL('../src/ui.js', import.meta.url);
 const STYLE_URL = new URL('../style.css', import.meta.url);
@@ -68,15 +74,166 @@ test('help labs are deterministic memory-only state machines', () => {
     assert.strictEqual(semantic.isolation, comparison.isolation);
 });
 
-test('the existing help launcher opens one help hub instead of adding navigation', async () => {
+test('the existing book launcher opens the three-path help home', async () => {
     const ui = await readFile(UI_URL, 'utf8');
     const build = sourceBlock(ui, '\n    build() {', '\n    loadRecentHelpTopics() {');
 
     assert.match(build, /fa-book-open/u);
-    assert.match(build, /this\.openHelpCenter\(\{ view: 'current' \}\)/u);
+    assert.match(build, /this\.openHelpCenter\(\{ view: 'home' \}\)/u);
     assert.match(build, /this\.buildHelpCenter\(\)/u);
     assert.doesNotMatch(build, /startOnboarding\(\{ invitation: true, force: true \}\)/u);
     assert.equal((build.match(/className: 'st-devtools-app-nav-item'/gu) ?? []).length, 1);
+});
+
+test('help home separates basic usage, advanced coachmarks, and detailed docs', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const home = sourceBlock(
+        ui,
+        '\n    renderHelpHome() {',
+        '\n    renderBasicHelpIndex() {',
+    );
+    const basic = sourceBlock(
+        ui,
+        '\n    renderBasicHelpIndex() {',
+        '\n    renderAdvancedHelpIndex() {',
+    );
+    const advanced = sourceBlock(
+        ui,
+        '\n    renderAdvancedHelpIndex() {',
+        '\n    renderHelpDocsIndex() {',
+    );
+    const docs = sourceBlock(
+        ui,
+        '\n    renderHelpDocsIndex() {',
+        '\n    renderHelpHub() {',
+    );
+
+    assert.match(home, /title: '기본 사용법'/u);
+    assert.match(home, /title: '고급 기능 가이드'/u);
+    assert.match(home, /title: '기능 설명서'/u);
+    assert.doesNotMatch(home, /현재 화면|연습실/u);
+    assert.match(basic, /BASIC_ONBOARDING_SECTIONS/u);
+    assert.match(basic, /section\.steps\.length/u);
+    assert.match(basic, /sectionId: section\.id/u);
+    assert.match(advanced, /ADVANCED_ONBOARDING_GUIDES/u);
+    assert.match(advanced, /kind: 'advanced'/u);
+    assert.doesNotMatch(advanced, /startHelpLab/u);
+    assert.match(docs, /HELP_CATEGORIES/u);
+    assert.match(docs, /helpTopicsFor/u);
+});
+
+test('basic sections cover the complete walkthrough once in the requested order', () => {
+    assert.deepEqual(
+        BASIC_ONBOARDING_SECTIONS.map(({ id }) => id),
+        ['prompt', 'timeline', 'diff', 'rules', 'search'],
+    );
+    assert.deepEqual(
+        BASIC_ONBOARDING_SECTIONS.map(({ steps }) => steps.length),
+        [13, 6, 7, 7, 5],
+    );
+    const stepIds = BASIC_ONBOARDING_SECTIONS.flatMap(({ steps }) => (
+        steps.map(({ id }) => id)
+    ));
+    assert.equal(stepIds.length, ONBOARDING_STEPS.length);
+    assert.equal(new Set(stepIds).size, ONBOARDING_STEPS.length);
+});
+
+test('advanced entries are coachmark step collections with no provider action', async () => {
+    assert.deepEqual(
+        ADVANCED_ONBOARDING_GUIDES.map(({ id }) => id),
+        ['comparison-policy', 'semantic-ai'],
+    );
+    assert.ok(ADVANCED_ONBOARDING_GUIDES.every(({ steps }) => steps.length >= 5));
+    const ui = await readFile(UI_URL, 'utf8');
+    const comparison = sourceBlock(
+        ui,
+        '\n    renderAdvancedComparisonGuide() {',
+        '\n    renderAdvancedSemanticGuide() {',
+    );
+    const semantic = sourceBlock(
+        ui,
+        '\n    renderAdvancedSemanticGuide() {',
+        '\n    renderAdvancedOnboardingGuide() {',
+    );
+    const forbidden = /fetch\(|semanticInspector\.|startSemanticInspection|saveUiPreferences|localStorage/u;
+    assert.doesNotMatch(comparison, forbidden);
+    assert.doesNotMatch(semantic, forbidden);
+    assert.match(semantic, /실제 제공자 요청과 비용은 발생하지 않습니다/u);
+});
+
+test('section and advanced routes cannot overwrite global onboarding completion', () => {
+    const basic = {};
+    assert.equal(DevToolsWindow.prototype.configureOnboardingRoute.call(basic, {
+        kind: 'basic',
+        sectionId: 'timeline',
+    }), true);
+    assert.equal(basic.onboardingPersistCompletion, false);
+    assert.equal(basic.onboardingPersistSkip, false);
+    assert.equal(basic.onboardingCheckpoint, 'timeline');
+    assert.equal(basic.onboardingSteps.length, 6);
+
+    const advanced = {};
+    assert.equal(DevToolsWindow.prototype.configureOnboardingRoute.call(advanced, {
+        kind: 'advanced',
+        guideId: 'semantic-ai',
+    }), true);
+    assert.equal(advanced.onboardingPersistCompletion, false);
+    assert.equal(advanced.onboardingPersistSkip, false);
+    assert.equal(advanced.onboardingCheckpoint, 'advanced');
+
+    const full = {};
+    assert.equal(DevToolsWindow.prototype.configureOnboardingRoute.call(full), true);
+    assert.equal(full.onboardingPersistCompletion, true);
+    assert.equal(full.onboardingPersistSkip, true);
+    assert.strictEqual(full.onboardingSteps, ONBOARDING_STEPS);
+});
+
+test('tooltip details are text deep links inside the short tooltip', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const tooltip = sourceBlock(ui, '\nfunction helpTooltip(', '\nfunction snapshotProviderDisplay(');
+    const title = sourceBlock(ui, '\nfunction explainedTitle(', '\nfunction describedControlField(');
+    assert.match(tooltip, /text: '자세히 보기'/u);
+    assert.match(tooltip, /details\.dataset\.helpTopic = helpTopicId/u);
+    assert.match(title, /helpTooltip\(description, title, \{ helpTopicId \}\)/u);
+    assert.doesNotMatch(title, /fa-book-open/u);
+});
+
+test('help-started guides return to their index and legacy lab state cannot replace home', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const open = sourceBlock(ui, '\n    openHelpCenter(', '\n    closeHelpCenter(');
+    const closeGuide = sourceBlock(
+        ui,
+        '\n    closeOnboarding(',
+        '\n    beginOnboardingPractice()',
+    );
+    const closeWindow = sourceBlock(ui, '\n    close() {', '\n    build() {');
+
+    assert.match(open, /this\.helpLabSession = null/u);
+    assert.match(closeGuide, /helpReturnView && returnToHelp/u);
+    assert.match(closeGuide, /this\.openHelpCenter\(\{ view: helpReturnView \}\)/u);
+    assert.match(closeWindow, /returnToHelp: false/u);
+});
+
+test('advanced coachmarks keep the rules screen isolated from real settings', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const style = await readFile(STYLE_URL, 'utf8');
+    const selectTab = sourceBlock(ui, '\n    selectTab(', '\n    render() {');
+    assert.match(selectTab, /this\.onboardingKind === 'advanced'/u);
+    assert.match(selectTab, /nextTab !== 'rules'/u);
+    assert.match(style, /\.st-devtools-window \.st-devtools-icon-button\[hidden\][\s\S]*?display:\s*none !important/u);
+});
+
+test('new detailed documents are reachable from related tooltip deep links', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    for (const topicId of [
+        'request-details',
+        'diff-statuses',
+        'rule-v3-structure',
+        'semantic-provider-evaluation',
+        'storage-data-tools',
+    ]) {
+        assert.match(ui, new RegExp(`helpTopicId: '${topicId}'`, 'u'));
+    }
 });
 
 test('help dialog owns focus, Escape, and timer cancellation', async () => {
@@ -143,7 +300,7 @@ test('source comparison annotates saved policies and renders option replacement'
     assert.match(sourceChanges, /diff\.optionChangeDescription/u);
 });
 
-test('sandbox exposes help flows and verifies storage/provider isolation', async () => {
+test('sandbox exposes all three help paths and verifies storage/provider isolation', async () => {
     const sandbox = await readFile(SANDBOX_URL, 'utf8');
     const hook = sourceBlock(
         sandbox,
@@ -151,8 +308,9 @@ test('sandbox exposes help flows and verifies storage/provider isolation', async
         '\n\nconst sandboxApi = {',
     );
     assert.match(hook, /openHome/u);
-    assert.match(hook, /startLab/u);
-    assert.match(hook, /waitForCompletion/u);
+    assert.match(hook, /openView/u);
+    assert.match(hook, /startBasic/u);
+    assert.match(hook, /startAdvanced/u);
     assert.match(sandbox, /function sandboxHelpIsolationStatus\(\)[\s\S]*?providerCalls/u);
     assert.match(sandbox, /function sandboxHelpIsolationSnapshot\(\)[\s\S]*?comparisonPolicySettings/u);
     assert.match(sandbox, /help: sandboxHelpHook/u);

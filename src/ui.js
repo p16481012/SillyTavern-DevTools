@@ -130,10 +130,14 @@ import {
     saveSemanticPromptSettings,
 } from './semantic-prompt-settings.js';
 import {
+    ADVANCED_ONBOARDING_GUIDES,
+    BASIC_ONBOARDING_SECTIONS,
     ONBOARDING_GROUPS,
     ONBOARDING_VERSION,
     ONBOARDING_STEPS,
     ONBOARDING_STORAGE_KEY,
+    advancedOnboardingGuideById,
+    basicOnboardingSectionById,
     readOnboardingState,
     saveOnboardingState,
     shouldAutoStartOnboarding,
@@ -411,7 +415,7 @@ function closeHelpTooltips(root = document, except = null) {
     }
 }
 
-function helpTooltip(text, title) {
+function helpTooltip(text, title, { helpTopicId = null } = {}) {
     const wrapper = element('span', { className: 'st-devtools-help-tooltip' });
     const trigger = element('button', {
         className: 'st-devtools-help-trigger',
@@ -425,6 +429,16 @@ function helpTooltip(text, title) {
             text: paragraph,
         }));
     }
+    if (helpTopicId) {
+        const details = element('button', {
+            className: 'st-devtools-help-tooltip-details',
+            text: '자세히 보기',
+            type: 'button',
+        });
+        details.dataset.helpTopic = helpTopicId;
+        details.setAttribute('aria-label', t('help.center.detailsFor', { title }));
+        tooltip.appendChild(details);
+    }
     const tooltipId = `st-devtools-tooltip-${++tooltipSequence}`;
     tooltip.id = tooltipId;
     tooltip.setAttribute('role', 'tooltip');
@@ -433,7 +447,9 @@ function helpTooltip(text, title) {
     trigger.setAttribute('aria-describedby', tooltipId);
     trigger.setAttribute('aria-expanded', 'false');
     tooltip.addEventListener('pointerdown', (event) => event.stopPropagation());
-    tooltip.addEventListener('click', (event) => event.stopPropagation());
+    tooltip.addEventListener('click', (event) => {
+        if (!event.target.closest?.('[data-help-topic]')) event.stopPropagation();
+    });
     trigger.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -474,35 +490,24 @@ function explainedTitle(title, description, {
     });
     wrapper.append(
         element(titleTag, { text: title }),
-        helpTooltip(description, title),
+        helpTooltip(description, title, { helpTopicId }),
     );
-    if (helpTopicId) {
-        const details = element('button', {
-            className: 'st-devtools-help-topic-link',
-            title: t('help.center.detailsFor', { title }),
-            type: 'button',
-        });
-        details.dataset.helpTopic = helpTopicId;
-        details.setAttribute(
-            'aria-label',
-            t('help.center.detailsFor', { title }),
-        );
-        const icon = element('i', { className: 'fa-solid fa-book-open' });
-        icon.setAttribute('aria-hidden', 'true');
-        details.appendChild(icon);
-        wrapper.appendChild(details);
-    }
     return wrapper;
 }
 
-function describedControlField(labelText, control, description) {
+function describedControlField(
+    labelText,
+    control,
+    description,
+    { helpTopicId = null } = {},
+) {
     const wrapper = element('div', { className: 'st-devtools-policy-field' });
     const heading = element('div', {
         className: 'st-devtools-explained-title st-devtools-policy-field-heading',
     });
     const label = element('label', { text: labelText });
     const controlId = control.id || `st-devtools-policy-field-${++fieldSequence}`;
-    const help = helpTooltip(description, labelText);
+    const help = helpTooltip(description, labelText, { helpTopicId });
     const tooltipId = help.querySelector('.st-devtools-help-bubble')?.id;
     control.id = controlId;
     label.htmlFor = controlId;
@@ -978,7 +983,8 @@ export class DevToolsWindow {
         this.helpOverlay = null;
         this.helpPanel = null;
         this.helpBody = null;
-        this.helpView = 'current';
+        this.helpView = 'home';
+        this.helpReturnView = 'home';
         this.helpTopicId = null;
         this.helpQuery = '';
         this.helpRecentTopicIds = this.loadRecentHelpTopics();
@@ -1031,6 +1037,13 @@ export class DevToolsWindow {
         this.onboardingState = readOnboardingState();
         this.onboardingAutoAttempted = false;
         this.onboardingPhase = 'idle';
+        this.onboardingKind = 'basic';
+        this.onboardingGuideId = null;
+        this.onboardingSteps = ONBOARDING_STEPS;
+        this.onboardingPersistCompletion = true;
+        this.onboardingPersistSkip = true;
+        this.onboardingCheckpoint = 'full';
+        this.onboardingHelpReturnView = null;
         this.onboardingStepStage = 'idle';
         this.onboardingStepIndex = 0;
         this.onboardingInvitationOverlay = null;
@@ -1973,6 +1986,7 @@ export class DevToolsWindow {
         ageLabel.append(explainedTitle(
             t('settings.retentionMaxAgeDays'),
             t('settings.retentionMaxAgeDaysDescription'),
+            { helpTopicId: 'settings-storage' },
         ));
         ageField.append(
             ageLabel,
@@ -1997,6 +2011,7 @@ export class DevToolsWindow {
         byteLabel.append(explainedTitle(
             t('settings.retentionMaxBytes'),
             t('settings.retentionMaxBytesDescription'),
+            { helpTopicId: 'settings-storage' },
         ));
         byteField.append(
             byteLabel,
@@ -2020,6 +2035,7 @@ export class DevToolsWindow {
         captureLabel.append(explainedTitle(
             t('settings.captureMode'),
             t('settings.captureModeDescription'),
+            { helpTopicId: 'settings-privacy' },
         ));
         captureField.append(
             captureLabel,
@@ -2627,6 +2643,7 @@ export class DevToolsWindow {
         heading.append(explainedTitle(
             t('storage.toolsTitle'),
             t('storage.toolsDescription'),
+            { helpTopicId: 'storage-data-tools' },
         ));
         const status = element('p', {
             className: 'st-devtools-settings-tool-status',
@@ -2639,7 +2656,11 @@ export class DevToolsWindow {
                 className: 'st-devtools-settings-tool',
             });
             const summary = element('summary');
-            summary.append(explainedTitle(t(titleKey), t(descriptionKey)));
+            summary.append(explainedTitle(
+                t(titleKey),
+                t(descriptionKey),
+                { helpTopicId: 'storage-data-tools' },
+            ));
             const body = element('div', {
                 className: 'st-devtools-settings-tool-controls',
             });
@@ -3414,7 +3435,11 @@ export class DevToolsWindow {
         this.invalidateAnalysisState();
         this.disposeVirtualLists();
         this.closeSemanticConsent(false, { restoreFocus: false });
-        this.closeOnboarding({ persist: null, restoreFocus: false });
+        this.closeOnboarding({
+            persist: null,
+            restoreFocus: false,
+            returnToHelp: false,
+        });
         this.closeHelpCenter({ restoreFocus: false });
         this.cancelSemanticProviderEvaluation();
         this.cancelSemanticInspection();
@@ -3473,7 +3498,7 @@ export class DevToolsWindow {
         onboardingIcon.setAttribute('aria-hidden', 'true');
         onboarding.appendChild(onboardingIcon);
         onboarding.addEventListener('click', () => {
-            this.openHelpCenter({ view: 'current' });
+            this.openHelpCenter({ view: 'home' });
         });
         this.onboardingLauncher = onboarding;
         const settings = element('button', {
@@ -3648,23 +3673,24 @@ export class DevToolsWindow {
         return overlay;
     }
 
-    openHelpCenter({ view = 'current', topicId = null, labId = null } = {}) {
+    openHelpCenter({ view = 'home', topicId = null } = {}) {
         if (!this.helpOverlay || !this.helpPanel) return false;
         const topic = topicId ? helpTopicById(topicId) : null;
-        const lab = labId ? HELP_LABS.find(({ id }) => id === labId) : null;
         const wasOpen = !this.helpOverlay.hidden;
         this.closeSettings({ restoreFocus: false });
         this.closeRulesSettings({ restoreFocus: false });
         if (!wasOpen) this.helpPreviouslyFocused = document.activeElement;
         this.clearHelpLabTimer();
-        this.helpView = ['current', 'all', 'labs'].includes(view) ? view : 'current';
+        this.helpLabSession = null;
+        this.helpView = ['home', 'basic', 'advanced', 'docs'].includes(view)
+            ? view
+            : 'home';
+        this.helpReturnView = this.helpView === 'home' ? 'docs' : this.helpView;
         this.helpTopicId = topic?.id ?? null;
-        this.helpLabSession = lab ? createHelpLabSession(lab.id) : null;
         if (topic) {
-            this.helpView = topic.tabId === this.activeTabId() ? 'current' : 'all';
+            this.helpReturnView = 'docs';
             this.rememberHelpTopic(topic.id);
         }
-        if (lab) this.helpView = 'labs';
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
             region.inert = true;
@@ -3686,7 +3712,6 @@ export class DevToolsWindow {
         this.clearHelpLabTimer();
         this.helpOverlay.hidden = true;
         this.helpTopicId = null;
-        this.helpLabSession = null;
         this.helpQuery = '';
         this.window.setAttribute('aria-modal', 'true');
         for (const region of this.primaryRegions) {
@@ -3768,149 +3793,254 @@ export class DevToolsWindow {
         return list;
     }
 
-    renderHelpHubNavigation() {
-        const navigation = element('div', {
-            className: 'st-devtools-help-hub-nav',
+    showHelpView(view) {
+        this.clearHelpLabTimer();
+        this.helpView = view;
+        this.helpReturnView = view;
+        this.helpTopicId = null;
+        this.helpLabSession = null;
+        this.refreshHelpCenter({ focusTitle: true });
+        this.resetHelpScroll();
+    }
+
+    startOnboardingFromHelp(options, returnView) {
+        this.closeHelpCenter({ restoreFocus: false });
+        queueMicrotask(() => {
+            const started = this.startOnboarding({
+                invitation: false,
+                force: true,
+                ...options,
+            });
+            if (started) {
+                this.onboardingHelpReturnView = returnView;
+                return;
+            }
+            this.openHelpCenter({ view: returnView });
+            globalThis.toastr?.warning?.(t('onboarding.busy'), 'ST DevTools');
         });
-        navigation.setAttribute('role', 'group');
-        navigation.setAttribute('aria-label', t('help.center.sections'));
-        for (const [view, label] of [
-            ['current', t('help.center.currentScreen')],
-            ['all', t('help.center.allFeatures')],
-            ['labs', t('help.center.labs')],
-        ]) {
-            const button = element('button', {
-                className: 'menu_button',
-                text: label,
+    }
+
+    renderHelpHomeCard({ view, icon, title, description, action }) {
+        const card = element('button', {
+            className: 'st-devtools-help-home-card',
+            type: 'button',
+        });
+        const iconWrap = element('span', {
+            className: 'st-devtools-help-home-card-icon',
+        });
+        const iconNode = element('i', { className: `fa-solid ${icon}` });
+        iconNode.setAttribute('aria-hidden', 'true');
+        iconWrap.appendChild(iconNode);
+        const copy = element('span', {
+            className: 'st-devtools-help-home-card-copy',
+        });
+        copy.append(
+            element('strong', { text: title }),
+            element('small', { text: description }),
+            element('span', { text: action }),
+        );
+        card.append(iconWrap, copy);
+        card.addEventListener('click', () => this.showHelpView(view));
+        return card;
+    }
+
+    renderHelpHome() {
+        const view = element('div', {
+            className: 'st-devtools-help-view st-devtools-help-home',
+        });
+        const intro = element('section', {
+            className: 'st-devtools-help-home-intro',
+        });
+        intro.append(
+            element('h3', {
+                className: 'st-devtools-help-view-title',
+                text: '튜토리얼 다시 보기',
+            }),
+            proseElement('p', '처음부터 다시 따라가거나, 필요한 기능만 골라서 확인할 수 있습니다.'),
+        );
+        const grid = element('div', { className: 'st-devtools-help-home-grid' });
+        grid.append(
+            this.renderHelpHomeCard({
+                view: 'basic',
+                icon: 'fa-route',
+                title: '기본 사용법',
+                description: '앱의 주요 기능과 화면을 단계별로 확인합니다.',
+                action: '기본 사용법 보기',
+            }),
+            this.renderHelpHomeCard({
+                view: 'advanced',
+                icon: 'fa-graduation-cap',
+                title: '고급 기능 가이드',
+                description: '복잡한 기능의 설정 방법을 기능별로 확인합니다.',
+                action: '고급 기능 가이드 보기',
+            }),
+            this.renderHelpHomeCard({
+                view: 'docs',
+                icon: 'fa-book-open',
+                title: '기능 설명서',
+                description: '자주 묻는 질문과 자세한 설명을 확인합니다.',
+                action: '기능 설명서 보기',
+            }),
+        );
+        view.append(intro, grid);
+        return view;
+    }
+
+    renderBasicHelpIndex() {
+        const view = element('div', { className: 'st-devtools-help-view' });
+        const header = element('section', { className: 'st-devtools-help-index-header' });
+        const fullStart = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: '전체 사용 안내 시작',
+            type: 'button',
+        });
+        fullStart.addEventListener('click', () => {
+            this.closeHelpCenter({ restoreFocus: false });
+            queueMicrotask(() => {
+                if (this.startOnboarding({
+                    invitation: true,
+                    force: true,
+                    kind: 'basic',
+                })) {
+                    this.onboardingHelpReturnView = 'basic';
+                } else {
+                    this.openHelpCenter({ view: 'basic' });
+                }
+            });
+        });
+        header.append(
+            this.renderHelpBackButton('도움말 홈', () => this.showHelpView('home')),
+            element('h3', {
+                className: 'st-devtools-help-view-title',
+                text: '기본 사용법',
+            }),
+            proseElement('p', '전체 흐름을 처음부터 따라가거나 필요한 화면만 골라 다시 연습하세요. 모든 단계는 더미 데이터로 진행됩니다.'),
+            fullStart,
+        );
+        const list = element('div', { className: 'st-devtools-help-accordion-list' });
+        for (const section of BASIC_ONBOARDING_SECTIONS) {
+            const details = element('details', { className: 'st-devtools-help-accordion' });
+            const summary = element('summary', {
+                className: 'st-devtools-help-accordion-summary',
+            });
+            summary.append(
+                element('strong', { text: section.title }),
+                element('span', { text: `${section.steps.length}단계` }),
+            );
+            const body = element('div', { className: 'st-devtools-help-accordion-body' });
+            const row = element('div', { className: 'st-devtools-help-section-row' });
+            const meta = element('div', { className: 'st-devtools-help-section-meta' });
+            meta.append(
+                proseElement('p', section.description),
+                element('small', { text: '실제 데이터와 설정은 변경하지 않습니다.' }),
+            );
+            const start = element('button', {
+                className: 'menu_button st-devtools-help-section-action',
+                text: '시작하기',
                 type: 'button',
             });
-            const active = this.helpView === view;
-            button.classList.toggle('is-active', active);
-            button.setAttribute('aria-pressed', String(active));
-            button.addEventListener('click', () => {
-                this.clearHelpLabTimer();
-                this.helpView = view;
-                this.helpTopicId = null;
-                this.helpLabSession = null;
-                this.refreshHelpCenter({ focusTitle: true });
-                this.resetHelpScroll();
-            });
-            navigation.appendChild(button);
+            start.addEventListener('click', () => this.startOnboardingFromHelp({
+                kind: 'basic',
+                sectionId: section.id,
+            }, 'basic'));
+            row.append(meta, start);
+            body.appendChild(row);
+            details.append(summary, body);
+            list.appendChild(details);
         }
-        return navigation;
+        view.append(header, list);
+        return view;
+    }
+
+    renderAdvancedHelpIndex() {
+        const view = element('div', { className: 'st-devtools-help-view' });
+        const header = element('section', { className: 'st-devtools-help-index-header' });
+        header.append(
+            this.renderHelpBackButton('도움말 홈', () => this.showHelpView('home')),
+            element('h3', {
+                className: 'st-devtools-help-view-title',
+                text: '고급 기능 가이드',
+            }),
+            proseElement('p', '복잡한 설정을 실제 화면의 코치마크를 따라가며 짧게 익힙니다. 고정된 더미 데이터만 사용하며 저장하거나 AI에 전송하지 않습니다.'),
+        );
+        const list = element('div', { className: 'st-devtools-help-accordion-list' });
+        for (const guide of ADVANCED_ONBOARDING_GUIDES) {
+            const row = element('section', { className: 'st-devtools-help-section-row' });
+            const iconWrap = element('span', { className: 'st-devtools-help-home-card-icon' });
+            const icon = element('i', { className: `fa-solid ${guide.icon}` });
+            icon.setAttribute('aria-hidden', 'true');
+            iconWrap.appendChild(icon);
+            const meta = element('div', { className: 'st-devtools-help-section-meta' });
+            meta.append(
+                element('strong', { text: guide.title }),
+                proseElement('p', guide.description),
+                element('small', { text: `${guide.steps.length}단계 · ${guide.duration}` }),
+            );
+            const start = element('button', {
+                className: 'menu_button st-devtools-help-section-action',
+                text: '가이드 시작',
+                type: 'button',
+            });
+            start.addEventListener('click', () => this.startOnboardingFromHelp({
+                kind: 'advanced',
+                guideId: guide.id,
+            }, 'advanced'));
+            row.append(iconWrap, meta, start);
+            list.appendChild(row);
+        }
+        view.append(header, list);
+        return view;
+    }
+
+    renderHelpDocsIndex() {
+        const view = element('div', { className: 'st-devtools-help-view' });
+        const section = element('section', { className: 'st-devtools-help-section' });
+        section.append(
+            this.renderHelpBackButton('도움말 홈', () => this.showHelpView('home')),
+            element('h3', {
+                className: 'st-devtools-help-view-title',
+                text: '기능 설명서',
+            }),
+            proseElement('p', '툴팁에서 다 담지 못한 동작 원리, 사용 시점과 주의사항을 찾아보세요.'),
+        );
+        const search = element('input', { className: 'st-devtools-help-search' });
+        search.type = 'search';
+        search.value = this.helpQuery;
+        search.placeholder = t('help.center.searchPlaceholder');
+        search.setAttribute('aria-label', t('help.center.searchPlaceholder'));
+        const results = element('div');
+        const renderResults = () => {
+            this.helpQuery = search.value;
+            const topics = helpTopicsFor({ query: this.helpQuery });
+            if (this.helpQuery.trim()) {
+                results.replaceChildren(this.renderHelpTopicList(topics));
+                return;
+            }
+            const fragment = document.createDocumentFragment();
+            for (const category of HELP_CATEGORIES) {
+                const categoryTopics = topics.filter(({ category: id }) => id === category.id);
+                if (!categoryTopics.length) continue;
+                const group = element('section', { className: 'st-devtools-help-section' });
+                group.append(
+                    element('h4', { text: category.label }),
+                    this.renderHelpTopicList(categoryTopics),
+                );
+                fragment.appendChild(group);
+            }
+            results.replaceChildren(fragment);
+        };
+        search.addEventListener('input', renderResults);
+        section.append(search, results);
+        renderResults();
+        view.appendChild(section);
+        return view;
     }
 
     renderHelpHub() {
-        const view = element('div', { className: 'st-devtools-help-view' });
-        const start = element('section', {
-            className: 'st-devtools-help-start-row',
-        });
-        const startCopy = element('div');
-        startCopy.append(
-            element('strong', { text: t('help.center.startTitle') }),
-            proseElement('p', t('help.center.startDescription')),
-        );
-        const startButton = element('button', {
-            className: 'menu_button st-devtools-primary-button',
-            text: t('help.center.startAction'),
-            type: 'button',
-        });
-        startButton.addEventListener('click', () => {
-            this.closeHelpCenter();
-            queueMicrotask(() => {
-                this.startOnboarding({ invitation: true, force: true });
-            });
-        });
-        start.append(startCopy, startButton);
-        view.append(start, this.renderHelpHubNavigation());
-
-        if (this.helpView === 'current') {
-            const current = element('section', { className: 'st-devtools-help-section' });
-            current.append(
-                element('h3', {
-                    className: 'st-devtools-help-view-title',
-                    text: t('help.center.currentTitle', {
-                        screen: this.helpTabLabel(),
-                    }),
-                }),
-                proseElement('p', t('help.center.currentDescription')),
-                this.renderHelpTopicList(helpTopicsFor({
-                    tabId: this.activeTabId(),
-                })),
-            );
-            view.appendChild(current);
-            const recentTopics = this.helpRecentTopicIds
-                .map((id) => helpTopicById(id))
-                .filter(Boolean);
-            if (recentTopics.length) {
-                const recent = element('section', {
-                    className: 'st-devtools-help-section',
-                });
-                recent.append(
-                    element('h3', { text: t('help.center.recent') }),
-                    this.renderHelpTopicList(recentTopics),
-                );
-                view.appendChild(recent);
-            }
-        } else if (this.helpView === 'all') {
-            const section = element('section', { className: 'st-devtools-help-section' });
-            section.append(
-                element('h3', {
-                    className: 'st-devtools-help-view-title',
-                    text: t('help.center.allFeatures'),
-                }),
-                proseElement('p', t('help.center.allDescription')),
-            );
-            const search = element('input');
-            search.type = 'search';
-            search.value = this.helpQuery;
-            search.placeholder = t('help.center.searchPlaceholder');
-            search.setAttribute('aria-label', t('help.center.searchPlaceholder'));
-            const results = element('div');
-            const renderResults = () => {
-                this.helpQuery = search.value;
-                results.replaceChildren(this.renderHelpTopicList(
-                    helpTopicsFor({ query: this.helpQuery }),
-                ));
-            };
-            search.addEventListener('input', renderResults);
-            section.append(search, results);
-            renderResults();
-            view.appendChild(section);
-        } else {
-            const section = element('section', { className: 'st-devtools-help-section' });
-            section.append(
-                element('h3', {
-                    className: 'st-devtools-help-view-title',
-                    text: t('help.center.labs'),
-                }),
-                proseElement('p', t('help.center.labsDescription')),
-            );
-            const labs = element('div', { className: 'st-devtools-help-list' });
-            for (const lab of HELP_LABS) {
-                const row = element('button', {
-                    className: 'st-devtools-help-list-row',
-                    type: 'button',
-                });
-                const copy = element('span', { className: 'st-devtools-help-list-copy' });
-                copy.append(
-                    element('strong', { text: lab.title }),
-                    element('small', { text: lab.description }),
-                    element('span', {
-                        className: 'st-devtools-help-duration',
-                        text: lab.duration,
-                    }),
-                );
-                const arrow = element('i', { className: 'fa-solid fa-chevron-right' });
-                arrow.setAttribute('aria-hidden', 'true');
-                row.append(copy, arrow);
-                row.addEventListener('click', () => this.startHelpLab(lab.id));
-                labs.appendChild(row);
-            }
-            section.appendChild(labs);
-            view.appendChild(section);
-        }
-        return view;
+        if (this.helpView === 'basic') return this.renderBasicHelpIndex();
+        if (this.helpView === 'advanced') return this.renderAdvancedHelpIndex();
+        if (this.helpView === 'docs') return this.renderHelpDocsIndex();
+        return this.renderHelpHome();
     }
 
     renderHelpTopicArticle(topic) {
@@ -3918,9 +4048,12 @@ export class DevToolsWindow {
             className: 'st-devtools-help-view st-devtools-help-topic',
         });
         article.appendChild(this.renderHelpBackButton(
-            t('help.center.backToHelp'),
+            '기능 설명서로 돌아가기',
             () => {
                 this.helpTopicId = null;
+                this.helpView = this.helpReturnView === 'home'
+                    ? 'docs'
+                    : this.helpReturnView;
                 this.refreshHelpCenter({ focusTitle: true });
                 this.resetHelpScroll();
             },
@@ -3947,17 +4080,6 @@ export class DevToolsWindow {
                 proseElement('p', body),
             );
             article.appendChild(section);
-        }
-        if (topic.labId) {
-            const actions = element('div', { className: 'st-devtools-help-actions' });
-            const practice = element('button', {
-                className: 'menu_button st-devtools-primary-button',
-                text: t('help.center.openLab'),
-                type: 'button',
-            });
-            practice.addEventListener('click', () => this.startHelpLab(topic.labId));
-            actions.appendChild(practice);
-            article.appendChild(actions);
         }
         return article;
     }
@@ -4643,13 +4765,51 @@ export class DevToolsWindow {
         return true;
     }
 
-    startOnboarding({ invitation = true, force = false } = {}) {
+    configureOnboardingRoute({ kind = 'basic', sectionId = null, guideId = null } = {}) {
+        if (kind === 'advanced') {
+            const guide = advancedOnboardingGuideById(guideId);
+            if (!guide) return false;
+            this.onboardingKind = 'advanced';
+            this.onboardingGuideId = guide.id;
+            this.onboardingSteps = guide.steps;
+            this.onboardingPersistCompletion = false;
+            this.onboardingPersistSkip = false;
+            this.onboardingCheckpoint = 'advanced';
+            return true;
+        }
+        const section = sectionId ? basicOnboardingSectionById(sectionId) : null;
+        if (sectionId && !section) return false;
+        this.onboardingKind = 'basic';
+        this.onboardingGuideId = section?.id ?? null;
+        this.onboardingSteps = section?.steps ?? ONBOARDING_STEPS;
+        this.onboardingPersistCompletion = !section;
+        this.onboardingPersistSkip = !section;
+        this.onboardingCheckpoint = section?.id === 'prompt'
+            ? 'full'
+            : section?.id ?? 'full';
+        return this.onboardingSteps.length > 0;
+    }
+
+    activeOnboardingSteps() {
+        return Array.isArray(this.onboardingSteps) && this.onboardingSteps.length > 0
+            ? this.onboardingSteps
+            : ONBOARDING_STEPS;
+    }
+
+    startOnboarding({
+        invitation = true,
+        force = false,
+        kind = 'basic',
+        sectionId = null,
+        guideId = null,
+    } = {}) {
         if (
             !this.onboardingInvitationOverlay
             || !this.onboardingGuide
             || this.onboardingIsOpen()
         ) return false;
         if (!force && !shouldAutoStartOnboarding(this.onboardingState)) return false;
+        if (!this.configureOnboardingRoute({ kind, sectionId, guideId })) return false;
         if (!this.onboardingCanStart()) {
             if (force) {
                 globalThis.toastr?.warning?.(
@@ -4694,8 +4854,18 @@ export class DevToolsWindow {
         resolveCaptureWait?.();
     }
 
-    closeOnboarding({ persist = null, restoreFocus = true } = {}) {
+    closeOnboarding({
+        persist = null,
+        restoreFocus = true,
+        returnToHelp = true,
+    } = {}) {
         if (!this.onboardingIsOpen()) return false;
+        const helpReturnView = this.onboardingHelpReturnView ?? null;
+        const effectivePersist = persist === 'completed'
+            ? (this.onboardingPersistCompletion ? persist : null)
+            : persist === 'skipped'
+                ? (this.onboardingPersistSkip ? persist : null)
+                : persist;
         const practiceWasActive = this.tutorialIsActive();
         const liveDataChanged = Boolean(this.onboardingSession?.liveDataChanged);
         const latestLiveCaptureStatus = this.onboardingSession?.latestLiveCaptureStatus ?? null;
@@ -4742,6 +4912,13 @@ export class DevToolsWindow {
         this.onboardingStepComplete = false;
         this.onboardingStepSkipped = false;
         this.onboardingSession = null;
+        this.onboardingKind = 'basic';
+        this.onboardingGuideId = null;
+        this.onboardingSteps = ONBOARDING_STEPS;
+        this.onboardingPersistCompletion = true;
+        this.onboardingPersistSkip = true;
+        this.onboardingCheckpoint = 'full';
+        this.onboardingHelpReturnView = null;
         this.window?.classList.remove(
             'is-onboarding-practice',
             'is-onboarding-context-open',
@@ -4752,12 +4929,12 @@ export class DevToolsWindow {
             region.inert = false;
             region.removeAttribute('aria-hidden');
         }
-        if (['skipped', 'completed'].includes(persist)) {
-            this.onboardingState = saveOnboardingState(persist)
+        if (['skipped', 'completed'].includes(effectivePersist)) {
+            this.onboardingState = saveOnboardingState(effectivePersist)
                 ?? Object.freeze({
                     schemaVersion: 1,
                     tourVersion: ONBOARDING_VERSION,
-                    disposition: persist,
+                    disposition: effectivePersist,
                 });
         }
         const focusTarget = this.onboardingPreviouslyFocused?.isConnected
@@ -4778,15 +4955,31 @@ export class DevToolsWindow {
         }
         if (practiceWasActive) this.render();
         if (liveDataChanged) queueMicrotask(() => void this.refresh());
+        if (helpReturnView && returnToHelp) {
+            queueMicrotask(() => this.openHelpCenter({ view: helpReturnView }));
+        }
         return true;
     }
 
     beginOnboardingPractice() {
         if (!this.onboardingGuide || this.tutorialIsActive()) return false;
-        this.onboardingSession = createOnboardingSession();
-        this.onboardingSession.skippedActions = new Set();
+        const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
+        const firstStep = steps[0];
+        if (!firstStep) return false;
+        this.onboardingSession = createOnboardingSession({
+            checkpoint: this.onboardingCheckpoint,
+        });
+        this.onboardingSession.guideKind = this.onboardingKind;
+        this.onboardingSession.guideId = this.onboardingGuideId;
+        this.onboardingSession.advancedState = {
+            comparisonStarted: false,
+            semanticActive: false,
+            comparisonPreviewed: false,
+            semanticResultReady: false,
+        };
+        this.onboardingSession.tabId = firstStep.tabId;
         this.onboardingPhase = 'steps';
-        this.onboardingStepStage = onboardingEntryStage(ONBOARDING_STEPS[0]);
+        this.onboardingStepStage = onboardingEntryStage(firstStep);
         this.onboardingStepIndex = 0;
         this.onboardingStepComplete = false;
         this.onboardingStepSkipped = false;
@@ -4826,17 +5019,18 @@ export class DevToolsWindow {
             return this.beginOnboardingPractice();
         }
         if (this.onboardingStepStage === 'briefing') {
-            const step = ONBOARDING_STEPS[this.onboardingStepIndex];
+            const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
+            const step = steps[this.onboardingStepIndex];
             if (!step?.interaction) {
                 this.onboardingSession.completedActions.add(step.id);
                 this.onboardingSession.skippedActions?.delete(step.id);
                 this.onboardingStepComplete = true;
                 this.onboardingStepSkipped = false;
-                if (this.onboardingStepIndex >= ONBOARDING_STEPS.length - 1) {
+                if (this.onboardingStepIndex >= steps.length - 1) {
                     return this.closeOnboarding({ persist: 'completed' });
                 }
                 this.onboardingStepIndex += 1;
-                const next = ONBOARDING_STEPS[this.onboardingStepIndex];
+                const next = steps[this.onboardingStepIndex];
                 const nextCompleted = Boolean(
                     this.onboardingSession.completedActions.has(next?.id),
                 );
@@ -4861,11 +5055,12 @@ export class DevToolsWindow {
             return true;
         }
         if (this.onboardingStepStage !== 'debrief') return false;
-        if (this.onboardingStepIndex >= ONBOARDING_STEPS.length - 1) {
+        const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
+        if (this.onboardingStepIndex >= steps.length - 1) {
             return this.closeOnboarding({ persist: 'completed' });
         }
         this.onboardingStepIndex += 1;
-        const next = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const next = steps[this.onboardingStepIndex];
         const nextCompleted = Boolean(
             this.onboardingSession.completedActions.has(next?.id),
         );
@@ -4883,7 +5078,8 @@ export class DevToolsWindow {
     previousOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
         if (this.onboardingPhase === 'invitation') return false;
-        const current = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
+        const current = steps[this.onboardingStepIndex];
         if (
             this.onboardingStepStage === 'practice'
             && current?.id === 'capture-practice'
@@ -4896,7 +5092,7 @@ export class DevToolsWindow {
         }
         if (this.onboardingStepIndex <= 0) return false;
         this.onboardingStepIndex -= 1;
-        const previous = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const previous = steps[this.onboardingStepIndex];
         const previousCompleted = Boolean(
             this.onboardingSession.completedActions.has(previous?.id),
         );
@@ -4913,7 +5109,9 @@ export class DevToolsWindow {
 
     skipOnboardingStep() {
         if (!this.tutorialIsActive()) return false;
-        const step = ONBOARDING_STEPS[this.onboardingStepIndex];
+        const step = DevToolsWindow.prototype.activeOnboardingSteps.call(this)[
+            this.onboardingStepIndex
+        ];
         if (!step) return false;
         this.onboardingApplyingSkippedState = true;
         try {
@@ -4957,6 +5155,26 @@ export class DevToolsWindow {
             this.updateCaptureStatus();
             return true;
         }
+        if (step.id === 'advanced-comparison-entry') {
+            this.onboardingSession.advancedState.comparisonStarted = true;
+            this.render();
+            return true;
+        }
+        if (step.id === 'advanced-semantic-entry') {
+            this.onboardingSession.advancedState.semanticActive = true;
+            this.render();
+            return true;
+        }
+        if (step.id === 'advanced-comparison-preview') {
+            this.onboardingSession.advancedState.comparisonPreviewed = true;
+            this.render();
+            return true;
+        }
+        if (step.id === 'advanced-semantic-run') {
+            this.onboardingSession.advancedState.semanticResultReady = true;
+            this.render();
+            return true;
+        }
         const candidate = interaction.selector
             ? this.window?.querySelector(interaction.selector)
             : null;
@@ -4986,6 +5204,18 @@ export class DevToolsWindow {
         return true;
     }
 
+    onboardingStepCopy(step, key) {
+        return step?.copy?.[key] ?? t(`onboarding.step.${step?.id}.${key}`);
+    }
+
+    onboardingGroupLabel(group) {
+        if (this.onboardingKind === 'advanced') {
+            return advancedOnboardingGuideById(this.onboardingGuideId)?.title
+                ?? '고급 기능 가이드';
+        }
+        return t(`onboarding.group.${group.id}`);
+    }
+
     updateOnboardingView() {
         if (!this.onboardingIsOpen()) return;
         if (this.onboardingPhase === 'invitation') {
@@ -4997,8 +5227,8 @@ export class DevToolsWindow {
             );
             return;
         } else {
-            const step = ONBOARDING_STEPS[this.onboardingStepIndex]
-                ?? ONBOARDING_STEPS[0];
+            const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
+            const step = steps[this.onboardingStepIndex] ?? steps[0];
             const group = ONBOARDING_GROUPS.find(({ id }) => id === step.group)
                 ?? ONBOARDING_GROUPS[0];
             const stepChanged = this.onboardingGuide.dataset.step !== step.id;
@@ -5025,11 +5255,11 @@ export class DevToolsWindow {
             this.onboardingGuide.dataset.group = group.id;
             this.onboardingGuide.dataset.stage = this.onboardingStepStage;
             this.window.dataset.onboardingStage = this.onboardingStepStage;
-            this.onboardingProgress.textContent = `${t(
-                `onboarding.group.${group.id}`,
-            )} · ${this.onboardingStepIndex + 1} / ${ONBOARDING_STEPS.length}`;
+            this.onboardingProgress.textContent = `${this.onboardingGroupLabel(group)} · ${
+                this.onboardingStepIndex + 1
+            } / ${steps.length}`;
             this.onboardingAnnouncement.textContent = [
-                `${this.onboardingProgress.textContent}. ${t(`onboarding.step.${step.id}.title`)}`,
+                `${this.onboardingProgress.textContent}. ${this.onboardingStepCopy(step, 'title')}`,
                 this.onboardingStepStage === 'debrief'
                     ? t('onboarding.taskComplete')
                     : '',
@@ -5048,7 +5278,7 @@ export class DevToolsWindow {
             this.onboardingPracticeBackButton.disabled = !canGoBack;
             const nextLabel = this.onboardingStepStage === 'briefing' && step.interaction
                 ? t('onboarding.startPractice')
-                : this.onboardingStepIndex === ONBOARDING_STEPS.length - 1
+                : this.onboardingStepIndex === steps.length - 1
                     ? t('onboarding.finish')
                     : t('onboarding.next');
             this.onboardingNextButton.setAttribute('aria-label', nextLabel);
@@ -5065,21 +5295,21 @@ export class DevToolsWindow {
                 this.onboardingPracticeCopy.replaceChildren(
                     element('strong', {
                         className: 'st-devtools-onboarding-practice-title',
-                        text: t(`onboarding.step.${step.id}.title`),
+                        text: this.onboardingStepCopy(step, 'title'),
                     }),
                     proseElement(
                         'p',
-                        onboardingSentence(t(`onboarding.step.${step.id}.what`)),
+                        onboardingSentence(this.onboardingStepCopy(step, 'what')),
                         { className: 'st-devtools-onboarding-practice-meaning' },
                     ),
                     proseElement(
                         'p',
-                        t(`onboarding.step.${step.id}.when`),
+                        this.onboardingStepCopy(step, 'when'),
                         { className: 'st-devtools-onboarding-practice-context' },
                     ),
                     proseElement(
                         'p',
-                        onboardingSentence(t(`onboarding.step.${step.id}.task`)),
+                        onboardingSentence(this.onboardingStepCopy(step, 'task')),
                         { className: 'st-devtools-onboarding-practice-task' },
                     ),
                 );
@@ -5167,6 +5397,12 @@ export class DevToolsWindow {
     }
 
     renderOnboardingStep(step, stage = 'briefing') {
+        const copy = {
+            title: step.copy?.title ?? t(`onboarding.step.${step.id}.title`),
+            what: step.copy?.what ?? t(`onboarding.step.${step.id}.what`),
+            when: step.copy?.when ?? t(`onboarding.step.${step.id}.when`),
+            task: step.copy?.task ?? t(`onboarding.step.${step.id}.task`),
+        };
         const content = element('div', {
             className: `st-devtools-onboarding-step is-${step.id} is-${stage}`,
         });
@@ -5180,23 +5416,23 @@ export class DevToolsWindow {
                 mark,
                 element('span', {
                     className: 'st-devtools-onboarding-result-context',
-                    text: t(`onboarding.step.${step.id}.title`),
+                    text: copy.title,
                 }),
             );
         }
         const title = element('h2', {
             text: stage === 'debrief'
                 ? t('onboarding.successTitle')
-                : t(`onboarding.step.${step.id}.title`),
+                : copy.title,
         });
         title.id = 'st-devtools-onboarding-step-title';
         const descriptions = stage === 'debrief'
-            ? [onboardingSentence(t(`onboarding.step.${step.id}.task`), 'last')]
+            ? [onboardingSentence(copy.task, 'last')]
             : [
-                onboardingSentence(t(`onboarding.step.${step.id}.what`)),
+                onboardingSentence(copy.what),
                 step.interaction
-                    ? t(`onboarding.step.${step.id}.when`)
-                    : onboardingSentence(t(`onboarding.step.${step.id}.task`)),
+                    ? copy.when
+                    : onboardingSentence(copy.task),
             ];
         content.appendChild(title);
         descriptions
@@ -5442,7 +5678,9 @@ export class DevToolsWindow {
 
     currentOnboardingStep() {
         return this.tutorialIsActive()
-            ? ONBOARDING_STEPS[this.onboardingStepIndex] ?? null
+            ? DevToolsWindow.prototype.activeOnboardingSteps.call(this)[
+                this.onboardingStepIndex
+            ] ?? null
             : null;
     }
 
@@ -6038,6 +6276,11 @@ export class DevToolsWindow {
             },
         ));
         if (tabId === 'rules') {
+            const advancedGuideId = this.tutorialIsActive()
+                ? this.onboardingSession?.guideId
+                : null;
+            const semanticGuide = advancedGuideId === 'semantic-ai';
+            const comparisonGuide = advancedGuideId === 'comparison-policy';
             const actions = element('div', {
                 className: 'st-devtools-screen-actions st-devtools-rule-mode-actions',
             });
@@ -6047,11 +6290,18 @@ export class DevToolsWindow {
                 type: 'button',
             });
             aiMode.dataset.tourId = 'rules-ai-mode';
-            const aiActive = this.ruleViewMode === 'ai';
-            aiMode.classList.toggle('is-active', !this.tutorialIsActive() && aiActive);
-            aiMode.setAttribute('aria-pressed', String(!this.tutorialIsActive() && aiActive));
-            aiMode.disabled = this.tutorialIsActive();
+            const aiActive = semanticGuide
+                ? Boolean(this.onboardingSession?.advancedState?.semanticActive)
+                : this.ruleViewMode === 'ai';
+            aiMode.classList.toggle('is-active', aiActive);
+            aiMode.setAttribute('aria-pressed', String(aiActive));
+            aiMode.disabled = this.tutorialIsActive() && !semanticGuide;
             aiMode.addEventListener('click', () => {
+                if (semanticGuide) {
+                    this.onboardingSession.advancedState.semanticActive = true;
+                    this.render();
+                    return;
+                }
                 if (this.tutorialIsActive()) return;
                 this.setSemanticInspectionMode(!aiActive);
             });
@@ -6063,11 +6313,19 @@ export class DevToolsWindow {
             settings.setAttribute('aria-label', t('rules.configurationTitle'));
             settings.setAttribute('aria-haspopup', 'dialog');
             settings.setAttribute('aria-controls', 'st-devtools-rules-settings-dialog');
-            settings.hidden = this.tutorialIsActive();
+            settings.hidden = this.tutorialIsActive() && !comparisonGuide;
+            settings.disabled = false;
             const icon = element('i', { className: 'fa-solid fa-sliders' });
             icon.setAttribute('aria-hidden', 'true');
             settings.appendChild(icon);
-            settings.addEventListener('click', () => this.openRulesSettings());
+            settings.addEventListener('click', () => {
+                if (comparisonGuide) {
+                    this.onboardingSession.advancedState.comparisonStarted = true;
+                    this.render();
+                    return;
+                }
+                this.openRulesSettings();
+            });
             actions.append(aiMode, settings);
             header.appendChild(actions);
         }
@@ -6985,6 +7243,14 @@ export class DevToolsWindow {
 
     selectTab(id, { focus = false } = {}) {
         const nextTab = TABS.some(([tabId]) => tabId === id) ? id : 'explorer';
+        if (
+            this.tutorialIsActive()
+            && this.onboardingKind === 'advanced'
+            && nextTab !== 'rules'
+        ) {
+            this.showOnboardingTarget();
+            return false;
+        }
         const currentTab = this.activeTabId();
         const changed = nextTab !== currentTab;
         if (this.tutorialIsActive()) {
@@ -7004,6 +7270,7 @@ export class DevToolsWindow {
         }
         if (changed && this.content) this.content.scrollTop = 0;
         if (focus) this.activeTabButton()?.focus();
+        return true;
     }
 
     render() {
@@ -7265,6 +7532,7 @@ export class DevToolsWindow {
         heading.appendChild(explainedTitle(
             t('explorer.provenanceTitle'),
             t('explorer.provenanceDescription'),
+            { helpTopicId: 'prompt-final-position' },
         ));
         summary.append(
             heading,
@@ -7532,6 +7800,7 @@ export class DevToolsWindow {
         guideSummary.appendChild(explainedTitle(
             t('explorer.guideTitle'),
             t('explorer.guideDescription'),
+            { helpTopicId: 'prompt-overview' },
         ));
         guide.append(guideSummary, guideList);
         page.appendChild(guide);
@@ -7545,7 +7814,11 @@ export class DevToolsWindow {
                 className: 'st-devtools-explorer-filter-copy',
             });
             copy.append(
-                element('strong', { text: t('explorer.requestFilterTitle') }),
+                explainedTitle(
+                    t('explorer.requestFilterTitle'),
+                    t('explorer.requestFilterDescription'),
+                    { helpTopicId: 'prompt-included-filter' },
+                ),
                 element('small', { text: t('explorer.requestFilterDescription') }),
             );
             const toggle = element('button', {
@@ -7591,7 +7864,11 @@ export class DevToolsWindow {
                         ? 'explorer.intro'
                         : `explorer.group.${groupData.key}Description`,
             );
-            groupHeading.append(explainedTitle(groupTitle, groupDescription));
+            groupHeading.append(explainedTitle(
+                groupTitle,
+                groupDescription,
+                { helpTopicId: 'prompt-overview' },
+            ));
             groupSummary.append(
                 groupHeading,
                 element('span', {
@@ -7791,6 +8068,7 @@ export class DevToolsWindow {
         summary.appendChild(explainedTitle(
             t('explorer.requestDataTitle'),
             t('explorer.requestDataDescription'),
+            { helpTopicId: 'request-details' },
         ));
         const body = element('div', {
             className: 'st-devtools-prompt-request-data-body',
@@ -7803,6 +8081,7 @@ export class DevToolsWindow {
             itemSummary.appendChild(explainedTitle(
                 t(titleKey),
                 t(descriptionKey),
+                { helpTopicId: 'request-details' },
             ));
             item.appendChild(itemSummary);
             attachLazyDetailsContent(item, () => {
@@ -8902,6 +9181,7 @@ export class DevToolsWindow {
         captionText.append(explainedTitle(
             t('timeline.growthTitle'),
             chartDescription,
+            { helpTopicId: 'timeline-growth' },
         ));
         const captionMeta = element('span', { className: 'st-devtools-growth-caption-meta' });
         captionMeta.append(
@@ -9226,6 +9506,7 @@ export class DevToolsWindow {
         fullDiffHeading.append(explainedTitle(
             t('diff.fullPromptChanges'),
             t('diff.fullPromptDescription'),
+            { helpTopicId: 'diff-overview' },
         ));
         fullDiffSummary.appendChild(fullDiffHeading);
         fullDiff.appendChild(fullDiffSummary);
@@ -9414,7 +9695,11 @@ export class DevToolsWindow {
         section.appendChild(explainedTitle(
             t('diff.sourceChanges'),
             t('diff.description'),
-            { tag: 'h3', titleTag: 'span' },
+            {
+                tag: 'h3',
+                titleTag: 'span',
+                helpTopicId: 'diff-statuses',
+            },
         ));
         const changes = providedChanges
             ?? compareSnapshotSources(base, compare);
@@ -9564,7 +9849,11 @@ export class DevToolsWindow {
         section.appendChild(explainedTitle(
             t('diff.loreChanges'),
             t('diff.loreDescription'),
-            { tag: 'h3', titleTag: 'span' },
+            {
+                tag: 'h3',
+                titleTag: 'span',
+                helpTopicId: 'diff-overview',
+            },
         ));
         const changes = providedChanges ?? compareLoreEntries(
             base.lorebookEntries ?? [],
@@ -9586,6 +9875,7 @@ export class DevToolsWindow {
         if (role) wrapper.dataset.diffRole = role;
         wrapper.appendChild(explainedTitle(labelText, description, {
             titleTag: 'span',
+            helpTopicId: 'diff-overview',
         }));
         const select = element('select');
         select.setAttribute('aria-label', labelText);
@@ -9613,7 +9903,11 @@ export class DevToolsWindow {
         section.appendChild(explainedTitle(
             t('context.providerTrace'),
             t('context.providerTraceDescription'),
-            { tag: 'h3', titleTag: 'span' },
+            {
+                tag: 'h3',
+                titleTag: 'span',
+                helpTopicId: 'request-details',
+            },
         ));
         const grid = element('div', {
             className: 'st-devtools-provider-trace-grid',
@@ -9697,7 +9991,11 @@ export class DevToolsWindow {
             explainedTitle(
                 t('context.usageTitle'),
                 t('context.usageDescription'),
-                { tag: 'h3', titleTag: 'span' },
+                {
+                    tag: 'h3',
+                    titleTag: 'span',
+                    helpTopicId: 'request-details',
+                },
             ),
             element('span', {
                 className: `st-devtools-usage-status is-${usage.status}`,
@@ -9787,6 +10085,7 @@ export class DevToolsWindow {
         capabilitySummary.appendChild(explainedTitle(
             t('context.usageCapabilities'),
             t('context.usageCapabilitiesDescription'),
+            { helpTopicId: 'request-details' },
         ));
         const capabilityContent = element('div', {
             className: 'st-devtools-usage-capability-content',
@@ -9837,6 +10136,7 @@ export class DevToolsWindow {
             explainedTitle(
                 t('context.captureDetails'),
                 t('context.captureDetailsDescription'),
+                { helpTopicId: 'capture-status' },
             ),
             element('span', {
                 className: `st-devtools-capture-stage${capture.fallback ? ' fallback' : ''}`,
@@ -9948,6 +10248,7 @@ export class DevToolsWindow {
         detailStatsSummary.appendChild(explainedTitle(
             t('context.moreStats'),
             t('context.moreStatsDescription'),
+            { helpTopicId: 'request-details' },
         ));
         detailStats.append(
             detailStatsSummary,
@@ -9962,6 +10263,7 @@ export class DevToolsWindow {
         exportHeading.append(explainedTitle(
             t('context.exportTitle'),
             t('context.exportDescription'),
+            { helpTopicId: 'storage-data-tools' },
         ));
         exportSummary.appendChild(exportHeading);
         const exportActions = element('div', { className: 'st-devtools-tool-row-actions' });
@@ -9992,6 +10294,7 @@ export class DevToolsWindow {
         settingsSummary.appendChild(explainedTitle(
             t('context.requestSettings'),
             t('context.requestSettingsDescription'),
+            { helpTopicId: 'request-details' },
         ));
         settingsDetails.appendChild(settingsSummary);
         attachLazyDetailsContent(settingsDetails, () => (
@@ -10006,6 +10309,7 @@ export class DevToolsWindow {
         requestSummary.appendChild(explainedTitle(
             t('context.requestBody'),
             t('context.requestBodyDescription'),
+            { helpTopicId: 'request-details' },
         ));
         requestDetails.appendChild(requestSummary);
         attachLazyDetailsContent(requestDetails, () => (
@@ -10020,6 +10324,7 @@ export class DevToolsWindow {
         payloadSummary.appendChild(explainedTitle(
             t('context.promptPayload'),
             t('context.promptPayloadDescription'),
+            { helpTopicId: 'request-details' },
         ));
         payloadDetails.appendChild(payloadSummary);
         attachLazyDetailsContent(payloadDetails, () => (
@@ -10115,6 +10420,7 @@ export class DevToolsWindow {
         summary.appendChild(explainedTitle(
             t('rules.settingsTitle'),
             t('rules.settingsDescription'),
+            { helpTopicId: 'rules-overview' },
         ));
         details.append(summary);
 
@@ -10589,7 +10895,12 @@ export class DevToolsWindow {
 
     policyField(labelKey, control, descriptionKey = null) {
         if (descriptionKey) {
-            return describedControlField(t(labelKey), control, t(descriptionKey));
+            return describedControlField(
+                t(labelKey),
+                control,
+                t(descriptionKey),
+                { helpTopicId: 'comparison-policy' },
+            );
         }
         const label = element('label');
         label.append(element('span', { text: t(labelKey) }), control);
@@ -11282,7 +11593,11 @@ export class DevToolsWindow {
             this.comparisonPolicySectionOpen[key] = details.open;
         });
         const summary = element('summary');
-        summary.appendChild(explainedTitle(title, description));
+        summary.appendChild(explainedTitle(
+            title,
+            description,
+            { helpTopicId: 'comparison-policy' },
+        ));
         const content = element('div', { className: 'st-devtools-policy-section-content' });
         details.append(summary, content);
         return { details, content };
@@ -11474,6 +11789,7 @@ export class DevToolsWindow {
                 t('comparison.description'),
                 t('comparison.precedence'),
             ].join(' '),
+            { helpTopicId: 'comparison-policy' },
         ));
         details.append(summary);
 
@@ -11640,6 +11956,7 @@ export class DevToolsWindow {
             explainedTitle(
                 t('comparison.resultSummary'),
                 t('comparison.resultDescription'),
+                { helpTopicId: 'comparison-policy' },
             ),
             element('span', {
                 className: 'st-devtools-policy-result-count',
@@ -11769,6 +12086,7 @@ export class DevToolsWindow {
         summary.appendChild(explainedTitle(
             t('rules.v3.title'),
             t('rules.v3.description'),
+            { helpTopicId: 'rule-v3-structure' },
         ));
         const stats = model?.stats ?? {};
         summary.append(
@@ -11849,7 +12167,10 @@ export class DevToolsWindow {
         capabilitySummary.appendChild(explainedTitle(
             t('rules.v3.capabilityTitle'),
             t('rules.v3.capabilityDescription'),
-            { titleTag: 'span' },
+            {
+                titleTag: 'span',
+                helpTopicId: 'rule-v3-structure',
+            },
         ));
         capabilities.appendChild(capabilitySummary);
         const capabilityCounts = new Map();
@@ -11892,7 +12213,10 @@ export class DevToolsWindow {
         atomSummary.appendChild(explainedTitle(
             `${t('rules.v3.atomTitle')} · ${model?.atoms?.length ?? 0}`,
             t('rules.v3.atomDescription'),
-            { titleTag: 'span' },
+            {
+                titleTag: 'span',
+                helpTopicId: 'rule-v3-structure',
+            },
         ));
         atoms.appendChild(atomSummary);
         attachLazyDetailsContent(atoms, () => {
@@ -12012,7 +12336,10 @@ export class DevToolsWindow {
                 evidenceSummary.appendChild(explainedTitle(
                     t('rules.v3.atomEvidence'),
                     t('rules.v3.atomEvidenceDescription'),
-                    { titleTag: 'span' },
+                    {
+                        titleTag: 'span',
+                        helpTopicId: 'rule-v3-structure',
+                    },
                 ));
                 evidence.append(
                     evidenceSummary,
@@ -12531,6 +12858,7 @@ export class DevToolsWindow {
         summary.appendChild(explainedTitle(
             t('semantic.evaluation.title'),
             t('semantic.evaluation.description'),
+            { helpTopicId: 'semantic-provider-evaluation' },
         ));
         const body = element('div', {
             className: 'st-devtools-semantic-evaluation-body',
@@ -12829,7 +13157,11 @@ export class DevToolsWindow {
         section.appendChild(explainedTitle(
             t('semantic.connectionSettingsTitle'),
             t('settings.semanticDescription'),
-            { tag: 'h3', titleTag: 'span' },
+            {
+                tag: 'h3',
+                titleTag: 'span',
+                helpTopicId: 'semantic-ai',
+            },
         ));
         const profileField = element('label', {
             className: 'st-devtools-semantic-profile',
@@ -12837,6 +13169,7 @@ export class DevToolsWindow {
         profileField.appendChild(explainedTitle(
             t('settings.semanticConnectionProfile'),
             t('settings.semanticConnectionProfileDescription'),
+            { helpTopicId: 'semantic-ai' },
         ));
         const profile = element('select');
         profile.setAttribute('aria-label', t('settings.semanticConnectionProfile'));
@@ -12888,6 +13221,7 @@ export class DevToolsWindow {
         promptSummary.appendChild(explainedTitle(
             t('semantic.promptSettingsTitle'),
             t('semantic.promptSettingsDescription'),
+            { helpTopicId: 'semantic-ai' },
         ));
         const promptBody = element('div', {
             className: 'st-devtools-semantic-prompt-settings-body',
@@ -13327,7 +13661,11 @@ export class DevToolsWindow {
             explainedTitle(
                 t('semantic.workspaceTitle'),
                 t('semantic.description'),
-                { tag: 'h3', titleTag: 'span' },
+                {
+                    tag: 'h3',
+                    titleTag: 'span',
+                    helpTopicId: 'semantic-ai',
+                },
             ),
         );
         section.appendChild(heading);
@@ -13642,6 +13980,7 @@ export class DevToolsWindow {
         summary.appendChild(explainedTitle(
             t('rules.settingsTitle'),
             t('rules.settingsDescription'),
+            { helpTopicId: 'rules-overview' },
         ));
         details.appendChild(summary);
         attachLazyDetailsContent(details, () => {
@@ -13670,6 +14009,7 @@ export class DevToolsWindow {
                 t('comparison.description'),
                 t('comparison.precedence'),
             ].join(' '),
+            { helpTopicId: 'comparison-policy' },
         ));
         details.appendChild(summary);
         attachLazyDetailsContent(details, () => {
@@ -13728,9 +14068,246 @@ export class DevToolsWindow {
         }
     }
 
+    renderAdvancedComparisonGuide() {
+        const state = this.onboardingSession.advancedState;
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-advanced-guide-page',
+        });
+        if (!state.comparisonStarted) {
+            const ready = element('section', {
+                className: 'st-devtools-advanced-guide-card st-devtools-advanced-guide-ready',
+            });
+            ready.append(
+                element('h2', { text: '비교 정책 가이드 준비됨' }),
+                proseElement('p', '상단의 설정 아이콘을 누르면 실제 설정과 같은 순서의 더미 화면이 열립니다. 실제 정책은 바뀌지 않습니다.'),
+            );
+            page.appendChild(ready);
+            return page;
+        }
+        const card = element('section', {
+            className: 'st-devtools-advanced-guide-card st-devtools-advanced-policy-guide',
+        });
+        card.append(
+            element('span', {
+                className: 'st-devtools-advanced-guide-eyebrow',
+                text: '저장되지 않는 연습 설정',
+            }),
+            element('h2', { text: '출력 언어 옵션을 대안 그룹으로 묶기' }),
+            proseElement('p', '더미 프롬프트 이름으로 규칙 적용 전후만 확인합니다. 실제 비교 정책과 스냅샷은 바뀌지 않습니다.'),
+        );
+        const examples = element('div', {
+            className: 'st-devtools-advanced-guide-examples',
+        });
+        for (const name of ['출력언어 | 한국어', '출력언어 | 영어', '말투 | 존댓말']) {
+            examples.appendChild(element('span', { text: name }));
+        }
+        const matcherLabel = element('label');
+        matcherLabel.appendChild(element('strong', { text: '이름 해석 규칙' }));
+        const matcher = element('select');
+        matcher.dataset.advancedGuideControl = 'matcher';
+        for (const [value, label] of [
+            ['', '규칙을 선택하세요'],
+            ['[{group}] {option}', '[출력언어] 한국어 형식'],
+            ['{group} | {option}', '출력언어 | 한국어 형식'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.matcher === value;
+            matcher.appendChild(option);
+        }
+        matcher.addEventListener('change', () => {
+            state.matcher = matcher.value;
+            state.comparisonPreviewed = false;
+            preview.disabled = !state.matcher || !state.mode;
+        });
+        matcherLabel.appendChild(matcher);
+
+        const modeLabel = element('label');
+        modeLabel.appendChild(element('strong', { text: '그룹 동작' }));
+        const mode = element('select');
+        mode.dataset.advancedGuideControl = 'mode';
+        for (const [value, label] of [
+            ['', '동작을 선택하세요'],
+            ['alternative', '대안 그룹 · 내부 비교 제외'],
+            ['ignore', '내부 무시 그룹 · 경고도 숨김'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.mode === value;
+            mode.appendChild(option);
+        }
+        mode.addEventListener('change', () => {
+            state.mode = mode.value;
+            state.comparisonPreviewed = false;
+            preview.disabled = !state.matcher || !state.mode;
+        });
+        modeLabel.appendChild(mode);
+
+        const preview = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: '적용 전후 미리보기',
+            type: 'button',
+        });
+        preview.dataset.advancedGuideControl = 'preview';
+        preview.disabled = !state.matcher || !state.mode;
+        preview.addEventListener('click', () => {
+            state.comparisonPreviewed = true;
+            this.render();
+        });
+        const form = element('div', { className: 'st-devtools-advanced-guide-form' });
+        form.append(matcherLabel, modeLabel, preview);
+        card.append(examples, form);
+        if (state.comparisonPreviewed) {
+            const result = element('section', {
+                className: 'st-devtools-advanced-guide-result',
+            });
+            result.dataset.advancedGuideResult = 'comparison';
+            result.append(
+                element('strong', { text: '적용 결과' }),
+                element('span', { text: '그룹 내부 비교 1건 → 0건' }),
+                element('span', { text: '다른 그룹과의 비교는 그대로 유지' }),
+                proseElement('p', '한국어와 영어는 서로 대안으로 해석됩니다. 말투 | 존댓말은 다른 그룹이므로 계속 비교합니다.'),
+            );
+            card.appendChild(result);
+        }
+        page.appendChild(card);
+        return page;
+    }
+
+    renderAdvancedSemanticGuide() {
+        const state = this.onboardingSession.advancedState;
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-advanced-guide-page',
+        });
+        if (!state.semanticActive) {
+            const ready = element('section', {
+                className: 'st-devtools-advanced-guide-card st-devtools-advanced-guide-ready',
+            });
+            ready.append(
+                element('h2', { text: 'AI 의미 검사 연습 준비됨' }),
+                proseElement('p', '상단의 “AI로 더 자세히 보기”를 눌러 안전한 더미 흐름을 시작하세요. 실제 제공자 요청과 비용은 발생하지 않습니다.'),
+            );
+            page.appendChild(ready);
+            return page;
+        }
+        const card = element('section', {
+            className: 'st-devtools-advanced-guide-card st-devtools-advanced-semantic-guide',
+        });
+        card.append(
+            element('span', {
+                className: 'st-devtools-advanced-guide-eyebrow',
+                text: '고정된 더미 응답 · 외부 전송 안 함',
+            }),
+            element('h2', { text: 'AI로 응답 형식 충돌을 더 자세히 보기' }),
+            proseElement('p', 'JSON과 XML 지시가 함께 들어간 연습 후보 하나만 선택한 상태입니다.'),
+        );
+        const profileLabel = element('label');
+        profileLabel.appendChild(element('strong', { text: 'AI 연결 프로필' }));
+        const profile = element('select');
+        profile.dataset.advancedGuideControl = 'profile';
+        for (const [value, label] of [
+            ['', '연결을 선택하세요'],
+            ['current', '현재 채팅 연결'],
+            ['review', '검사용 연결 프로필'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.profile === value;
+            profile.appendChild(option);
+        }
+        profile.addEventListener('change', () => {
+            state.profile = profile.value;
+            run.disabled = !state.consented || !state.profile;
+        });
+        profileLabel.appendChild(profile);
+
+        const prompt = element('details', {
+            className: 'st-devtools-disclosure st-devtools-advanced-guide-prompt',
+        });
+        prompt.dataset.advancedGuideControl = 'prompt';
+        prompt.open = Boolean(state.promptOpen);
+        prompt.addEventListener('toggle', () => {
+            state.promptOpen = prompt.open;
+        });
+        prompt.append(
+            element('summary', { text: '검사 프롬프트와 프리필' }),
+            element('div', {
+                className: 'st-devtools-advanced-guide-code',
+                text: '사용자 프롬프트: 선택한 지시가 동시에 적용될 수 있는지 근거와 함께 검토하세요.\n\n프리필: {"판정":',
+            }),
+        );
+
+        const preview = element('section', {
+            className: 'st-devtools-advanced-guide-send-preview',
+        });
+        preview.append(
+            element('strong', { text: '전송 미리보기' }),
+            element('span', { text: '대상: 응답 형식 충돌 후보 1개' }),
+            element('span', { text: '원문: JSON 형식 지시, XML 형식 지시' }),
+            element('span', { text: '응답 상한: 512 토큰' }),
+        );
+        const consentLabel = element('label', {
+            className: 'st-devtools-advanced-guide-consent',
+        });
+        const consent = element('input');
+        consent.type = 'checkbox';
+        consent.checked = Boolean(state.consented);
+        consent.dataset.advancedGuideControl = 'consent';
+        consent.addEventListener('change', () => {
+            state.consented = consent.checked;
+            run.disabled = !state.consented || !state.profile;
+        });
+        consentLabel.append(
+            consent,
+            element('span', { text: '위 더미 데이터의 전송 연습을 확인했습니다.' }),
+        );
+        const run = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: '연습 AI 검사 실행',
+            type: 'button',
+        });
+        run.dataset.advancedGuideControl = 'run';
+        run.disabled = !state.consented || !state.profile;
+        run.addEventListener('click', () => {
+            state.semanticResultReady = true;
+            this.render();
+        });
+        card.append(profileLabel, prompt, preview, consentLabel, run);
+        if (state.semanticResultReady) {
+            const result = element('section', {
+                className: 'st-devtools-advanced-guide-result',
+            });
+            result.dataset.advancedGuideResult = 'semantic';
+            for (const [label, value] of [
+                ['판정', '동시에 만족하기 어려운 응답 형식 지시입니다.'],
+                ['근거', '같은 최종 요청에서 JSON과 XML 형식을 각각 요구합니다.'],
+                ['개선 방향', '한 형식만 남기거나 상황별 조건을 명확히 분리하세요.'],
+            ]) {
+                const row = element('div');
+                row.append(element('strong', { text: label }), proseElement('p', value));
+                result.appendChild(row);
+            }
+            result.appendChild(element('small', {
+                text: '연습 결과는 저장하거나 자동 적용하지 않습니다.',
+            }));
+            card.appendChild(result);
+        }
+        page.appendChild(card);
+        return page;
+    }
+
+    renderAdvancedOnboardingGuide() {
+        return this.onboardingSession?.guideId === 'comparison-policy'
+            ? this.renderAdvancedComparisonGuide()
+            : this.renderAdvancedSemanticGuide();
+    }
+
     renderRules(snapshot, providedAnalysis = undefined) {
         const page = element('div', { className: 'st-devtools-page' });
         const tutorial = this.tutorialIsActive();
+        if (tutorial && this.onboardingSession?.guideKind === 'advanced') {
+            return this.renderAdvancedOnboardingGuide();
+        }
         page.appendChild(this.renderSnapshotPicker());
         const host = element('div', {
             className: 'st-devtools-rule-analysis-host',
@@ -14011,7 +14588,10 @@ export class DevToolsWindow {
                 evidenceSummary.appendChild(explainedTitle(
                     evidenceTitle,
                     t('rules.evidenceDescription'),
-                    { titleTag: 'span' },
+                    {
+                        titleTag: 'span',
+                        helpTopicId: 'rule-v3-structure',
+                    },
                 ));
                 evidence.append(
                     evidenceSummary,
@@ -14092,7 +14672,10 @@ export class DevToolsWindow {
         optionsSummary.appendChild(explainedTitle(
             t('search.optionsTitle'),
             t('search.optionsDescription'),
-            { className: 'st-devtools-search-options-title' },
+            {
+                className: 'st-devtools-search-options-title',
+                helpTopicId: 'search-overview',
+            },
         ));
         const optionsBody = element('div', {
             className: 'st-devtools-search-options-body',

@@ -201,3 +201,26 @@ test('session reveals two snapshots initially and the third after practice captu
     assert.equal(session.captureState, 'saved');
     assert.equal(session.completedActions.has('tutorial:capture'), true);
 });
+
+test('section checkpoints expose only the safe prerequisite state', () => {
+    const expected = new Map([
+        ['timeline', 'tutorial:snapshot:3'],
+        ['rules', 'tutorial:snapshot:3'],
+        ['advanced', 'tutorial:snapshot:3'],
+        ['diff', 'tutorial:snapshot:2'],
+        ['search', 'tutorial:snapshot:2'],
+    ]);
+    for (const [checkpoint, selectedId] of expected) {
+        const session = createOnboardingSession({ checkpoint });
+        assert.equal(session.timeline.length, 3);
+        assert.equal(session.selectedId, selectedId);
+        assert.equal(session.captureState, 'saved');
+        assert.equal(session.capturePhase, 'complete');
+        assert.equal(session.completedActions.size, 0);
+        assert.equal(session.skippedActions.size, 0);
+    }
+    const full = createOnboardingSession({ checkpoint: 'full' });
+    assert.equal(full.timeline.length, 2);
+    assert.equal(full.captureState, 'waiting');
+    assert.equal(full.capturePhase, 'awaiting-practice');
+});

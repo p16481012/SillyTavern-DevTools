@@ -358,6 +358,10 @@
     place-items: center;
 }
 
+.st-devtools-window .st-devtools-icon-button[hidden] {
+    display: none !important;
+}
+
 .st-devtools-overlay .st-devtools-window .st-devtools-icon-button {
     flex: 0 0 2.5rem !important;
     width: 2.5rem !important;
@@ -6186,75 +6190,514 @@
     outline-offset: 4px;
 }
 
-.st-devtools-help-start-row {
+.st-devtools-help-home {
+    display: grid;
+    min-width: 0;
+    gap: 1rem;
+}
+
+.st-devtools-help-home-intro {
+    display: grid;
+    min-width: 0;
+    gap: 0.3rem;
+    max-width: 42rem;
+}
+
+.st-devtools-help-home-intro > :is(h3, p) {
+    margin: 0;
+}
+
+.st-devtools-help-home-intro > h3 {
+    color: var(--st-devtools-text);
+    font-size: 1.24rem;
+    line-height: 1.4;
+    letter-spacing: -0.02em;
+}
+
+.st-devtools-help-home-intro > p {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.88rem;
+    line-height: 1.65;
+}
+
+.st-devtools-help-home-grid {
     display: grid;
     min-width: 0;
     grid-template-columns: minmax(0, 1fr);
-    gap: 0.8rem;
-    padding: 0.95rem;
-    border-left: 4px solid var(--st-devtools-primary);
-    border-radius: var(--st-devtools-radius-sm);
+    gap: 0.65rem;
+}
+
+.st-devtools-window .st-devtools-help-home-card {
+    box-sizing: border-box !important;
+    display: grid !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 92px !important;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: center !important;
+    gap: 0.75rem;
+    margin: 0 !important;
+    padding: 0.85rem !important;
+    border: 1px solid var(--st-devtools-border) !important;
+    border-radius: var(--st-devtools-radius-md) !important;
+    background: var(--st-devtools-surface) !important;
+    box-shadow: none !important;
+    color: var(--st-devtools-text) !important;
+    text-align: start !important;
+    white-space: normal !important;
+    word-break: keep-all !important;
+    overflow-wrap: break-word;
+    writing-mode: horizontal-tb !important;
+    transition:
+        border-color 150ms ease,
+        background-color 150ms ease,
+        translate 150ms ease;
+}
+
+.st-devtools-help-home-card::after {
+    content: '\203a';
+    color: var(--st-devtools-text-subtle);
+    font-size: 1.35rem;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.st-devtools-help-home-card-icon {
+    display: inline-grid;
+    box-sizing: border-box;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    place-items: center;
+    border-radius: 50%;
     background: var(--st-devtools-primary-soft);
-    color: var(--st-devtools-text);
-}
-
-.st-devtools-help-start-row > div {
-    min-width: 0;
-}
-
-.st-devtools-help-start-row strong {
-    display: block;
-    margin-bottom: 0.22rem;
+    color: var(--st-devtools-primary);
     font-size: 1rem;
 }
 
-.st-devtools-help-start-row p {
-    margin-bottom: 0;
+.st-devtools-help-home-card-copy {
+    display: grid;
+    min-width: 0;
+    gap: 0.16rem;
+}
+
+.st-devtools-help-home-card-copy > :is(strong, h3, p, small) {
+    min-width: 0;
+    margin: 0;
+}
+
+.st-devtools-help-home-card-copy > :is(strong, h3) {
+    color: var(--st-devtools-text);
+    font-size: 0.94rem;
+    font-weight: 760;
+    line-height: 1.4;
+}
+
+.st-devtools-help-home-card-copy > :is(p, small) {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    font-weight: 500;
+    line-height: 1.5;
+}
+
+.st-devtools-help-home-card-copy > span:last-child {
+    margin-top: 0.2rem;
+    color: var(--st-devtools-primary);
+    font-size: 0.78rem;
+    font-weight: 760;
+    line-height: 1.4;
+}
+
+@media (hover: hover) {
+    .st-devtools-window .st-devtools-help-home-card:hover {
+        border-color: var(--st-devtools-primary) !important;
+        background: var(--st-devtools-hover) !important;
+        translate: 0 -1px;
+    }
+}
+
+.st-devtools-window .st-devtools-help-home-card:focus-visible {
+    position: relative;
+    z-index: 1;
+    outline: 2px solid var(--st-devtools-focus) !important;
+    outline-offset: 2px;
+}
+
+.st-devtools-help-index-header {
+    display: grid;
+    min-width: 0;
+    gap: 0.35rem;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-help-index-header > :is(h3, p) {
+    min-width: 0;
+    margin: 0;
+}
+
+.st-devtools-help-index-header > h3 {
+    color: var(--st-devtools-text);
+    font-size: 1.2rem;
+    line-height: 1.4;
+    letter-spacing: -0.02em;
+}
+
+.st-devtools-help-index-header > p {
     color: var(--st-devtools-text-muted);
     font-size: 0.86rem;
+    line-height: 1.6;
+}
+
+.st-devtools-help-accordion-list {
+    min-width: 0;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-help-accordion {
+    min-width: 0;
+    border-bottom: 1px solid var(--st-devtools-border);
+    background: transparent;
+    color: var(--st-devtools-text);
+}
+
+.st-devtools-help-accordion-summary {
+    box-sizing: border-box;
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    min-height: 52px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.75rem 0.25rem;
+    cursor: pointer;
+    color: var(--st-devtools-text);
+    font-size: 0.92rem;
+    font-weight: 740;
+    line-height: 1.45;
+    list-style: none;
+    text-align: start;
+    word-break: keep-all;
+}
+
+.st-devtools-help-accordion-summary::-webkit-details-marker {
+    display: none;
+}
+
+.st-devtools-help-accordion-summary::after {
+    content: '\203a';
+    color: var(--st-devtools-text-subtle);
+    font-size: 1.25rem;
+    font-weight: 500;
+    line-height: 1;
+    transform: rotate(90deg);
+    transition: transform 150ms ease;
+}
+
+.st-devtools-help-accordion[open]
+> .st-devtools-help-accordion-summary::after {
+    transform: rotate(-90deg);
+}
+
+@media (hover: hover) {
+    .st-devtools-help-accordion-summary:hover {
+        background: var(--st-devtools-hover);
+    }
+}
+
+.st-devtools-help-accordion-summary:focus-visible {
+    position: relative;
+    z-index: 1;
+    border-radius: 4px;
+    outline: 2px solid var(--st-devtools-focus);
+    outline-offset: -2px;
+}
+
+.st-devtools-help-accordion-body {
+    display: grid;
+    min-width: 0;
+    gap: 0;
+    padding: 0 0.25rem 0.65rem;
+    animation: st-devtools-help-reveal 160ms ease-out both;
+}
+
+.st-devtools-help-section-row {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--st-devtools-border);
+    color: var(--st-devtools-text);
+    word-break: keep-all;
+}
+
+.st-devtools-help-section-row:has(> .st-devtools-help-home-card-icon) {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+}
+
+.st-devtools-help-accordion-body
+> .st-devtools-help-section-row:first-child {
+    border-top: 0;
+}
+
+.st-devtools-help-section-row > :first-child {
+    min-width: 0;
+}
+
+.st-devtools-help-section-meta {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.18rem 0.45rem;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    overflow-wrap: break-word;
 }
 
 .st-devtools-overlay .st-devtools-window
-.st-devtools-help-start-row > .menu_button {
-    width: 100% !important;
-    min-width: 0 !important;
+.st-devtools-help-section-action {
+    width: auto !important;
+    min-width: 44px !important;
     min-height: 44px !important;
     margin: 0 !important;
+    padding: 0.45rem 0.65rem !important;
+    justify-self: end;
+    color: var(--st-devtools-primary) !important;
+    white-space: normal !important;
+    word-break: keep-all;
 }
 
-.st-devtools-help-hub-nav {
+.st-devtools-window .st-devtools-help-section-action:focus-visible {
+    outline: 2px solid var(--st-devtools-focus) !important;
+    outline-offset: 2px;
+}
+
+.st-devtools-help-search {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    margin: 0 0 0.65rem !important;
+}
+
+.st-devtools-window .st-devtools-help-tooltip-details {
+    display: inline-flex !important;
+    width: auto !important;
+    min-width: 0 !important;
+    min-height: 32px !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    margin: 0.5rem 0 0 !important;
+    padding: 0.25rem 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--st-devtools-primary) !important;
+    font-size: 0.78rem !important;
+    font-weight: 760 !important;
+    line-height: 1.4 !important;
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+}
+
+.st-devtools-window .st-devtools-help-tooltip-details:focus-visible {
+    border-radius: 3px !important;
+    outline: 2px solid var(--st-devtools-focus) !important;
+    outline-offset: 2px;
+}
+
+@keyframes st-devtools-help-reveal {
+    from {
+        opacity: 0;
+        translate: 0 -3px;
+    }
+
+    to {
+        opacity: 1;
+        translate: 0 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .st-devtools-help-home-card,
+    .st-devtools-help-accordion-summary::after {
+        transition: none !important;
+    }
+
+    .st-devtools-help-accordion-body {
+        animation: none !important;
+    }
+}
+
+.st-devtools-advanced-guide-page {
+    display: grid;
+    width: min(42rem, 100%);
+    min-width: 0;
+    margin-inline: auto;
+}
+
+.st-devtools-advanced-guide-card {
     display: grid;
     min-width: 0;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.25rem;
-    padding: 0.25rem;
+    gap: 0.85rem;
+    padding: clamp(0.9rem, 3vw, 1.25rem);
     border: 1px solid var(--st-devtools-border);
-    border-radius: var(--st-devtools-radius-sm);
+    border-radius: var(--st-devtools-radius-lg);
+    background: var(--st-devtools-surface);
+    color: var(--st-devtools-text);
+    box-shadow: var(--st-devtools-shadow-sm);
+}
+
+.st-devtools-advanced-guide-card > :is(h2, p) {
+    margin: 0;
+}
+
+.st-devtools-advanced-guide-card > h2 {
+    font-size: 1.05rem;
+    line-height: 1.45;
+}
+
+.st-devtools-advanced-guide-card > p {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.86rem;
+    line-height: 1.65;
+}
+
+.st-devtools-advanced-guide-eyebrow {
+    width: fit-content;
+    padding: 0.2rem 0.48rem;
+    border-radius: 999px;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary-strong);
+    font-size: 0.7rem;
+    font-weight: 780;
+}
+
+.st-devtools-advanced-guide-examples {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.st-devtools-advanced-guide-examples > span {
+    min-width: 0;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: 999px;
+    background: var(--st-devtools-surface-muted);
+    color: var(--st-devtools-text-muted);
+    font-size: 0.76rem;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-advanced-guide-form,
+.st-devtools-advanced-guide-card > label {
+    display: grid;
+    min-width: 0;
+    gap: 0.38rem;
+}
+
+.st-devtools-advanced-guide-form {
+    gap: 0.75rem;
+}
+
+.st-devtools-advanced-guide-form > label {
+    display: grid;
+    min-width: 0;
+    gap: 0.38rem;
+}
+
+.st-devtools-advanced-guide-card :is(select, button) {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.st-devtools-advanced-guide-prompt,
+.st-devtools-advanced-guide-send-preview,
+.st-devtools-advanced-guide-result {
+    min-width: 0;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
     background: var(--st-devtools-surface-muted);
 }
 
-.st-devtools-overlay .st-devtools-window
-.st-devtools-help-hub-nav > .menu_button {
-    width: 100% !important;
-    min-width: 0 !important;
-    min-height: 44px !important;
-    margin: 0 !important;
-    padding: 0.45rem 0.3rem !important;
-    border-color: transparent !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    color: var(--st-devtools-text-muted) !important;
-    font-size: 0.78rem !important;
-    line-height: 1.25 !important;
-    white-space: normal !important;
+.st-devtools-advanced-guide-prompt > summary {
+    min-height: 44px;
+    padding: 0.65rem 0.75rem;
+    font-weight: 760;
 }
 
-.st-devtools-overlay .st-devtools-window
-.st-devtools-help-hub-nav > .menu_button.is-active {
-    border-color: var(--st-devtools-border) !important;
-    background: var(--st-devtools-surface) !important;
-    color: var(--st-devtools-primary) !important;
-    box-shadow: 0 1px 4px rgb(0 0 0 / 12%) !important;
+.st-devtools-advanced-guide-code {
+    padding: 0.75rem;
+    border-top: 1px solid var(--st-devtools-border);
+    color: var(--st-devtools-text-muted);
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 0.76rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-advanced-guide-send-preview,
+.st-devtools-advanced-guide-result {
+    display: grid;
+    gap: 0.4rem;
+    padding: 0.75rem;
+}
+
+.st-devtools-advanced-guide-send-preview > span,
+.st-devtools-advanced-guide-result > span,
+.st-devtools-advanced-guide-result > small {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.st-devtools-advanced-guide-result {
+    border-color: var(--st-devtools-status-success);
+    background: var(--st-devtools-status-success-bg);
+}
+
+.st-devtools-advanced-guide-result > div {
+    display: grid;
+    gap: 0.15rem;
+}
+
+.st-devtools-advanced-guide-result > div > p {
+    margin: 0;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.55;
+}
+
+.st-devtools-advanced-guide-consent {
+    display: grid !important;
+    min-width: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start !important;
+    gap: 0.55rem !important;
+    padding: 0.65rem 0.7rem;
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-primary-soft);
+    line-height: 1.5;
+}
+
+@media (max-width: 420px) {
+    .st-devtools-help-section-row,
+    .st-devtools-help-section-row:has(> .st-devtools-help-home-card-icon) {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .st-devtools-help-section-row > .st-devtools-help-home-card-icon {
+        display: none;
+    }
 }
 
 .st-devtools-help-section {
@@ -6278,13 +6721,6 @@
     margin-bottom: 0.8rem;
     color: var(--st-devtools-text-muted);
     font-size: 0.86rem;
-}
-
-.st-devtools-help-section > input[type='search'] {
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 44px;
-    margin: 0 0 0.65rem;
 }
 
 .st-devtools-help-list {
@@ -6754,22 +7190,10 @@
         padding: 1.15rem 1.25rem 1.5rem;
     }
 
-    .st-devtools-help-start-row {
-        grid-template-columns: minmax(0, 1fr) auto;
-        align-items: center;
-    }
-
-    .st-devtools-overlay .st-devtools-window
-    .st-devtools-help-start-row > .menu_button,
     .st-devtools-overlay .st-devtools-window
     .st-devtools-help-practice-stage > .menu_button {
         width: auto !important;
         justify-self: start;
-    }
-
-    .st-devtools-overlay .st-devtools-window
-    .st-devtools-help-start-row > .menu_button {
-        justify-self: end;
     }
 
     .st-devtools-help-actions {
@@ -6785,6 +7209,37 @@
 
     .st-devtools-help-before-after {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 640px) {
+    .st-devtools-help-home-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .st-devtools-window .st-devtools-help-home-card {
+        min-height: 154px !important;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: 40px minmax(0, 1fr);
+        align-content: start;
+        align-items: start !important;
+    }
+
+    .st-devtools-help-home-card-icon {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .st-devtools-help-home-card-copy {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+
+    .st-devtools-help-home-card::after {
+        grid-column: 2;
+        grid-row: 1;
+        align-self: center;
+        justify-self: end;
     }
 }
 
@@ -6817,10 +7272,13 @@
         padding-inline: 0.72rem;
     }
 
-    .st-devtools-overlay .st-devtools-window
-    .st-devtools-help-hub-nav > .menu_button {
-        padding-inline: 0.18rem !important;
-        font-size: 0.72rem !important;
+    .st-devtools-help-home-intro > h3 {
+        font-size: 1.12rem;
+    }
+
+    .st-devtools-window .st-devtools-help-home-card {
+        gap: 0.65rem;
+        padding: 0.75rem !important;
     }
 
     .st-devtools-help-parsed-grid {

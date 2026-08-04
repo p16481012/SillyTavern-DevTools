@@ -238,7 +238,7 @@ function buildSnapshot(spec, index) {
 
     return {
         schemaVersion: FIXTURE_SCHEMA_VERSION,
-        extensionVersion: '0.16.0',
+        extensionVersion: '0.16.1',
         id: `tutorial:snapshot:${snapshotNumber}`,
         tutorialLabel: `연습 요청 ${snapshotNumber}`,
         timestamp,
@@ -347,20 +347,30 @@ export const ONBOARDING_FIXTURE = deepFreeze({
     captureSnapshot: ONBOARDING_CAPTURE_SNAPSHOT,
 });
 
-export function createOnboardingSession() {
+export function createOnboardingSession({ checkpoint = 'full' } = {}) {
+    const prepared = checkpoint !== 'full';
+    const selectedIndex = ['prompt', 'diff', 'search'].includes(checkpoint)
+        ? 1
+        : prepared
+            ? 2
+            : 1;
+    const timeline = prepared
+        ? [...ONBOARDING_FIXTURE_SNAPSHOTS]
+        : [...ONBOARDING_INITIAL_SNAPSHOTS];
     return {
         fixtureVersion: ONBOARDING_FIXTURE_VERSION,
         tabId: 'explorer',
-        timeline: [...ONBOARDING_INITIAL_SNAPSHOTS],
+        timeline,
         availableTimeline: [...ONBOARDING_FIXTURE_SNAPSHOTS],
-        selectedId: ONBOARDING_INITIAL_SNAPSHOTS.at(-1).id,
+        selectedId: ONBOARDING_FIXTURE_SNAPSHOTS[selectedIndex].id,
         openSourceIds: new Set(),
         explorerIncludedOnly: false,
         completedActions: new Set(),
-        captureState: 'waiting',
-        capturePhase: 'awaiting-practice',
+        skippedActions: new Set(),
+        captureState: prepared ? 'saved' : 'waiting',
+        capturePhase: prepared ? 'complete' : 'awaiting-practice',
         timelineSnapshotsOpen: false,
-        growthPinnedId: ONBOARDING_INITIAL_SNAPSHOTS.at(-1).id,
+        growthPinnedId: ONBOARDING_FIXTURE_SNAPSHOTS[selectedIndex].id,
         liveDataChanged: false,
         latestLiveCaptureStatus: null,
         active: true,

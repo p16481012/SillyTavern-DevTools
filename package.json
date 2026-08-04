@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-devtools",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "private": true,
   "type": "module",
   "description": "Read-only prompt pipeline diagnostics for SillyTavern.",

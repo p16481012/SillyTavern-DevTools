@@ -441,7 +441,7 @@ test('help tooltips and nested disclosures keep responsive interaction contracts
         ui,
         /policyField\('comparison\.mode', mode, 'comparison\.behaviorDescription'\)/,
     );
-    assert.match(ui, /function describedControlField\(labelText, control, description\)/);
+    assert.match(ui, /function describedControlField\([\s\S]*?helpTopicId = null/);
     assert.match(
         ui,
         /className:\s*'st-devtools-explained-title st-devtools-policy-field-heading'/,

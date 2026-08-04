@@ -1,4 +1,15 @@
-# v0.16.0 기술 구현 현황
+# v0.16.1 기술 구현 현황
+
+## v0.16.1 세 갈래 도움말·부분 투어·고급 코치마크
+
+- 도움말 route는 `home`·`basic`·`advanced`·`docs`로 나뉘며 첫 화면에는 `기본 사용법`·`고급 기능 가이드`·`기능 설명서` 세 진입점만 렌더링합니다.
+- `BASIC_ONBOARDING_SECTIONS`는 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계의 순서·표시 수·시작 checkpoint를 정의합니다. 전체 38단계 안내와 같은 step renderer·interaction 판정을 재사용합니다.
+- `createOnboardingSession({ checkpoint })`는 부분 투어가 요구하는 timeline 길이, 선택 snapshot, 캡처 완료 상태를 준비합니다. 따라서 기록·비교·검사·검색을 바로 시작해도 앞 장 조작을 반복하지 않습니다.
+- 온보딩 route는 전체·기본 section·고급 guide를 구분하고 persistence flag를 별도로 둡니다. section·advanced의 완료·종료·건너뛰기는 전역 온보딩 `completed`·`skipped` 상태를 쓰지 않습니다.
+- `ADVANCED_ONBOARDING_GUIDES`는 비교 정책 5단계와 AI 의미 검사 6단계를 실제 규칙 검사 화면 형태로 렌더링합니다. 이름 matcher·대안 그룹·profile·prompt·prefill·동의·결과는 더미 session에만 존재합니다.
+- 고급 guide는 `SemanticInspector`, provider adapter, Connection Manager, `fetch`, snapshot store, 실제 비교 정책 저장과 비용 경로를 호출하지 않습니다. guide 전환·닫기에서 timer와 session을 폐기합니다.
+- `helpTooltip(..., { helpTopicId })`은 짧은 설명과 텍스트형 `자세히 보기`를 렌더링하고 같은 dialog의 해당 상세 문서 topic으로 deep link합니다. 프롬프트 위치·포함 필터·성장 그래프·비교 정책·AI 의미 검사·검색·보관·개인정보·저장 도구에 topic이 연결됩니다.
+- 도움말 dialog의 focus trap·Escape·원래 focus 복원, 320px·390px 모바일 단일 scroll owner·가로 overflow 없음, 밝음·어두움 테마 대비와 tooltip keyboard focus를 자동·브라우저 회귀 대상으로 둡니다.
 
 ## v0.16.0 도움말·연습실·교체 판정
 

@@ -71,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.16.0',
+        extensionVersion: '0.16.1',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1450,7 +1450,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.16.0',
+    version: '0.16.1',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1661,7 +1661,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.16.0',
+        extensionVersion: '0.16.1',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1708,7 +1708,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.16.0',
+        version: '0.16.1',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -2120,6 +2120,10 @@ function sandboxHelpStatus() {
         status: session?.status ?? null,
         completed: Boolean(session?.completed),
         timerActive: devTools.helpLabTimer != null,
+        onboardingOpen: devTools.onboardingIsOpen(),
+        onboardingKind: devTools.onboardingKind,
+        onboardingGuideId: devTools.onboardingGuideId,
+        onboardingStepCount: devTools.activeOnboardingSteps().length,
         primaryRegionsInert: devTools.primaryRegions.length > 0
             && devTools.primaryRegions.every((region) => (
                 region.inert && region.getAttribute('aria-hidden') === 'true'
@@ -2163,7 +2167,7 @@ function sandboxHelpIsolationStatus() {
 }
 
 const sandboxHelpHook = Object.freeze({
-    async openHome(view = 'current') {
+    async openHome(view = 'home') {
         if (devTools.onboardingIsOpen()) {
             devTools.closeOnboarding({ persist: null, restoreFocus: false });
         }
@@ -2180,6 +2184,34 @@ const sandboxHelpHook = Object.freeze({
     openTopic(topicId) {
         const opened = devTools.openHelpCenter({ topicId });
         return { opened, status: sandboxHelpStatus() };
+    },
+    openView(view) {
+        const opened = devTools.openHelpCenter({ view });
+        return { opened, status: sandboxHelpStatus() };
+    },
+    startBasic(sectionId = null) {
+        if (!devTools.helpOverlay?.hidden) {
+            devTools.closeHelpCenter({ restoreFocus: false });
+        }
+        const started = devTools.startOnboarding({
+            invitation: false,
+            force: true,
+            kind: 'basic',
+            sectionId,
+        });
+        return { started, status: sandboxHelpStatus() };
+    },
+    startAdvanced(guideId) {
+        if (!devTools.helpOverlay?.hidden) {
+            devTools.closeHelpCenter({ restoreFocus: false });
+        }
+        const started = devTools.startOnboarding({
+            invitation: false,
+            force: true,
+            kind: 'advanced',
+            guideId,
+        });
+        return { started, status: sandboxHelpStatus() };
     },
     startLab(labId) {
         if (devTools.helpOverlay?.hidden) devTools.openHelpCenter({ view: 'labs' });
@@ -2203,6 +2235,12 @@ const sandboxHelpHook = Object.freeze({
         devTools.clearHelpLabTimer();
         devTools.helpLabSession = null;
         devTools.helpView = 'labs';
+        devTools.refreshHelpCenter();
+        return sandboxHelpStatus();
+    },
+    backToHome() {
+        devTools.helpTopicId = null;
+        devTools.helpView = 'home';
         devTools.refreshHelpCenter();
         return sandboxHelpStatus();
     },

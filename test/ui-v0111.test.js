@@ -403,7 +403,7 @@ test('header actions and capture status expose explicit accessible names', async
     }
     assert.match(build, /onboarding\.setAttribute\('aria-label', t\('help\.center\.open'\)\)/u);
     assert.match(build, /onboardingIcon\.setAttribute\('aria-hidden', 'true'\)/u);
-    assert.match(build, /this\.openHelpCenter\(\{ view: 'current' \}\)/u);
+    assert.match(build, /this\.openHelpCenter\(\{ view: 'home' \}\)/u);
     assert.match(build, /tabList\.setAttribute\('aria-label',\s*t\('nav\.label'\)\)/u);
     assert.doesNotMatch(build, /nav\.secondaryLabel/u);
     assert.match(
