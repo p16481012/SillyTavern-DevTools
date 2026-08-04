@@ -283,6 +283,352 @@ export const HELP_TOPICS = Object.freeze([
     ),
 ]);
 
+const visualItem = (label, { detail = null, state = 'neutral' } = {}) => (
+    Object.freeze({
+        label,
+        ...(detail ? { detail } : {}),
+        ...(state === 'neutral' ? {} : { state }),
+    })
+);
+
+const visualLane = (label, items, { relation = 'sequence' } = {}) => (
+    Object.freeze({
+        label,
+        relation,
+        items: Object.freeze([...items]),
+    })
+);
+
+const topicVisual = (id, type, ariaLabel, caption, lanes) => Object.freeze({
+    id,
+    type,
+    ariaLabel,
+    caption,
+    lanes: Object.freeze([...lanes]),
+});
+
+const HELP_TOPIC_VISUAL_LIST = Object.freeze([
+    topicVisual(
+        'capture-status',
+        'flow',
+        '캡처 상태가 대기에서 저장 중을 거쳐 저장 완료로 바뀌며 실패하면 오류 확인과 재시도로 이어지는 흐름',
+        '확장 이름 옆 상태 점은 현재 요청이 어느 단계에 있는지 보여줍니다.',
+        [
+            visualLane('정상 흐름', [
+                visualItem('대기', { detail: '일반 요청을 기다림' }),
+                visualItem('저장 중', { detail: '정리 · 보호 · 기록', state: 'info' }),
+                visualItem('저장됨', { detail: '스냅샷 확인 가능', state: 'success' }),
+            ]),
+            visualLane('문제가 생긴 경우', [
+                visualItem('실패', { detail: '오류 카드 확인', state: 'danger' }),
+                visualItem('다시 시도', { detail: '또는 새 일반 메시지 전송', state: 'warning' }),
+            ], { relation: 'branch' }),
+        ],
+    ),
+    topicVisual(
+        'prompt-overview',
+        'flow',
+        '프리셋과 캐릭터 및 로어북 소스가 최종 프롬프트를 거쳐 전송 payload로 이어지는 구조',
+        '왼쪽의 원본 소스가 최종 배치와 provider 요청으로 이어지는 경로를 따라갑니다.',
+        [
+            visualLane('원본에서 전송까지', [
+                visualItem('프리셋 · 캐릭터 · 로어북', { detail: '원본 소스' }),
+                visualItem('연결 근거', { detail: '정확 · 파생 · 추정', state: 'info' }),
+                visualItem('최종 프롬프트', { detail: '실제 배치 순서' }),
+                visualItem('요청 payload', { detail: '역할별 메시지 배열', state: 'success' }),
+            ]),
+        ],
+    ),
+    topicVisual(
+        'prompt-included-filter',
+        'comparison',
+        '전체 프리셋 목록과 이번 요청에 포함된 프리셋 목록을 나란히 비교한 예시',
+        '필터는 프롬프트를 켜거나 끄지 않고 현재 화면의 표시 범위만 바꿉니다.',
+        [
+            visualLane('전체 프리셋', [
+                visualItem('메인 지시', { state: 'success' }),
+                visualItem('출력 언어', { state: 'success' }),
+                visualItem('보조 예시', { detail: '비활성' }),
+                visualItem('템플릿 후보', { detail: '미확인', state: 'warning' }),
+            ], { relation: 'contrast' }),
+            visualLane('포함 프리셋', [
+                visualItem('메인 지시', { state: 'success' }),
+                visualItem('출력 언어', { state: 'success' }),
+            ], { relation: 'contrast' }),
+        ],
+    ),
+    topicVisual(
+        'prompt-final-position',
+        'lanes',
+        '원본 소스 하나가 최종 프롬프트의 한 곳 또는 여러 곳에 연결되는 예시',
+        '위치 아이콘은 원본을 편집하지 않고 연결된 최종 위치를 찾아갑니다.',
+        [
+            visualLane('원본 소스', [
+                visualItem('출력 형식 지시', { detail: '읽기 전용 원문' }),
+            ]),
+            visualLane('연결된 최종 위치', [
+                visualItem('system · 4번 위치', { state: 'info' }),
+                visualItem('user · 2번 위치', { detail: '여러 위치일 때 함께 표시' }),
+            ], { relation: 'mapping' }),
+        ],
+    ),
+    topicVisual(
+        'rules-overview',
+        'flow',
+        '규칙 검사 후보의 심각도에서 원문 근거와 검토 결정으로 이어지는 흐름',
+        '결과 제목만으로 판단하지 말고 근거와 원문을 확인한 뒤 검토 결정을 남깁니다.',
+        [
+            visualLane('검토 순서', [
+                visualItem('심각도', { detail: '치명적 · 경고 · 정보', state: 'warning' }),
+                visualItem('원문 근거', { detail: '관련 소스와 인용 범위', state: 'info' }),
+                visualItem('사람의 판단', { detail: '실제 충돌인지 확인' }),
+                visualItem('검토 결정', { detail: '유효 · 오탐 · 항상 무시', state: 'success' }),
+            ]),
+        ],
+    ),
+    topicVisual(
+        'comparison-policy',
+        'comparison',
+        '출력 언어 프롬프트에 비교 정책을 적용하기 전과 대안 그룹으로 묶은 후의 비교 관계',
+        '대안 그룹은 같은 그룹 내부 비교만 제외하며 다른 그룹과의 비교와 동시 활성 경고는 유지합니다.',
+        [
+            visualLane('적용 전', [
+                visualItem('출력언어 | 한국어'),
+                visualItem('출력언어 | 영어'),
+                visualItem('내부 비교 1건', { detail: '서로 충돌 후보가 됨', state: 'warning' }),
+                visualItem('말투 | 존댓말과 비교', { detail: '그룹 밖 비교' }),
+            ], { relation: 'contrast' }),
+            visualLane('대안 그룹 적용 후', [
+                visualItem('그룹: 출력언어', { detail: '옵션: 한국어 · 영어', state: 'info' }),
+                visualItem('내부 비교 0건', { detail: '선택지끼리 비교 제외', state: 'success' }),
+                visualItem('말투 그룹과 비교 유지'),
+                visualItem('동시 활성 시 그룹 경고', { detail: '수동 지정이 이름 규칙보다 우선', state: 'warning' }),
+            ], { relation: 'contrast' }),
+        ],
+    ),
+    topicVisual(
+        'semantic-ai',
+        'lanes',
+        '선택한 로컬 검사 후보를 전송 미리보기와 동의를 거쳐 AI에 보내고 응답을 검증해 표시하거나 폐기하는 흐름',
+        'AI 결과는 검증을 통과해도 자동 적용하거나 저장하지 않습니다.',
+        [
+            visualLane('전송과 검증', [
+                visualItem('로컬 후보 선택', { detail: '필요한 후보만 선택' }),
+                visualItem('전송 미리보기', { detail: '원문 · 모델 · 응답 상한', state: 'info' }),
+                visualItem('매회 동의', { detail: '외부 전송 범위 확인', state: 'warning' }),
+                visualItem('AI provider 호출'),
+                visualItem('응답 검증', { detail: '구조 · 식별자 · 인용 근거' }),
+            ]),
+            visualLane('검증 통과', [
+                visualItem('판정 · 근거 · 개선 방향', { state: 'success' }),
+                visualItem('복사 후 사람이 검토', { detail: '저장 · 자동 적용 안 함' }),
+            ], { relation: 'branch' }),
+            visualLane('검증 실패', [
+                visualItem('안전 폐기', { detail: '화면 결과로 사용하지 않음', state: 'danger' }),
+            ], { relation: 'branch' }),
+        ],
+    ),
+    topicVisual(
+        'timeline-overview',
+        'lanes',
+        '채팅 식별자별로 스냅샷이 분리되고 새 식별자의 분기는 별도 기록으로 이어지는 예시',
+        '스냅샷은 요청 한 번이며 같은 채팅 식별자 안에서 시간순으로 쌓입니다.',
+        [
+            visualLane('채팅 A', [
+                visualItem('요청 1'),
+                visualItem('요청 2'),
+                visualItem('요청 3', { state: 'success' }),
+            ]),
+            visualLane('분기된 채팅 B', [
+                visualItem('요청 2에서 분기', { detail: '새 채팅 식별자', state: 'info' }),
+                visualItem('분기 요청 1'),
+            ], { relation: 'branch' }),
+        ],
+    ),
+    topicVisual(
+        'timeline-growth',
+        'comparison',
+        '비슷한 토큰 값은 확대해 보여주고 큰 격차가 생기면 전체 범위에 맞추는 성장 그래프 축 예시',
+        '그래프의 점을 선택하면 해당 요청의 정확한 토큰 수를 확인할 수 있습니다.',
+        [
+            visualLane('값이 비슷할 때', [
+                visualItem('1,080'),
+                visualItem('1,092'),
+                visualItem('1,105', { detail: '작은 차이를 확대', state: 'info' }),
+            ], { relation: 'trend' }),
+            visualLane('큰 격차가 생긴 뒤', [
+                visualItem('1,080'),
+                visualItem('1,105'),
+                visualItem('2,430', { detail: '전체 범위로 축 조정', state: 'warning' }),
+            ], { relation: 'trend' }),
+        ],
+    ),
+    topicVisual(
+        'diff-overview',
+        'flow',
+        '기준 스냅샷에서 비교 대상 스냅샷으로 향하는 변경 비교 방향',
+        '선택 순서를 바꾸면 추가와 삭제의 방향도 반대로 바뀝니다.',
+        [
+            visualLane('비교 방향', [
+                visualItem('기준', { detail: '변경 전 · 요청 2' }),
+                visualItem('변경 계산', { detail: '기준에서 대상으로', state: 'info' }),
+                visualItem('비교 대상', { detail: '변경 후 · 요청 3' }),
+                visualItem('전체 문자열 차이', { detail: '소스 연결과 별도' }),
+            ]),
+        ],
+    ),
+    topicVisual(
+        'diff-statuses',
+        'lanes',
+        '두 요청 사이에서 추가 삭제 수정 교체가 각각 판정되는 조건의 대조',
+        '같은 식별자는 수정을 우선하며 교체는 같은 대안 그룹의 서로 다른 옵션일 때만 사용합니다.',
+        [
+            visualLane('추가 · 삭제', [
+                visualItem('추가', { detail: '비교 대상에만 있음', state: 'success' }),
+                visualItem('삭제', { detail: '기준에만 있음', state: 'danger' }),
+            ], { relation: 'contrast' }),
+            visualLane('수정', [
+                visualItem('같은 식별자 유지', { detail: '내용 · 역할 · 위치 · 순서 변화', state: 'warning' }),
+            ], { relation: 'contrast' }),
+            visualLane('교체', [
+                visualItem('출력언어 | 한국어'),
+                visualItem('출력언어 | 영어', { detail: '같은 대안 그룹의 옵션 전환', state: 'info' }),
+            ], { relation: 'replacement' }),
+        ],
+    ),
+    topicVisual(
+        'search-overview',
+        'flow',
+        '선택한 스냅샷에서 문구를 검색하고 결과 문맥을 거쳐 원본 프롬프트 카드로 이동하는 흐름',
+        '검색은 선택한 스냅샷의 소스 원문을 대상으로 하며 데이터를 수정하지 않습니다.',
+        [
+            visualLane('검색 흐름', [
+                visualItem('스냅샷 선택'),
+                visualItem('검색어 입력', { detail: '일반 · 정규식 · 대소문자', state: 'info' }),
+                visualItem('일치 문맥 확인'),
+                visualItem('원본 소스로 이동', { state: 'success' }),
+            ]),
+        ],
+    ),
+    topicVisual(
+        'settings-storage',
+        'comparison',
+        '채팅에 보관하는 스냅샷 수와 화면에 불러오는 스냅샷 수가 서로 독립적인 예시',
+        '불러올 수를 줄여도 보관 한도 안의 나머지 스냅샷은 삭제되지 않습니다.',
+        [
+            visualLane('브라우저 저장소', [
+                visualItem('채팅별 보관 100개', { detail: '최신 기록을 유지' }),
+            ], { relation: 'contrast' }),
+            visualLane('현재 패널', [
+                visualItem('최근 20개 불러오기', { detail: '나머지 80개도 보관됨', state: 'info' }),
+            ], { relation: 'contrast' }),
+        ],
+    ),
+    topicVisual(
+        'settings-privacy',
+        'comparison',
+        '같은 요청 원문을 전체 가림 메타데이터 저장 모드로 각각 보존한 결과',
+        '보호 수준이 높아질수록 원문 검색과 규칙 검사의 범위는 줄어듭니다.',
+        [
+            visualLane('전체', [
+                visualItem('사용자 이름: 민수', { detail: '원문 유지' }),
+            ], { relation: 'contrast' }),
+            visualLane('가림', [
+                visualItem('사용자 이름: [가림]', { detail: '선택 문자열 대체', state: 'warning' }),
+            ], { relation: 'contrast' }),
+            visualLane('메타데이터', [
+                visualItem('시각 · 모델 · 토큰', { detail: '원문 저장 안 함', state: 'info' }),
+            ], { relation: 'contrast' }),
+        ],
+    ),
+    topicVisual(
+        'request-details',
+        'lanes',
+        '생성 설정 값과 역할별 프롬프트 payload 배열을 나란히 보여주는 요청 상세 구조',
+        '요청 상세는 provider에 전달된 값을 읽는 화면이며 비어 있는 필드를 추측해 채우지 않습니다.',
+        [
+            visualLane('생성 설정', [
+                visualItem('temperature 0.8'),
+                visualItem('top_p 0.95'),
+                visualItem('최대 응답 2,048 토큰'),
+            ]),
+            visualLane('프롬프트 payload', [
+                visualItem('system', { detail: '메인 지시' }),
+                visualItem('user', { detail: '현재 요청' }),
+                visualItem('assistant', { detail: '프리필 또는 이력' }),
+            ], { relation: 'parallel' }),
+        ],
+    ),
+    topicVisual(
+        'rule-v3-structure',
+        'flow',
+        '긴 원문이 여러 atom으로 나뉘고 atom 사이 relation을 거쳐 검사 후보가 되는 구조',
+        '구조 정보는 원문을 대체하는 판정이 아니라 검토할 근거 범위를 좁혀 줍니다.',
+        [
+            visualLane('구조 분석', [
+                visualItem('원문', { detail: '한국어로 답하고 JSON만 출력하세요' }),
+                visualItem('Atom', { detail: '언어 · 형식 지시', state: 'info' }),
+                visualItem('Relation', { detail: '동시 적용 · 대안 · 우선순위' }),
+                visualItem('검사 후보', { detail: '확정 · 후보 · 근거 부족', state: 'warning' }),
+                visualItem('원문 재검토', { state: 'success' }),
+            ]),
+        ],
+    ),
+    topicVisual(
+        'semantic-provider-evaluation',
+        'flow',
+        '고정 corpus를 실제 provider에 반복 전송하고 응답 검증과 품질 지표를 계산하는 평가 경로',
+        'Provider 평가는 특정 모델 경로의 품질 점검이며 개별 프롬프트 AI 검사와 별개입니다.',
+        [
+            visualLane('평가 경로', [
+                visualItem('고정 corpus', { detail: '조건 · 예외 · 말투 · 역할 · 안전' }),
+                visualItem('반복 provider 호출', { detail: '호출 수와 토큰 상한 확인', state: 'warning' }),
+                visualItem('응답 검증', { detail: 'JSON · 식별자 · 인용 근거' }),
+                visualItem('평가 지표', { detail: '통과율 · 근거 정확도 · 오탐률', state: 'success' }),
+            ]),
+        ],
+    ),
+    topicVisual(
+        'storage-data-tools',
+        'lanes',
+        '저장 데이터를 바꾸는 백업 복원 삭제 작업과 읽기 전용 진단 및 무결성 검사를 구분한 구조',
+        '복원과 삭제는 데이터에 영향을 주지만 진단 자료와 무결성 검사는 먼저 상태만 확인합니다.',
+        [
+            visualLane('데이터 변경 작업', [
+                visualItem('백업 내보내기', { state: 'success' }),
+                visualItem('복원 미리보기', { detail: '확인 뒤 적용', state: 'warning' }),
+                visualItem('현재 채팅 · 전체 삭제', { detail: '확인 필요', state: 'danger' }),
+            ]),
+            visualLane('읽기 전용 점검', [
+                visualItem('진단 자료', { detail: '저장소 상태 · 오류 코드', state: 'info' }),
+                visualItem('무결성 검사', { detail: '손상 여부만 확인' }),
+            ], { relation: 'contrast' }),
+        ],
+    ),
+    topicVisual(
+        'faq-common',
+        'flow',
+        '문제가 생겼을 때 캡처 상태와 요청 정보 및 AI 안전 경계를 순서대로 확인하는 기본 진단 흐름',
+        '증상에 따라 관련 기능 설명서를 확인하면 원인과 다음 행동을 빠르게 찾을 수 있습니다.',
+        [
+            visualLane('확인 순서', [
+                visualItem('증상 확인', { detail: '저장 없음 · 알 수 없음 · AI 폐기' }),
+                visualItem('상태와 오류 카드 확인', { state: 'info' }),
+                visualItem('관련 설명서 확인'),
+                visualItem('안전한 다시 시도', { state: 'success' }),
+            ]),
+        ],
+    ),
+]);
+
+export const HELP_TOPIC_VISUALS = Object.freeze(Object.fromEntries(
+    HELP_TOPIC_VISUAL_LIST.map((visual) => [visual.id, visual]),
+));
+
+export function helpTopicVisualById(id) {
+    return HELP_TOPIC_VISUALS[String(id ?? '')] ?? null;
+}
+
 export const HELP_LABS = Object.freeze([
     {
         id: 'comparison-policy',

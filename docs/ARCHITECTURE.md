@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.1의 세 갈래 도움말 정보 구조와 직접 체험형 coachmark 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.2의 세 갈래 도움말 정보 구조, 19개 기능 설명서 도식과 다섯 고급 coachmark, 직접 체험형 기본 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -12,11 +12,13 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### 세 갈래 도움말 경계
 
-`src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다.
+`src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다. 홈 카드 전체가 button이므로 별도 파란색 `… 보기` action copy는 만들지 않고 제목·설명·방향 표시만 사용합니다.
+
+`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 시각 자료 registry입니다. 각 자료는 `flow`·`comparison`·`lanes` 유형과 접근 가능한 설명·caption, `sequence`·`contrast`·`branch`·`mapping`·`trend`·`replacement`·`parallel` 관계를 가진 lane·item으로만 구성됩니다. 외부 이미지 URL과 고정 색상값을 포함하지 않으며 renderer가 밝음·어두움 panel token, 의미 상태 label과 모바일 단일 열 재배치를 적용합니다. 따라서 캡처 상태, source→payload, 비교 정책 전후, AI 전송→검증→표시/폐기 같은 구조를 색상이나 원격 asset에 의존하지 않고 설명합니다.
 
 짧은 `?` tooltip은 기능을 다시 떠올릴 한두 문장과 텍스트형 `자세히 보기`만 포함합니다. `자세히 보기`는 별도의 창이나 중간 목록을 거치지 않고 같은 도움말 dialog의 해당 topic ID로 deep link합니다. 도움말을 닫으면 deep link를 연 실제 control로 focus를 복원합니다.
 
-고급 기능 가이드는 비교 정책과 AI 의미 검사를 별도 연습장 renderer로 복제하지 않고 실제 규칙 검사 화면과 같은 control·레이아웃 위에서 coachmark 단계로 실행합니다. 비교 정책은 고정 이름 규칙·대안 그룹·미리보기 결과를, AI 의미 검사는 고정 profile·prompt·prefill·동의·결과를 session 메모리에서만 전환합니다. `SemanticInspector`, Connection Manager, `fetch`, snapshot store, 실제 비교 정책 저장 함수와 비용 경로는 호출하지 않습니다.
+고급 기능 가이드는 별도 연습장 renderer로 기능을 복제하지 않고 실제 규칙 검사·비교 화면과 같은 control·레이아웃 위에서 coachmark 단계로 실행합니다. 비교 정책 9단계는 profile 적용 범위·순서·그룹 동작·이름 규칙·수동 지정·우선순위·미리보기를, AI 의미 검사 10단계는 후보·profile·응답 상한·prompt/prefill·전송 범위·동의·검증·폐기를 다룹니다. 검사 결과 판정과 예외 관리 7단계, Atom·Relation 근거 읽기 7단계, 대안 그룹 교체 비교 6단계도 각각 고정 source·결과·정책 상태를 session 메모리에서만 전환합니다. `SemanticInspector`, Connection Manager, `fetch`, snapshot store, 실제 검토 결정·비교 정책 저장 함수와 비용 경로는 호출하지 않습니다.
 
 도움말 dialog가 열리면 제품의 header·workspace·bottom navigation을 `inert`·`aria-hidden` 처리하고 dialog 안에서 focus를 순환합니다. Escape와 닫기는 더미 session·timer를 정리하고 원래 focus를 복원합니다. 모바일은 dialog 전체 화면을 사용하며 고정 header 아래 `.st-devtools-help-body` 하나만 scroll owner입니다. 320px·390px, 밝음·어두움 테마와 keyboard focus에서 세 경로·문서 deep link·코치마크 control이 가로로 넘치거나 호스트 테마에 의해 변형되지 않는 것을 회귀 대상으로 둡니다.
 
@@ -24,7 +26,7 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.16.1의 온보딩은 `src/onboarding.js`에 전체 38단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계입니다. 전체 안내도 같은 38단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+v0.16.2의 온보딩은 `src/onboarding.js`에 전체 38단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 7·검사 7·검색 5단계입니다. 전체 안내도 같은 38단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
 
 전체 안내만 첫 실행 상태의 `completed`·`skipped`를 기록합니다. 기능별 부분 투어와 고급 가이드는 독립 route로 실행하며 완료·중단·건너뛰기가 전역 온보딩 상태를 쓰거나 덮어쓰지 않습니다. 각 부분 투어는 필요한 snapshot 수·선택 항목·캡처 상태가 준비된 checkpoint에서 session을 만들기 때문에 중간 기능부터 시작해도 이전 장의 조작을 요구하지 않습니다.
 
@@ -32,13 +34,13 @@ v0.16.1의 온보딩은 `src/onboarding.js`에 전체 38단계와 기본 사용�
 
 실습 단계는 실제 탭·select·button·details·검색 입력을 click/change/input/toggle하게 하지만 snapshot store의 추가·삭제·보관 API, provider adapter·Semantic Inspector, 클립보드와 export를 호출하지 않습니다. 캡처 연습의 `대기 → 감지 → 저장 중 → 저장됨`도 session 내부 상태 전환이며 실제 요청을 저장하지 않습니다. 상태는 색상 점만 쓰지 않고 짧은 copy와 pill을 함께 갱신합니다. AI 의미 검사나 공식 Provider 평가가 실행 중이면 시작하지 않고 실습 중 새 AI 실행도 거부합니다.
 
-첫 초대와 읽기 전용 briefing·debrief는 modal phase입니다. 제품 영역을 `inert`·`aria-hidden` 처리하고 focus를 안내 surface 안에 가둔 상태에서 화면을 dim 처리하며 실제 target의 spotlight 영역만 드러냅니다. briefing은 target ring·점선 화살표·제목과 기능 의미·사용 시점 또는 확인 행동을 두 개의 짧은 문장으로 표시합니다. debrief는 녹색 result ring, `잘했어요!`, 단계 이름과 관찰 결과를 분리합니다. modal footer에는 진행 숫자와 `다음`만 두고 종료 control은 패널 우측 상단에 둡니다. phase가 끝나면 `inert`와 focus trap을 함께 해제합니다.
+첫 초대와 읽기 전용 briefing·debrief는 modal phase입니다. 제품 영역을 `inert`·`aria-hidden` 처리하고 focus를 안내 surface 안에 가둔 상태에서 화면을 dim 처리하며 실제 target의 spotlight 영역만 드러냅니다. briefing은 target ring·점선 화살표·제목과 기능 의미·사용 시점 또는 확인 행동을 두 개의 짧은 문장으로 표시합니다. debrief는 녹색 result ring과 별도 불투명 고대비 surface에서 `잘했어요!`, 단계 이름과 관찰 결과를 분리합니다. 완료 surface는 target보다 위 stacking context에 놓이고 아래 target copy가 비치지 않도록 배경·텍스트 token을 직접 지정합니다. modal footer에는 진행 숫자와 `다음`만 두고 종료 control은 패널 우측 상단에 둡니다. phase가 끝나면 `inert`와 focus trap을 함께 해제합니다.
 
 상호작용 단계는 처음부터 practice로 진입해 dim·modal·`inert` 없이 실제 제품 화면, target의 고대비 pulse ring과 기능 이름·의미·사용 맥락·할 일을 한 dock에 표시합니다. 캡처 데모는 이름이 보이는 가로 실행 버튼과 진행 중 상태를 제공하고 나머지 target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. value·checked·open 조건이 이미 충족된 경우 현재 DOM 상태를 즉시 완료 집합과 동기화해 control을 되돌렸다 다시 조작하게 하지 않습니다. 정확한 동작을 감지하면 debrief로 자동 전환하고, disclosure는 제목 줄 대신 새로 펼쳐진 본문의 보이는 영역을 결과 target으로 사용합니다.
 
 튜토리얼 interaction listener는 실제 control보다 먼저 실행되는 capture phase에 있습니다. click 직후의 이전 `aria-checked`·`open` 값을 판정하지 않도록 다음 task까지 완료 검사를 미루고, 그 사이 튜토리얼이 닫히거나 다른 단계로 바뀐 경우를 막기 위해 같은 session 객체·step ID·`practice` phase인지 다시 확인합니다.
 
-320px·390px 화면에서도 고정 sheet나 내부 본문 스크롤을 사용하지 않습니다. target 강조 영역은 최소 52×44px이고 짧은 코치마크는 target 위·아래 중 가용 공간이 큰 쪽에 놓이며 하단 safe area 내비게이션을 피합니다. 320px의 캡처 실습은 지시와 실행 버튼을 세로로 배치합니다. target pulse·copy 진입·spotlight 크기 변화·성공 feedback은 짧은 one-shot animation이고 `prefers-reduced-motion`에서는 정적 링과 색상 변화만 유지합니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태와 시작 전 focus를 다시 렌더링합니다. 저장하는 상태는 `st-devtools:onboarding:v5`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·phase·시각·연습 원문·실제 데이터는 저장하지 않습니다.
+320px·390px 화면에서도 고정 sheet나 내부 본문 스크롤을 사용하지 않습니다. target 강조 영역은 최소 52×44px이고 짧은 코치마크는 panel의 실제 가시 폭과 target 위·아래 중 가용 공간을 함께 계산하며 하단 safe area 내비게이션을 피합니다. 검색 snapshot select처럼 긴 control도 가시 viewport 안에서 폭과 수평 위치를 제한해 document를 왼쪽으로 밀거나 가로 scroll을 만들지 않습니다. 320px의 캡처 실습은 지시와 실행 버튼을 세로로 배치합니다. target pulse·copy 진입·spotlight 크기 변화·성공 feedback은 짧은 one-shot animation이고 `prefers-reduced-motion`에서는 정적 링과 색상 변화만 유지합니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태와 시작 전 focus를 다시 렌더링합니다. 저장하는 상태는 `st-devtools:onboarding:v5`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·phase·시각·연습 원문·실제 데이터는 저장하지 않습니다.
 
 ## 캡처 파이프라인
 

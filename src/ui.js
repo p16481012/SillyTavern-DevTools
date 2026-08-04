@@ -148,6 +148,7 @@ import {
     HELP_LABS,
     createHelpLabSession,
     helpTopicById,
+    helpTopicVisualById,
     helpTopicsFor,
     normalizeRecentHelpTopics,
     rememberHelpTopic,
@@ -3820,7 +3821,7 @@ export class DevToolsWindow {
         });
     }
 
-    renderHelpHomeCard({ view, icon, title, description, action }) {
+    renderHelpHomeCard({ view, icon, title, description }) {
         const card = element('button', {
             className: 'st-devtools-help-home-card',
             type: 'button',
@@ -3837,7 +3838,6 @@ export class DevToolsWindow {
         copy.append(
             element('strong', { text: title }),
             element('small', { text: description }),
-            element('span', { text: action }),
         );
         card.append(iconWrap, copy);
         card.addEventListener('click', () => this.showHelpView(view));
@@ -3865,21 +3865,18 @@ export class DevToolsWindow {
                 icon: 'fa-route',
                 title: '기본 사용법',
                 description: '앱의 주요 기능과 화면을 단계별로 확인합니다.',
-                action: '기본 사용법 보기',
             }),
             this.renderHelpHomeCard({
                 view: 'advanced',
                 icon: 'fa-graduation-cap',
                 title: '고급 기능 가이드',
                 description: '복잡한 기능의 설정 방법을 기능별로 확인합니다.',
-                action: '고급 기능 가이드 보기',
             }),
             this.renderHelpHomeCard({
                 view: 'docs',
                 icon: 'fa-book-open',
                 title: '기능 설명서',
                 description: '자주 묻는 질문과 자세한 설명을 확인합니다.',
-                action: '기능 설명서 보기',
             }),
         );
         view.append(intro, grid);
@@ -4071,6 +4068,8 @@ export class DevToolsWindow {
                 className: 'st-devtools-help-topic-summary',
             }),
         );
+        const visual = helpTopicVisualById(topic.id);
+        if (visual) article.appendChild(this.renderHelpTopicVisual(visual));
         for (const [title, body] of topic.sections) {
             const section = element('section', {
                 className: 'st-devtools-help-topic-section',
@@ -4082,6 +4081,50 @@ export class DevToolsWindow {
             article.appendChild(section);
         }
         return article;
+    }
+
+    renderHelpTopicVisual(visual) {
+        const figure = element('figure', {
+            className: `st-devtools-help-visual is-${visual.type}`,
+        });
+        figure.setAttribute('role', 'img');
+        figure.setAttribute('aria-label', visual.ariaLabel);
+        const caption = element('figcaption');
+        caption.append(
+            element('strong', { text: '한눈에 보기' }),
+            element('span', { text: visual.caption }),
+        );
+        const lanes = element('div', {
+            className: 'st-devtools-help-visual-lanes',
+        });
+        for (const lane of visual.lanes) {
+            const laneNode = element('section', {
+                className: `st-devtools-help-visual-lane relation-${lane.relation}`,
+            });
+            laneNode.appendChild(element('h4', { text: lane.label }));
+            const items = element('ol');
+            for (const item of lane.items) {
+                const itemNode = element('li', {
+                    className: `is-${item.state ?? 'neutral'}`,
+                });
+                const marker = element('span', {
+                    className: 'st-devtools-help-visual-marker',
+                });
+                marker.setAttribute('aria-hidden', 'true');
+                itemNode.append(
+                    marker,
+                    element('strong', { text: item.label }),
+                );
+                if (item.detail) {
+                    itemNode.appendChild(element('small', { text: item.detail }));
+                }
+                items.appendChild(itemNode);
+            }
+            laneNode.appendChild(items);
+            lanes.appendChild(laneNode);
+        }
+        figure.append(caption, lanes);
+        return figure;
     }
 
     startHelpLab(labId) {
@@ -4976,6 +5019,20 @@ export class DevToolsWindow {
             semanticActive: false,
             comparisonPreviewed: false,
             semanticResultReady: false,
+            profileScope: '',
+            matcher: '',
+            mode: '',
+            manualAssignment: '',
+            semanticTargetSelected: false,
+            semanticTokenCap: '256',
+            semanticPreviewOpen: false,
+            reviewDecision: '',
+            reviewScope: '',
+            reviewIgnored: false,
+            reviewRestored: false,
+            replacementBase: '',
+            replacementCompare: '',
+            replacementGrouped: false,
         };
         this.onboardingSession.tabId = firstStep.tabId;
         this.onboardingPhase = 'steps';
@@ -5845,7 +5902,10 @@ export class DevToolsWindow {
 
     clearOnboardingTarget() {
         if (this.onboardingSpotlight) this.onboardingSpotlight.hidden = true;
-        this.onboardingGuide?.classList.remove('has-onboarding-spotlight');
+        this.onboardingGuide?.classList.remove(
+            'has-onboarding-spotlight',
+            'is-callout-over-target',
+        );
         for (const callout of [
             this.onboardingGuideBody,
             this.onboardingPracticeDock,
@@ -5899,7 +5959,10 @@ export class DevToolsWindow {
         mountDetailsContent(disclosure);
         const revealed = Array.from(disclosure.children ?? [])
             .find((child) => child?.tagName !== 'SUMMARY');
-        return revealed ?? disclosure ?? fallback;
+        const boundedReveal = revealed?.querySelector?.(
+            '[data-onboarding-reveal-target]',
+        );
+        return boundedReveal ?? revealed ?? disclosure ?? fallback;
     }
 
     refreshOnboardingTarget() {
@@ -5969,19 +6032,33 @@ export class DevToolsWindow {
             && targetRect.bottom <= visibleBottom
             && targetRect.left >= viewportRect.left + inset
         );
-        if (!nearestOnly || !fullyVisible) {
-            target.scrollIntoView?.({
-                block: nearestOnly
-                    ? targetInContent && practiceBackRect
-                        ? 'center'
-                        : 'nearest'
-                    : this.content?.contains(target)
-                        ? 'start'
-                        : 'center',
-                inline: 'nearest',
-                behavior: 'auto',
-            });
+        if ((!nearestOnly || !fullyVisible) && targetInContent) {
+            const visibleHeight = Math.max(
+                0,
+                visibleBottom - viewportRect.top - inset * 2,
+            );
+            let desiredTop = viewportRect.top + inset;
+            if (nearestOnly && targetRect.height <= visibleHeight) {
+                if (targetRect.top < viewportRect.top + inset) {
+                    desiredTop = viewportRect.top + inset;
+                } else if (targetRect.bottom > visibleBottom) {
+                    desiredTop = visibleBottom - targetRect.height;
+                } else {
+                    desiredTop = targetRect.top;
+                }
+            }
+            const nextScrollTop = Math.max(
+                0,
+                Number(viewport.scrollTop || 0) + targetRect.top - desiredTop,
+            );
+            if (typeof viewport.scrollTo === 'function') {
+                viewport.scrollTo({ top: nextScrollTop, left: 0, behavior: 'auto' });
+            } else {
+                viewport.scrollTop = nextScrollTop;
+                viewport.scrollLeft = 0;
+            }
         }
+        if (targetInContent) viewport.scrollLeft = 0;
         if (focus) {
             if (this.onboardingLocateTimer != null) {
                 clearTimeout(this.onboardingLocateTimer);
@@ -6089,6 +6166,7 @@ export class DevToolsWindow {
         ) {
             this.onboardingSpotlight.hidden = true;
             this.onboardingGuide.classList.remove('has-onboarding-spotlight');
+            this.onboardingGuide.classList.remove('is-callout-over-target');
             this.onboardingGuide.dataset.placement = 'center';
             callout?.style.removeProperty('left');
             callout?.style.removeProperty('top');
@@ -6139,10 +6217,17 @@ export class DevToolsWindow {
         const reservedBottom = navigationClearance + 70;
         const topSpace = top - reservedTop;
         const bottomSpace = windowRect.height - bottom - reservedBottom;
+        const topFits = topSpace >= calloutHeight + pointerGap;
+        const bottomFits = bottomSpace >= calloutHeight + pointerGap;
+        const calloutOverTarget = !topFits && !bottomFits;
         const placement = (
-            bottomSpace >= calloutHeight + pointerGap
+            bottomFits
             || bottomSpace >= topSpace
         ) ? 'bottom' : 'top';
+        this.onboardingGuide.classList.toggle(
+            'is-callout-over-target',
+            calloutOverTarget,
+        );
         const calloutLeft = Math.max(
             margin,
             Math.min(
@@ -7246,7 +7331,10 @@ export class DevToolsWindow {
         if (
             this.tutorialIsActive()
             && this.onboardingKind === 'advanced'
-            && nextTab !== 'rules'
+            && nextTab !== (
+                advancedOnboardingGuideById(this.onboardingGuideId)
+                    ?.steps?.[0]?.tabId ?? 'rules'
+            )
         ) {
             this.showOnboardingTarget();
             return false;
@@ -7268,7 +7356,10 @@ export class DevToolsWindow {
         ) {
             void this.refreshStorageSummary();
         }
-        if (changed && this.content) this.content.scrollTop = 0;
+        if (changed && this.content) {
+            this.content.scrollTop = 0;
+            this.content.scrollLeft = 0;
+        }
         if (focus) this.activeTabButton()?.focus();
         return true;
     }
@@ -7302,6 +7393,15 @@ export class DevToolsWindow {
             this.content.appendChild(practiceNotice);
         } else if (this.storageErrors.length > 0) {
             this.content.appendChild(this.renderStorageErrors());
+        }
+
+        if (
+            this.tutorialIsActive()
+            && this.onboardingSession?.guideKind === 'advanced'
+        ) {
+            this.content.appendChild(this.renderAdvancedOnboardingGuide());
+            queueMicrotask(() => this.refreshOnboardingTarget());
+            return;
         }
 
         const snapshot = this.selectedSnapshot();
@@ -8485,6 +8585,12 @@ export class DevToolsWindow {
             });
             selectWrapper.appendChild(select);
             const button = element('button', { className: 'st-devtools-timeline-item', type: 'button' });
+            if (
+                tutorial
+                && snapshot.id === timelineItems[0]?.snapshot?.id
+            ) {
+                button.dataset.onboardingRevealTarget = 'true';
+            }
             const heading = element('strong', {
                 text: formatSnapshotHeading(snapshot, tutorial),
             });
@@ -14093,14 +14199,51 @@ export class DevToolsWindow {
                 text: '저장되지 않는 연습 설정',
             }),
             element('h2', { text: '출력 언어 옵션을 대안 그룹으로 묶기' }),
-            proseElement('p', '더미 프롬프트 이름으로 규칙 적용 전후만 확인합니다. 실제 비교 정책과 스냅샷은 바뀌지 않습니다.'),
+            proseElement('p', '프로필 범위부터 이름 규칙과 수동 예외, 적용 전후까지 더미 프롬프트로 확인합니다. 실제 비교 정책과 스냅샷은 바뀌지 않습니다.'),
         );
         const examples = element('div', {
             className: 'st-devtools-advanced-guide-examples',
         });
-        for (const name of ['출력언어 | 한국어', '출력언어 | 영어', '말투 | 존댓말']) {
+        for (const name of [
+            '출력언어 | 한국어',
+            '출력언어 | 영어',
+            '출력 언어 ❤️ 한국어',
+            '말투 | 존댓말',
+        ]) {
             examples.appendChild(element('span', { text: name }));
         }
+
+        const scopeLabel = element('label');
+        scopeLabel.appendChild(element('strong', { text: '정책 프로필 범위' }));
+        const scope = element('select');
+        scope.dataset.advancedGuideControl = 'profile-scope';
+        for (const [value, label] of [
+            ['', '범위를 선택하세요'],
+            ['global', '전체 기본값'],
+            ['preset', '현재 프리셋'],
+            ['character', '현재 캐릭터'],
+            ['chat', '현재 채팅'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.profileScope === value;
+            scope.appendChild(option);
+        }
+        scope.addEventListener('change', () => {
+            state.profileScope = scope.value;
+        });
+        scopeLabel.appendChild(scope);
+
+        const profileChain = element('section', {
+            className: 'st-devtools-advanced-guide-note',
+        });
+        profileChain.dataset.advancedGuideResult = 'profile-chain';
+        profileChain.append(
+            element('strong', { text: '현재 적용 순서' }),
+            element('span', { text: '현재 채팅 → 현재 캐릭터 → 현재 프리셋 → 전체 기본값' }),
+            element('small', { text: '더 구체적인 범위와 높은 우선순위를 먼저 확인합니다.' }),
+        );
+
         const matcherLabel = element('label');
         matcherLabel.appendChild(element('strong', { text: '이름 해석 규칙' }));
         const matcher = element('select');
@@ -14118,7 +14261,7 @@ export class DevToolsWindow {
         matcher.addEventListener('change', () => {
             state.matcher = matcher.value;
             state.comparisonPreviewed = false;
-            preview.disabled = !state.matcher || !state.mode;
+            updatePreviewState();
         });
         matcherLabel.appendChild(matcher);
 
@@ -14139,9 +14282,39 @@ export class DevToolsWindow {
         mode.addEventListener('change', () => {
             state.mode = mode.value;
             state.comparisonPreviewed = false;
-            preview.disabled = !state.matcher || !state.mode;
+            updatePreviewState();
         });
         modeLabel.appendChild(mode);
+
+        const manualLabel = element('label');
+        manualLabel.appendChild(element('strong', { text: '설정 프롬프트 수동 지정' }));
+        const manual = element('select');
+        manual.dataset.advancedGuideControl = 'manual-assignment';
+        for (const [value, label] of [
+            ['', '수동 예외를 선택하세요'],
+            ['tutorial:language-ko', '출력 언어 ❤️ 한국어 → 출력언어 / 한국어'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.manualAssignment === value;
+            manual.appendChild(option);
+        }
+        manual.addEventListener('change', () => {
+            state.manualAssignment = manual.value;
+            state.comparisonPreviewed = false;
+            updatePreviewState();
+        });
+        manualLabel.appendChild(manual);
+
+        const precedence = element('section', {
+            className: 'st-devtools-advanced-guide-note',
+        });
+        precedence.dataset.advancedGuideResult = 'precedence';
+        precedence.append(
+            element('strong', { text: '분류 우선순위' }),
+            element('span', { text: '수동 지정 → 위에서 처음 일치한 이름 규칙 1개' }),
+            element('small', { text: '하트 이름은 수동 지정, 세로줄 이름은 이름 규칙으로 분류합니다.' }),
+        );
 
         const preview = element('button', {
             className: 'menu_button st-devtools-primary-button',
@@ -14149,13 +14322,27 @@ export class DevToolsWindow {
             type: 'button',
         });
         preview.dataset.advancedGuideControl = 'preview';
-        preview.disabled = !state.matcher || !state.mode;
+        const updatePreviewState = () => {
+            preview.disabled = !state.profileScope
+                || !state.matcher
+                || !state.mode
+                || !state.manualAssignment;
+        };
+        updatePreviewState();
         preview.addEventListener('click', () => {
             state.comparisonPreviewed = true;
             this.render();
         });
         const form = element('div', { className: 'st-devtools-advanced-guide-form' });
-        form.append(matcherLabel, modeLabel, preview);
+        form.append(
+            scopeLabel,
+            profileChain,
+            modeLabel,
+            matcherLabel,
+            manualLabel,
+            precedence,
+            preview,
+        );
         card.append(examples, form);
         if (state.comparisonPreviewed) {
             const result = element('section', {
@@ -14166,7 +14353,8 @@ export class DevToolsWindow {
                 element('strong', { text: '적용 결과' }),
                 element('span', { text: '그룹 내부 비교 1건 → 0건' }),
                 element('span', { text: '다른 그룹과의 비교는 그대로 유지' }),
-                proseElement('p', '한국어와 영어는 서로 대안으로 해석됩니다. 말투 | 존댓말은 다른 그룹이므로 계속 비교합니다.'),
+                element('span', { text: '같은 그룹 옵션이 둘 다 켜지면 다중 활성 경고 유지' }),
+                proseElement('p', '한국어와 영어는 서로 대안으로 해석됩니다. 말투 | 존댓말은 다른 그룹이므로 계속 비교하고, 모호한 활성 상태는 숨기지 않습니다.'),
             );
             card.appendChild(result);
         }
@@ -14199,8 +14387,27 @@ export class DevToolsWindow {
                 text: '고정된 더미 응답 · 외부 전송 안 함',
             }),
             element('h2', { text: 'AI로 응답 형식 충돌을 더 자세히 보기' }),
-            proseElement('p', 'JSON과 XML 지시가 함께 들어간 연습 후보 하나만 선택한 상태입니다.'),
+            proseElement('p', '로컬 검사 후보 선택부터 실제 전송 범위와 안전 폐기까지 고정된 연습 데이터로 확인합니다.'),
         );
+
+        const targetLabel = element('label', {
+            className: 'st-devtools-advanced-guide-target',
+        });
+        const target = element('input');
+        target.type = 'checkbox';
+        target.checked = Boolean(state.semanticTargetSelected);
+        target.dataset.advancedGuideControl = 'target';
+        target.addEventListener('change', () => {
+            state.semanticTargetSelected = target.checked;
+            updateRunState();
+        });
+        const targetCopy = element('span');
+        targetCopy.append(
+            element('strong', { text: '응답 형식 충돌' }),
+            element('small', { text: 'Main Prompt · 출력 규칙 · 로컬 후보 1개' }),
+        );
+        targetLabel.append(target, targetCopy);
+
         const profileLabel = element('label');
         profileLabel.appendChild(element('strong', { text: 'AI 연결 프로필' }));
         const profile = element('select');
@@ -14217,9 +14424,26 @@ export class DevToolsWindow {
         }
         profile.addEventListener('change', () => {
             state.profile = profile.value;
-            run.disabled = !state.consented || !state.profile;
+            updateRunState();
         });
         profileLabel.appendChild(profile);
+
+        const tokenCapLabel = element('label');
+        tokenCapLabel.appendChild(element('strong', { text: '응답 토큰 상한' }));
+        const tokenCap = element('select');
+        tokenCap.dataset.advancedGuideControl = 'token-cap';
+        for (const value of ['256', '512', '1024']) {
+            const option = element('option', { text: `${value} 토큰` });
+            option.value = value;
+            option.selected = state.semanticTokenCap === value;
+            tokenCap.appendChild(option);
+        }
+        tokenCap.addEventListener('change', () => {
+            state.semanticTokenCap = tokenCap.value;
+            updatePreview();
+            updateRunState();
+        });
+        tokenCapLabel.appendChild(tokenCap);
 
         const prompt = element('details', {
             className: 'st-devtools-disclosure st-devtools-advanced-guide-prompt',
@@ -14237,15 +14461,36 @@ export class DevToolsWindow {
             }),
         );
 
+        const previewButton = element('button', {
+            className: 'menu_button',
+            text: '전송 내용 미리보기',
+            type: 'button',
+        });
+        previewButton.dataset.advancedGuideControl = 'preview';
+
         const preview = element('section', {
             className: 'st-devtools-advanced-guide-send-preview',
         });
-        preview.append(
-            element('strong', { text: '전송 미리보기' }),
-            element('span', { text: '대상: 응답 형식 충돌 후보 1개' }),
-            element('span', { text: '원문: JSON 형식 지시, XML 형식 지시' }),
-            element('span', { text: '응답 상한: 512 토큰' }),
-        );
+        preview.dataset.advancedGuideResult = 'source-scope';
+        preview.hidden = !state.semanticPreviewOpen;
+        const updatePreview = () => {
+            preview.replaceChildren(
+                element('strong', { text: '전송 미리보기' }),
+                element('span', { text: '연결: 현재 채팅 연결 · gemini-3.1-pro-preview' }),
+                element('span', { text: '포함: Main Prompt, 출력 규칙' }),
+                element('span', { text: '제외: 캐릭터 설정 · 선택 근거와 무관' }),
+                element('span', { text: `응답 상한: ${state.semanticTokenCap} 토큰` }),
+                element('small', { text: '원문이 없는 가림·메타데이터 스냅샷에서는 실행할 수 없습니다.' }),
+            );
+        };
+        updatePreview();
+        previewButton.addEventListener('click', () => {
+            state.semanticPreviewOpen = true;
+            preview.hidden = false;
+            updatePreview();
+            updateRunState();
+        });
+
         const consentLabel = element('label', {
             className: 'st-devtools-advanced-guide-consent',
         });
@@ -14255,7 +14500,7 @@ export class DevToolsWindow {
         consent.dataset.advancedGuideControl = 'consent';
         consent.addEventListener('change', () => {
             state.consented = consent.checked;
-            run.disabled = !state.consented || !state.profile;
+            updateRunState();
         });
         consentLabel.append(
             consent,
@@ -14267,12 +14512,28 @@ export class DevToolsWindow {
             type: 'button',
         });
         run.dataset.advancedGuideControl = 'run';
-        run.disabled = !state.consented || !state.profile;
+        const updateRunState = () => {
+            run.disabled = !state.semanticTargetSelected
+                || !state.profile
+                || !state.semanticTokenCap
+                || !state.semanticPreviewOpen
+                || !state.consented;
+        };
+        updateRunState();
         run.addEventListener('click', () => {
             state.semanticResultReady = true;
             this.render();
         });
-        card.append(profileLabel, prompt, preview, consentLabel, run);
+        card.append(
+            targetLabel,
+            profileLabel,
+            tokenCapLabel,
+            prompt,
+            previewButton,
+            preview,
+            consentLabel,
+            run,
+        );
         if (state.semanticResultReady) {
             const result = element('section', {
                 className: 'st-devtools-advanced-guide-result',
@@ -14290,16 +14551,389 @@ export class DevToolsWindow {
             result.appendChild(element('small', {
                 text: '연습 결과는 저장하거나 자동 적용하지 않습니다.',
             }));
+            const discarded = element('section', {
+                className: 'st-devtools-advanced-guide-discarded',
+            });
+            discarded.dataset.advancedGuideResult = 'discarded';
+            discarded.append(
+                element('strong', { text: '안전 폐기 예시' }),
+                element('span', { text: '근거 불일치 · 존재하지 않는 원문 위치 인용' }),
+                element('small', { text: '응답 전체를 화면 결과로 사용하지 않습니다.' }),
+            );
+            result.appendChild(discarded);
             card.appendChild(result);
         }
         page.appendChild(card);
         return page;
     }
 
+    renderAdvancedFindingReviewGuide() {
+        const state = this.onboardingSession.advancedState;
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-advanced-guide-page',
+        });
+        const card = element('section', {
+            className: 'st-devtools-advanced-guide-card',
+        });
+        card.append(
+            element('span', {
+                className: 'st-devtools-advanced-guide-eyebrow',
+                text: '메모리 전용 검토 연습',
+            }),
+            element('h2', { text: '검사 결과를 판정하고 다시 복원하기' }),
+            proseElement('p', '오탐과 이번만 숨김, 범위별 항상 무시가 어떻게 다른지 실제 결과 카드와 같은 순서로 확인합니다.'),
+        );
+
+        const review = element('details', {
+            className: 'st-devtools-disclosure st-devtools-advanced-review',
+        });
+        review.dataset.advancedGuideControl = 'review-open';
+        review.appendChild(element('summary', { text: '이 검사 결과 검토' }));
+        const reviewBody = element('div', {
+            className: 'st-devtools-advanced-review-body',
+        });
+        reviewBody.append(
+            element('strong', { text: '응답 형식 충돌' }),
+            element('small', { text: 'JSON 형식 지시 · XML 형식 지시' }),
+        );
+
+        const decisionLabel = element('label');
+        decisionLabel.appendChild(element('strong', { text: '검토 결정' }));
+        const decision = element('select');
+        decision.dataset.advancedGuideControl = 'decision-false-positive';
+        for (const [value, label] of [
+            ['', '결정을 선택하세요'],
+            ['valid', '유효 · 실제 검토 필요'],
+            ['false-positive', '오탐 · 현재 문맥에서는 문제 아님'],
+            ['hide-once', '이번만 숨기기 · 현재 패널 세션만'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.reviewDecision === value;
+            decision.appendChild(option);
+        }
+        decisionLabel.appendChild(decision);
+
+        const decisionResult = element('section', {
+            className: 'st-devtools-advanced-guide-note',
+        });
+        decisionResult.dataset.advancedGuideResult = 'decision';
+        decisionResult.hidden = !state.reviewDecision;
+        const refreshDecision = () => {
+            decisionResult.replaceChildren(
+                element('strong', { text: '결정의 저장 방식' }),
+                element('span', {
+                    text: state.reviewDecision === 'false-positive'
+                        ? '오탐은 검토 완료 목록에 남고 다시 표시할 수 있습니다.'
+                        : state.reviewDecision === 'hide-once'
+                            ? '이번만 숨김은 패널을 닫으면 사라지는 임시 선택입니다.'
+                            : '유효는 규칙을 끄지 않고 실제 문제였다는 판단만 남깁니다.',
+                }),
+            );
+        };
+        refreshDecision();
+        decision.addEventListener('change', () => {
+            state.reviewDecision = decision.value;
+            decisionResult.hidden = !state.reviewDecision;
+            refreshDecision();
+        });
+
+        const scopeLabel = element('label');
+        scopeLabel.appendChild(element('strong', { text: '항상 무시 적용 범위' }));
+        const scope = element('select');
+        scope.dataset.advancedGuideControl = 'ignore-scope';
+        for (const [value, label] of [
+            ['', '범위를 선택하세요'],
+            ['chat', '현재 채팅'],
+            ['character', '현재 캐릭터'],
+            ['preset', '현재 프리셋'],
+            ['global', '전체'],
+        ]) {
+            const option = element('option', { text: label });
+            option.value = value;
+            option.selected = state.reviewScope === value;
+            scope.appendChild(option);
+        }
+        scope.addEventListener('change', () => {
+            state.reviewScope = scope.value;
+            alwaysIgnore.disabled = !state.reviewScope;
+        });
+        scopeLabel.appendChild(scope);
+
+        const alwaysIgnore = element('button', {
+            className: 'menu_button',
+            text: '이 패턴 항상 무시',
+            type: 'button',
+        });
+        alwaysIgnore.dataset.advancedGuideControl = 'always-ignore';
+        alwaysIgnore.disabled = !state.reviewScope;
+
+        const reviewed = element('section', {
+            className: 'st-devtools-advanced-guide-result',
+        });
+        reviewed.dataset.advancedGuideResult = 'reviewed';
+        reviewed.hidden = !state.reviewIgnored;
+        const reviewedStatus = element('span');
+        const restore = element('button', {
+            className: 'menu_button',
+            text: '다시 표시',
+            type: 'button',
+        });
+        restore.dataset.advancedGuideControl = 'restore';
+        const refreshReviewed = () => {
+            reviewedStatus.textContent = state.reviewRestored
+                ? '복원됨 · 기본 검사 목록에 다시 표시됩니다.'
+                : '현재 채팅 · 항상 무시 · 연습 감사 기록 1건';
+            restore.disabled = state.reviewRestored;
+        };
+        refreshReviewed();
+        alwaysIgnore.addEventListener('click', () => {
+            state.reviewIgnored = true;
+            state.reviewRestored = false;
+            reviewed.hidden = false;
+            refreshReviewed();
+        });
+        restore.addEventListener('click', () => {
+            state.reviewRestored = true;
+            refreshReviewed();
+        });
+        reviewed.append(
+            element('strong', { text: '검토 완료와 변경 기록' }),
+            reviewedStatus,
+            restore,
+        );
+
+        reviewBody.append(
+            decisionLabel,
+            decisionResult,
+            scopeLabel,
+            alwaysIgnore,
+            reviewed,
+        );
+        review.appendChild(reviewBody);
+        card.appendChild(review);
+        page.appendChild(card);
+        return page;
+    }
+
+    renderAdvancedRuleStructureGuide() {
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-advanced-guide-page',
+        });
+        const card = element('section', {
+            className: 'st-devtools-advanced-guide-card',
+        });
+        card.append(
+            element('span', {
+                className: 'st-devtools-advanced-guide-eyebrow',
+                text: '읽기 전용 구조 근거',
+            }),
+            element('h2', { text: '원문에서 검사 후보까지의 경로' }),
+            proseElement('p', '고정된 출력 형식 충돌을 원문 → atom → relation → finding 순서로 따라갑니다.'),
+        );
+        const advanced = element('details', {
+            className: 'st-devtools-rule-advanced st-devtools-disclosure',
+        });
+        advanced.appendChild(element('summary', { text: '분석 상세' }));
+        const advancedBody = element('div', {
+            className: 'st-devtools-rule-advanced-content',
+        });
+        const model = element('details', {
+            className: 'st-devtools-instruction-model',
+        });
+        const modelSummary = element('summary');
+        modelSummary.append(
+            element('strong', { text: '지시 구조' }),
+            element('span', { text: 'atom 2 · relation 1' }),
+        );
+        model.appendChild(modelSummary);
+        const modelBody = element('div', {
+            className: 'st-devtools-instruction-content',
+        });
+        const determination = element('div', {
+            className: 'st-devtools-instruction-overview',
+        });
+        determination.dataset.advancedGuideResult = 'determination-summary';
+        for (const label of ['확정 1', '후보 1', '근거 부족 0']) {
+            determination.appendChild(element('span', { text: label }));
+        }
+        const atoms = element('details', {
+            className: 'st-devtools-instruction-section',
+        });
+        atoms.dataset.advancedGuideControl = 'instruction-atoms';
+        atoms.appendChild(element('summary', { text: '지시 단위 2개' }));
+        const atomsBody = element('div', {
+            className: 'st-devtools-instruction-atoms',
+        });
+        const atom = element('article', {
+            className: 'st-devtools-instruction-atom determination-confirmed',
+        });
+        atom.dataset.advancedGuideResult = 'instruction-atom';
+        atom.append(
+            element('strong', { text: '형식 · XML · 요구' }),
+            proseElement('p', '대상: assistant 응답 · 범위: 현재 요청'),
+            element('small', { text: '원본 소스: 출력 규칙' }),
+        );
+        const evidence = element('details', {
+            className: 'st-devtools-instruction-atom-evidence',
+        });
+        evidence.dataset.advancedGuideControl = 'atom-evidence';
+        evidence.append(
+            element('summary', { text: '원문 근거' }),
+            element('pre', { text: 'XML 형식으로 응답하세요.' }),
+        );
+        atom.appendChild(evidence);
+        atomsBody.appendChild(atom);
+        atoms.appendChild(atomsBody);
+        const cluster = element('section', {
+            className: 'st-devtools-advanced-guide-result',
+        });
+        cluster.dataset.advancedGuideResult = 'finding-cluster';
+        cluster.append(
+            element('strong', { text: '응답 형식 충돌 후보' }),
+            element('span', { text: 'JSON atom ↔ XML atom' }),
+            element('span', { text: 'relation: 같은 응답에 동시 적용 · 양립 어려움' }),
+            element('small', { text: 'atom 2개 · relation 1개 · 원문 근거 2곳' }),
+        );
+        modelBody.append(determination, atoms, cluster);
+        model.appendChild(modelBody);
+        advancedBody.appendChild(model);
+        advanced.appendChild(advancedBody);
+        card.appendChild(advanced);
+        page.appendChild(card);
+        return page;
+    }
+
+    renderAdvancedDiffReplacementGuide() {
+        const state = this.onboardingSession.advancedState;
+        const page = element('div', {
+            className: 'st-devtools-page st-devtools-advanced-guide-page',
+        });
+        const card = element('section', {
+            className: 'st-devtools-advanced-guide-card',
+        });
+        card.append(
+            element('span', {
+                className: 'st-devtools-advanced-guide-eyebrow',
+                text: '메모리 전용 변경 비교',
+            }),
+            element('h2', { text: '추가·삭제와 옵션 교체 구분하기' }),
+            proseElement('p', '같은 두 요청이 비교 정책의 근거 유무에 따라 어떻게 다르게 표시되는지 확인합니다.'),
+        );
+
+        const selectors = element('div', {
+            className: 'st-devtools-diff-selectors',
+        });
+        const buildSelect = (role, title, stateKey, options) => {
+            const label = element('label');
+            label.dataset.diffRole = role;
+            label.appendChild(element('strong', { text: title }));
+            const select = element('select');
+            for (const [value, text] of options) {
+                const option = element('option', { text });
+                option.value = value;
+                option.selected = state[stateKey] === value;
+                select.appendChild(option);
+            }
+            select.addEventListener('change', () => {
+                state[stateKey] = select.value;
+                state.replacementGrouped = false;
+                refreshResult();
+            });
+            label.appendChild(select);
+            return label;
+        };
+        const base = buildSelect('base', '기준', 'replacementBase', [
+            ['', '기준 요청을 선택하세요'],
+            ['tutorial:replacement:base', '한국어 요청'],
+        ]);
+        const compare = buildSelect('compare', '비교 대상', 'replacementCompare', [
+            ['', '비교 요청을 선택하세요'],
+            ['tutorial:replacement:compare', '영어 요청'],
+        ]);
+        selectors.append(base, compare);
+
+        const ungrouped = element('section', {
+            className: 'st-devtools-advanced-diff-ungrouped',
+        });
+        ungrouped.dataset.advancedGuideResult = 'ungrouped-diff';
+        ungrouped.append(
+            element('strong', { text: '정책 근거 없음' }),
+            element('span', { text: '삭제 · 출력언어 | 한국어' }),
+            element('span', { text: '추가 · 출력언어 | 영어' }),
+            element('small', { text: '서로 같은 선택지라고 추측하지 않는 안전한 기본값입니다.' }),
+        );
+
+        const enableGroup = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: '출력언어 대안 그룹 적용',
+            type: 'button',
+        });
+        enableGroup.dataset.advancedGuideControl = 'enable-alternative-group';
+
+        const replacement = element('details', {
+            className: 'st-devtools-source-change status-replaced',
+        });
+        const replacementSummary = element('summary');
+        replacementSummary.append(
+            element('strong', { text: '교체 · 출력언어' }),
+            element('span', { text: '한국어 → 영어' }),
+        );
+        replacement.append(
+            replacementSummary,
+            proseElement('p', '같은 대안 그룹의 활성 옵션이 한 개에서 다른 한 개로 바뀌었습니다. 같은 식별자의 내용 변경은 교체가 아니라 수정으로 유지됩니다.'),
+        );
+
+        const direction = element('section', {
+            className: 'st-devtools-advanced-guide-note',
+        });
+        direction.dataset.advancedGuideResult = 'replacement-direction';
+        direction.append(
+            element('strong', { text: '교체 조건과 방향' }),
+            element('span', { text: '기준: 한국어 1개 → 비교 대상: 영어 1개' }),
+            element('small', { text: '한쪽에 옵션이 여러 개 켜지면 교체로 묶지 않고 모호성 경고를 유지합니다.' }),
+        );
+
+        const refreshResult = () => {
+            const ready = state.replacementBase === 'tutorial:replacement:base'
+                && state.replacementCompare === 'tutorial:replacement:compare';
+            ungrouped.hidden = !ready || state.replacementGrouped;
+            enableGroup.disabled = !ready || state.replacementGrouped;
+            replacement.hidden = !ready || !state.replacementGrouped;
+            direction.hidden = !ready || !state.replacementGrouped;
+        };
+        enableGroup.addEventListener('click', () => {
+            state.replacementGrouped = true;
+            refreshResult();
+        });
+        refreshResult();
+
+        card.append(
+            selectors,
+            ungrouped,
+            enableGroup,
+            replacement,
+            direction,
+        );
+        page.appendChild(card);
+        return page;
+    }
+
     renderAdvancedOnboardingGuide() {
-        return this.onboardingSession?.guideId === 'comparison-policy'
-            ? this.renderAdvancedComparisonGuide()
-            : this.renderAdvancedSemanticGuide();
+        switch (this.onboardingSession?.guideId) {
+        case 'comparison-policy':
+            return this.renderAdvancedComparisonGuide();
+        case 'semantic-ai':
+            return this.renderAdvancedSemanticGuide();
+        case 'finding-review':
+            return this.renderAdvancedFindingReviewGuide();
+        case 'rule-structure':
+            return this.renderAdvancedRuleStructureGuide();
+        case 'diff-replacement':
+            return this.renderAdvancedDiffReplacementGuide();
+        default:
+            return element('div', { className: 'st-devtools-page' });
+        }
     }
 
     renderRules(snapshot, providedAnalysis = undefined) {

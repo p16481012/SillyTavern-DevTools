@@ -1,4 +1,15 @@
-# v0.16.1 기술 구현 현황
+# v0.16.2 기술 구현 현황
+
+## v0.16.2 튜토리얼 안정화·설명서 도식·고급 가이드 확장
+
+- 완료 debrief는 target과 분리된 불투명 고대비 surface와 stacking context를 사용합니다. 아래 화면의 글자와 success copy가 겹치지 않으며 밝음·어두움 테마 모두에서 제목·관찰 결과·다음 control의 대비를 유지합니다.
+- 검색 튜토리얼은 넓은 snapshot select를 강조할 때도 패널의 실제 가시 폭을 기준으로 target과 guide 위치를 제한합니다. 320px·390px에서 문서 폭이나 viewport를 왼쪽으로 밀지 않고 가로 overflow 없이 원래 중앙 정렬을 유지합니다.
+- 도움말 홈 카드의 별도 `action` copy를 제거했습니다. 제목·설명·우측 화살표와 카드 전체 button만 남겨 파란색 `… 보기` 문구의 중복을 없앴습니다. 툴팁의 `자세히 보기` deep link는 유지합니다.
+- `HELP_TOPIC_VISUALS`는 `HELP_TOPICS` 19개와 1:1로 대응하는 immutable registry입니다. 각 항목은 `flow`·`comparison`·`lanes` 유형, 접근 가능한 설명과 caption, 의미 관계를 가진 lane·item으로 구성되며 외부 이미지 URL이나 고정 색상값을 저장하지 않습니다.
+- 기능 설명서 renderer는 캡처 상태, 원본→최종 prompt, 필터, 근거 위치, 검사 결과, 비교 정책, AI 전송·검증, 채팅 분기, 성장 그래프, diff 상태, 검색, 보관·개인정보, payload, atom/relation, provider 평가, 저장 도구, FAQ의 흐름과 전후 대조를 테마 token 기반 미니 도식으로 표시합니다.
+- 비교 정책 guide는 9단계로 확장해 profile 적용 범위·현재 적용 순서·대안/내부 무시 동작·이름 matcher·수동 지정·수동 우선순위·미리보기·결과를 다룹니다. AI 의미 검사 guide는 10단계로 확장해 후보 선택·연결 profile·응답 상한·prompt/prefill·전송 미리보기·포함/제외 범위·매회 동의·검증·폐기 결과를 다룹니다.
+- `ADVANCED_ONBOARDING_GUIDES`에는 검사 결과 판정과 예외 관리 7단계, Atom·Relation 근거 읽기 7단계, 대안 그룹 교체 비교 6단계가 추가되었습니다. 오탐·이번만 숨김·범위별 항상 무시·복원, atom/relation과 원문 근거, 정책 전후의 추가/삭제→교체 전환을 실제 화면형 더미 UI에서 안내합니다.
+- 다섯 고급 guide는 각각 독립 checkpoint와 session state를 사용하고 실제 review decision, comparison policy, snapshot store, `SemanticInspector`, Connection Manager, provider, network와 비용 경로를 호출하지 않습니다. 완료·중단은 첫 실행 전체 안내의 `completed`·`skipped` 상태도 변경하지 않습니다.
 
 ## v0.16.1 세 갈래 도움말·부분 투어·고급 코치마크
 

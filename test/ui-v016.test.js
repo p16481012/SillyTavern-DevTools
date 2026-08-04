@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
     HELP_LABS,
+    HELP_TOPIC_VISUALS,
     HELP_TOPICS,
     createHelpLabSession,
     updateHelpLabSession,
@@ -27,7 +28,7 @@ function sourceBlock(source, start, end) {
     return source.slice(startIndex, endIndex);
 }
 
-test('help registry covers every primary product screen and both isolated labs', () => {
+test('help registry covers every primary product screen, visual, and isolated lab', () => {
     const coveredTabs = new Set(HELP_TOPICS.map(({ tabId }) => tabId).filter(Boolean));
     assert.deepEqual(
         [...coveredTabs].sort(),
@@ -39,6 +40,17 @@ test('help registry covers every primary product screen and both isolated labs',
     );
     assert.ok(HELP_TOPICS.some(({ id }) => id === 'diff-statuses'));
     assert.ok(HELP_TOPICS.some(({ id }) => id === 'settings-storage'));
+    assert.equal(HELP_TOPICS.length, 19);
+    assert.equal(Object.keys(HELP_TOPIC_VISUALS).length, 19);
+    assert.deepEqual(
+        Object.keys(HELP_TOPIC_VISUALS),
+        HELP_TOPICS.map(({ id }) => id),
+    );
+    assert.ok(Object.values(HELP_TOPIC_VISUALS).every((visual) => (
+        visual.ariaLabel
+        && visual.caption
+        && visual.lanes.length > 0
+    )));
 });
 
 test('help labs are deterministic memory-only state machines', () => {
@@ -87,6 +99,11 @@ test('the existing book launcher opens the three-path help home', async () => {
 
 test('help home separates basic usage, advanced coachmarks, and detailed docs', async () => {
     const ui = await readFile(UI_URL, 'utf8');
+    const homeCard = sourceBlock(
+        ui,
+        '\n    renderHelpHomeCard(',
+        '\n    renderHelpHome() {',
+    );
     const home = sourceBlock(
         ui,
         '\n    renderHelpHome() {',
@@ -112,6 +129,8 @@ test('help home separates basic usage, advanced coachmarks, and detailed docs', 
     assert.match(home, /title: '고급 기능 가이드'/u);
     assert.match(home, /title: '기능 설명서'/u);
     assert.doesNotMatch(home, /현재 화면|연습실/u);
+    assert.doesNotMatch(homeCard, /\$\{title\}\s*보기|help-home-card-action/u);
+    assert.equal((homeCard.match(/card\.append\(/gu) ?? []).length, 1);
     assert.match(basic, /BASIC_ONBOARDING_SECTIONS/u);
     assert.match(basic, /section\.steps\.length/u);
     assert.match(basic, /sectionId: section\.id/u);
@@ -120,6 +139,27 @@ test('help home separates basic usage, advanced coachmarks, and detailed docs', 
     assert.doesNotMatch(advanced, /startHelpLab/u);
     assert.match(docs, /HELP_CATEGORIES/u);
     assert.match(docs, /helpTopicsFor/u);
+});
+
+test('detailed help articles render the registered product-token visual before prose', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const article = sourceBlock(
+        ui,
+        '\n    renderHelpTopicArticle(',
+        '\n    renderHelpTopicVisual(',
+    );
+    const visual = sourceBlock(
+        ui,
+        '\n    renderHelpTopicVisual(',
+        '\n    startHelpLab(',
+    );
+
+    assert.match(article, /helpTopicVisualById\(topic\.id\)/u);
+    assert.match(article, /if \(visual\) article\.appendChild\(this\.renderHelpTopicVisual\(visual\)\)/u);
+    assert.match(visual, /className: `st-devtools-help-visual is-\$\{visual\.type\}`/u);
+    assert.match(visual, /figure\.setAttribute\('role', 'img'\)/u);
+    assert.match(visual, /figure\.setAttribute\('aria-label', visual\.ariaLabel\)/u);
+    assert.match(visual, /for \(const lane of visual\.lanes\)/u);
 });
 
 test('basic sections cover the complete walkthrough once in the requested order', () => {
@@ -141,7 +181,17 @@ test('basic sections cover the complete walkthrough once in the requested order'
 test('advanced entries are coachmark step collections with no provider action', async () => {
     assert.deepEqual(
         ADVANCED_ONBOARDING_GUIDES.map(({ id }) => id),
-        ['comparison-policy', 'semantic-ai'],
+        [
+            'comparison-policy',
+            'semantic-ai',
+            'finding-review',
+            'rule-structure',
+            'diff-replacement',
+        ],
+    );
+    assert.deepEqual(
+        ADVANCED_ONBOARDING_GUIDES.map(({ steps }) => steps.length),
+        [9, 10, 7, 7, 6],
     );
     assert.ok(ADVANCED_ONBOARDING_GUIDES.every(({ steps }) => steps.length >= 5));
     const ui = await readFile(UI_URL, 'utf8');
@@ -153,11 +203,33 @@ test('advanced entries are coachmark step collections with no provider action', 
     const semantic = sourceBlock(
         ui,
         '\n    renderAdvancedSemanticGuide() {',
+        '\n    renderAdvancedFindingReviewGuide() {',
+    );
+    const findingReview = sourceBlock(
+        ui,
+        '\n    renderAdvancedFindingReviewGuide() {',
+        '\n    renderAdvancedRuleStructureGuide() {',
+    );
+    const ruleStructure = sourceBlock(
+        ui,
+        '\n    renderAdvancedRuleStructureGuide() {',
+        '\n    renderAdvancedDiffReplacementGuide() {',
+    );
+    const diffReplacement = sourceBlock(
+        ui,
+        '\n    renderAdvancedDiffReplacementGuide() {',
         '\n    renderAdvancedOnboardingGuide() {',
     );
     const forbidden = /fetch\(|semanticInspector\.|startSemanticInspection|saveUiPreferences|localStorage/u;
-    assert.doesNotMatch(comparison, forbidden);
-    assert.doesNotMatch(semantic, forbidden);
+    for (const renderer of [
+        comparison,
+        semantic,
+        findingReview,
+        ruleStructure,
+        diffReplacement,
+    ]) {
+        assert.doesNotMatch(renderer, forbidden);
+    }
     assert.match(semantic, /실제 제공자 요청과 비용은 발생하지 않습니다/u);
 });
 
@@ -214,12 +286,17 @@ test('help-started guides return to their index and legacy lab state cannot repl
     assert.match(closeWindow, /returnToHelp: false/u);
 });
 
-test('advanced coachmarks keep the rules screen isolated from real settings', async () => {
+test('advanced coachmarks stay on their declared screen and keep real settings hidden', async () => {
     const ui = await readFile(UI_URL, 'utf8');
     const style = await readFile(STYLE_URL, 'utf8');
     const selectTab = sourceBlock(ui, '\n    selectTab(', '\n    render() {');
+    assert.deepEqual(
+        ADVANCED_ONBOARDING_GUIDES.map(({ steps }) => steps[0].tabId),
+        ['rules', 'rules', 'rules', 'rules', 'diff'],
+    );
     assert.match(selectTab, /this\.onboardingKind === 'advanced'/u);
-    assert.match(selectTab, /nextTab !== 'rules'/u);
+    assert.match(selectTab, /advancedOnboardingGuideById\(this\.onboardingGuideId\)/u);
+    assert.match(selectTab, /\?\.steps\?\.\[0\]\?\.tabId \?\? 'rules'/u);
     assert.match(style, /\.st-devtools-window \.st-devtools-icon-button\[hidden\][\s\S]*?display:\s*none !important/u);
 });
 
@@ -336,6 +413,93 @@ test('help center has one scroll owner and a mobile full-screen layout', async (
     assert.match(
         style,
         /@media \(max-width: 700px\)[\s\S]*?\.st-devtools-window \{[\s\S]*?min-height:\s*0;/u,
+    );
+});
+
+test('search onboarding keeps horizontal scroll pinned while moving targets vertically', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const style = await readFile(STYLE_URL, 'utf8');
+    const focusTarget = sourceBlock(
+        ui,
+        '\n    focusOnboardingTarget(',
+        '\n    scheduleOnboardingGuidePosition(',
+    );
+    const selectTab = sourceBlock(ui, '\n    selectTab(', '\n    render() {');
+    const content = sourceBlock(
+        style,
+        '.st-devtools-content {',
+        '.st-devtools-screen-header {',
+    );
+    const overflowGuards = sourceBlock(
+        style,
+        '/* v0.16.2 — keep coachmark copy readable over large revealed targets. */',
+        '/* Feature manual diagrams use product tokens so they remain legible in themes. */',
+    );
+
+    assert.match(content, /overflow-x:\s*hidden/u);
+    assert.match(content, /overflow-y:\s*auto/u);
+    assert.doesNotMatch(focusTarget, /scrollIntoView/u);
+    assert.match(
+        focusTarget,
+        /viewport\.scrollTo\(\{ top: nextScrollTop, left: 0, behavior: 'auto' \}\)/u,
+    );
+    assert.match(focusTarget, /if \(targetInContent\) viewport\.scrollLeft = 0/u);
+    assert.match(
+        selectTab,
+        /if \(changed && this\.content\) \{[\s\S]*?this\.content\.scrollTop = 0;[\s\S]*?this\.content\.scrollLeft = 0;/u,
+    );
+    assert.match(
+        overflowGuards,
+        /\.st-devtools-page,[\s\S]*?\.st-devtools-search-controls[\s\S]*?max-width:\s*100%;[\s\S]*?min-width:\s*0;/u,
+    );
+});
+
+test('coachmark no-fit placement uses an opaque collision-safe callout', async () => {
+    const ui = await readFile(UI_URL, 'utf8');
+    const style = await readFile(STYLE_URL, 'utf8');
+    const position = sourceBlock(
+        ui,
+        '\n    positionOnboardingGuide() {',
+        '\n    buildCaptureStatus() {',
+    );
+    const clearTarget = sourceBlock(
+        ui,
+        '\n    clearOnboardingTarget() {',
+        '\n    onboardingVisualTarget(',
+    );
+    const readability = sourceBlock(
+        style,
+        '/* v0.16.2 — keep coachmark copy readable over large revealed targets. */',
+        '/* Feature manual diagrams use product tokens so they remain legible in themes. */',
+    );
+
+    assert.match(position, /const topFits = topSpace >= calloutHeight \+ pointerGap/u);
+    assert.match(position, /const bottomFits = bottomSpace >= calloutHeight \+ pointerGap/u);
+    assert.match(position, /const calloutOverTarget = !topFits && !bottomFits/u);
+    assert.match(
+        position,
+        /classList\.toggle\([\s\S]*?'is-callout-over-target',[\s\S]*?calloutOverTarget/u,
+    );
+    assert.match(clearTarget, /'is-callout-over-target'/u);
+    assert.match(
+        readability,
+        /\.st-devtools-onboarding-guide-body \{[\s\S]*?background(?:-color)?:\s*rgb\(6 11 22 \/ 96%\)/u,
+    );
+    assert.match(
+        readability,
+        /\[data-stage='debrief'\][\s\S]*?\.st-devtools-onboarding-guide-body \{[\s\S]*?background:\s*#061913/u,
+    );
+    assert.match(
+        readability,
+        /\.is-callout-over-target[\s\S]*?::before,[\s\S]*?\.is-callout-over-target[\s\S]*?::after \{[\s\S]*?display:\s*none/u,
+    );
+});
+
+test('advanced guide previews and results stay hidden until their step reveals them', async () => {
+    const style = await readFile(STYLE_URL, 'utf8');
+    assert.match(
+        style,
+        /\.st-devtools-advanced-guide-page \[hidden\] \{[\s\S]*?display:\s*none !important;/u,
     );
 });
 

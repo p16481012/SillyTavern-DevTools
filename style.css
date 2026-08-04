@@ -897,7 +897,8 @@
 
 .st-devtools-content {
     min-height: 0;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     background: var(--st-devtools-panel-bg);
 }
 
@@ -1543,7 +1544,11 @@
 }
 
 .st-devtools-picker {
+    box-sizing: border-box;
     display: grid;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
     gap: 0.6rem;
@@ -1562,8 +1567,9 @@
 
 .st-devtools-picker select,
 .st-devtools-search-controls input[type='search'] {
-    min-width: 0;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
 }
 
 .st-devtools-overview-card {
@@ -6300,14 +6306,6 @@
     line-height: 1.5;
 }
 
-.st-devtools-help-home-card-copy > span:last-child {
-    margin-top: 0.2rem;
-    color: var(--st-devtools-primary);
-    font-size: 0.78rem;
-    font-weight: 760;
-    line-height: 1.4;
-}
-
 @media (hover: hover) {
     .st-devtools-window .st-devtools-help-home-card:hover {
         border-color: var(--st-devtools-primary) !important;
@@ -8924,4 +8922,304 @@ i {
         animation: none !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+/* v0.16.2 — keep coachmark copy readable over large revealed targets. */
+.st-devtools-onboarding-guide-body {
+    background: rgb(6 11 22 / 96%);
+    background-color: rgb(6 11 22 / 96%);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 42%);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.st-devtools-onboarding-guide[data-stage='debrief']
+.st-devtools-onboarding-guide-body {
+    border-color: rgb(134 239 172 / 88%);
+    background: #061913;
+    background-color: #061913;
+}
+
+.st-devtools-onboarding-guide[data-stage='debrief']
+:is(
+    .st-devtools-onboarding-step-copy,
+    .st-devtools-onboarding-step-copy + .st-devtools-onboarding-step-copy,
+    .st-devtools-onboarding-result-context
+) {
+    color: rgb(240 253 244 / 96%);
+    text-shadow: 0 1px 9px rgb(0 0 0 / 88%);
+}
+
+.st-devtools-onboarding-guide.is-callout-over-target
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock) {
+    border-style: solid;
+    box-shadow: 0 14px 38px rgb(0 0 0 / 54%);
+}
+
+.st-devtools-onboarding-guide.is-callout-over-target
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::before,
+.st-devtools-onboarding-guide.is-callout-over-target
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock)::after {
+    display: none;
+}
+
+.st-devtools-page,
+.st-devtools-search-controls {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+}
+
+/* Feature manual diagrams use product tokens so they remain legible in themes. */
+.st-devtools-help-visual {
+    display: grid;
+    min-width: 0;
+    gap: 0.85rem;
+    margin: 0;
+    padding: 0.9rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-lg);
+    background: var(--st-devtools-surface-muted);
+    color: var(--st-devtools-text);
+}
+
+.st-devtools-help-visual > figcaption {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+}
+
+.st-devtools-help-visual > figcaption > strong {
+    color: var(--st-devtools-text);
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.st-devtools-help-visual > figcaption > span {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+
+.st-devtools-help-visual-lanes {
+    display: grid;
+    min-width: 0;
+    gap: 0.65rem;
+}
+
+.st-devtools-help-visual-lane {
+    min-width: 0;
+    padding: 0.7rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-help-visual-lane > h4 {
+    margin: 0 0 0.6rem;
+    color: var(--st-devtools-text);
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1.4;
+}
+
+.st-devtools-help-visual-lane > ol {
+    display: grid;
+    min-width: 0;
+    gap: 0.45rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: help-visual-step;
+}
+
+.st-devtools-help-visual-lane > ol > li {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 1.55rem minmax(0, 1fr);
+    gap: 0.1rem 0.5rem;
+    align-items: center;
+    padding: 0.55rem 0.6rem;
+    border-left: 3px solid var(--st-devtools-border-strong);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-panel-bg);
+    counter-increment: help-visual-step;
+}
+
+.st-devtools-help-visual-lane > ol > li:not(:last-child)::after {
+    position: absolute;
+    bottom: -0.46rem;
+    left: 1.32rem;
+    z-index: 1;
+    color: var(--st-devtools-text-subtle);
+    content: '\2193';
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+.st-devtools-help-visual-marker {
+    display: inline-grid;
+    width: 1.45rem;
+    height: 1.45rem;
+    grid-row: 1 / span 2;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary-strong);
+    font-size: 0.68rem;
+    font-weight: 850;
+}
+
+.st-devtools-help-visual-marker::before {
+    content: counter(help-visual-step);
+}
+
+.st-devtools-help-visual-lane > ol > li > strong {
+    color: var(--st-devtools-text);
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.st-devtools-help-visual-lane > ol > li > small {
+    grid-column: 2;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.7rem;
+    line-height: 1.45;
+}
+
+.st-devtools-help-visual-lane > ol > li.is-info {
+    border-left-color: var(--st-devtools-status-info);
+}
+
+.st-devtools-help-visual-lane > ol > li.is-success {
+    border-left-color: var(--st-devtools-status-success);
+}
+
+.st-devtools-help-visual-lane > ol > li.is-warning {
+    border-left-color: var(--st-devtools-status-warning);
+}
+
+.st-devtools-help-visual-lane > ol > li.is-danger {
+    border-left-color: var(--st-devtools-status-danger);
+}
+
+@media (min-width: 620px) {
+    .st-devtools-help-visual.is-comparison
+    .st-devtools-help-visual-lanes,
+    .st-devtools-help-visual.is-lanes
+    .st-devtools-help-visual-lanes {
+        grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    }
+}
+
+/* Host themes can assign display to result cards, so preserve native hidden state. */
+.st-devtools-advanced-guide-page [hidden] {
+    display: none !important;
+}
+
+.st-devtools-advanced-guide-note,
+.st-devtools-advanced-diff-ungrouped,
+.st-devtools-advanced-guide-discarded {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+    padding: 0.7rem 0.75rem;
+    border-left: 3px solid var(--st-devtools-status-info);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-text);
+}
+
+:is(
+    .st-devtools-advanced-guide-note,
+    .st-devtools-advanced-diff-ungrouped,
+    .st-devtools-advanced-guide-discarded
+) > :is(span, small) {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.76rem;
+    line-height: 1.5;
+}
+
+.st-devtools-advanced-diff-ungrouped {
+    border-left-color: var(--st-devtools-status-warning);
+}
+
+.st-devtools-advanced-guide-discarded {
+    margin-top: 0.45rem;
+    border-left-color: var(--st-devtools-status-danger);
+    background: var(--st-devtools-status-danger-bg);
+}
+
+.st-devtools-advanced-guide-target {
+    box-sizing: border-box;
+    display: grid !important;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start !important;
+    gap: 0.65rem !important;
+    padding: 0.72rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-surface-muted);
+}
+
+.st-devtools-advanced-guide-target > input {
+    margin-top: 0.18rem;
+}
+
+.st-devtools-advanced-guide-target > span {
+    display: grid;
+    min-width: 0;
+    gap: 0.16rem;
+}
+
+.st-devtools-advanced-guide-target small {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.74rem;
+    line-height: 1.45;
+}
+
+.st-devtools-advanced-review,
+.st-devtools-source-change.status-replaced {
+    min-width: 0;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-surface-muted);
+}
+
+.st-devtools-advanced-review-body {
+    display: grid;
+    min-width: 0;
+    gap: 0.75rem;
+    padding: 0.75rem;
+}
+
+.st-devtools-advanced-review-body > small {
+    margin-top: -0.55rem;
+    color: var(--st-devtools-text-muted);
+}
+
+.st-devtools-advanced-review-body > label {
+    display: grid;
+    min-width: 0;
+    gap: 0.35rem;
+}
+
+.st-devtools-advanced-review-body :is(select, button),
+.st-devtools-advanced-guide-card .st-devtools-diff-selectors select {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+}
+
+.st-devtools-advanced-guide-card
+.st-devtools-source-change.status-replaced > p {
+    margin: 0;
+    padding: 0.75rem;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.6;
 }

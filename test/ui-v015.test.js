@@ -1155,6 +1155,7 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
     const scrollOptions = [];
     const focusOptions = [];
     const classNames = new Set();
+    let contentScrollTop = 0;
     const focusControl = {
         focus(options) {
             focusOptions.push(options);
@@ -1172,21 +1173,22 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         },
         getBoundingClientRect: () => ({
             left: 40,
-            top: 520,
+            top: 520 - contentScrollTop,
             right: 180,
-            bottom: 560,
+            bottom: 560 - contentScrollTop,
+            width: 140,
+            height: 40,
         }),
         matches: () => false,
         querySelector: () => focusControl,
-        scrollIntoView(options) {
-            scrollOptions.push(options);
-        },
     };
     const state = {
         onboardingTarget: target,
         onboardingLocateTimer: null,
         onboardingTargetAddedTabIndex: false,
         content: {
+            scrollTop: 0,
+            scrollLeft: 24,
             contains: () => true,
             getBoundingClientRect: () => ({
                 left: 0,
@@ -1194,6 +1196,12 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
                 right: 400,
                 bottom: 500,
             }),
+            scrollTo(options) {
+                scrollOptions.push(options);
+                this.scrollTop = options.top;
+                this.scrollLeft = options.left;
+                contentScrollTop = options.top;
+            },
         },
         window: {
             getBoundingClientRect: () => ({
@@ -1212,7 +1220,12 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         ),
         true,
     );
-    assert.equal(scrollOptions[0].block, 'nearest');
+    assert.deepEqual(scrollOptions[0], {
+        top: 72,
+        left: 0,
+        behavior: 'auto',
+    });
+    assert.equal(state.content.scrollLeft, 0);
 
     state.onboardingStepStage = 'practice';
     state.onboardingPracticeBackButton = {
@@ -1226,7 +1239,11 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         ),
         true,
     );
-    assert.equal(scrollOptions[1].block, 'center');
+    assert.deepEqual(scrollOptions[1], {
+        top: 122,
+        left: 0,
+        behavior: 'auto',
+    });
 
     assert.equal(
         DevToolsWindow.prototype.focusOnboardingTarget.call(
@@ -1235,7 +1252,11 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         ),
         true,
     );
-    assert.equal(scrollOptions[2].block, 'start');
+    assert.deepEqual(scrollOptions[2], {
+        top: 408,
+        left: 0,
+        behavior: 'auto',
+    });
     assert.deepEqual(focusOptions, [{ preventScroll: true }]);
     assert.equal(classNames.has('is-locating'), true);
     clearTimeout(state.onboardingLocateTimer);
