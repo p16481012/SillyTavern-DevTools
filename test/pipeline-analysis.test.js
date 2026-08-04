@@ -6,6 +6,7 @@ import {
     compareLoreEntries,
     compareSnapshotSources,
     largestIncludedSource,
+    pairAlternativeSourceReplacements,
 } from '../src/pipeline-analysis.js';
 
 function source({
@@ -16,16 +17,39 @@ function source({
     tokenCount,
     attribution = 'exact',
     ranges = [],
+    identifier,
+    comparisonPolicy,
 }) {
+    const metadata = {
+        ...(field === undefined ? {} : { field }),
+        ...(identifier === undefined ? {} : { identifier }),
+    };
     return {
         id,
         type,
-        label: field,
-        metadata: { field },
+        label: field ?? identifier,
+        metadata,
         content,
         tokenCount,
         attribution,
         ranges,
+        ...(comparisonPolicy ? { comparisonPolicy } : {}),
+    };
+}
+
+function comparisonPolicy({
+    group = '출력 언어',
+    groupKey = 'output-language',
+    groupInstanceKey = 'global:language:output-language',
+    option,
+    mode = 'alternative',
+} = {}) {
+    return {
+        mode,
+        group,
+        groupKey,
+        groupInstanceKey,
+        option,
     };
 }
 
@@ -207,6 +231,303 @@ test('compareSnapshotSources reports a prompt removed when it leaves the actual 
     assert.equal(changes.length, 1);
     assert.equal(changes[0].status, 'removed');
     assert.equal(changes[0].source.metadata.field, 'optional');
+});
+
+test('same source identifier remains a changed source before replacement pairing', () => {
+    const policy = comparisonPolicy({ option: '한국어' });
+    const changes = compareSnapshotSources(
+        snapshot({
+            id: 'base',
+            timestamp: 1,
+            totalTokens: 2,
+            sources: [source({
+                id: 'volatile-before',
+                identifier: 'language-korean',
+                content: '한국어로 답하세요.',
+                tokenCount: 2,
+                comparisonPolicy: policy,
+            })],
+        }),
+        snapshot({
+            id: 'compare',
+            timestamp: 2,
+            totalTokens: 3,
+            sources: [source({
+                id: 'volatile-after',
+                identifier: 'language-korean',
+                content: '항상 한국어로 답하세요.',
+                tokenCount: 3,
+                comparisonPolicy: policy,
+            })],
+        }),
+    );
+
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].status, 'changed');
+    assert.equal(changes[0].replacement, undefined);
+});
+
+test('same source identifier reports an alternative policy option-only change', () => {
+    const before = source({
+        id: 'stable-language',
+        identifier: 'stable-language',
+        content: 'Keep the same content.',
+        tokenCount: 4,
+        comparisonPolicy: comparisonPolicy({ option: '한국어' }),
+    });
+    const after = source({
+        id: 'stable-language',
+        identifier: 'stable-language',
+        content: 'Keep the same content.',
+        tokenCount: 4,
+        comparisonPolicy: comparisonPolicy({ option: '영어' }),
+    });
+
+    const changes = compareSnapshotSources(
+        snapshot({ id: 'base', timestamp: 1, totalTokens: 4, sources: [before] }),
+        snapshot({ id: 'compare', timestamp: 2, totalTokens: 4, sources: [after] }),
+    );
+
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].status, 'changed');
+    assert.deepEqual(changes[0].changeKinds, ['option']);
+    assert.deepEqual(changes[0].optionChange, {
+        beforeGroup: '출력 언어',
+        afterGroup: '출력 언어',
+        beforeOption: '한국어',
+        afterOption: '영어',
+    });
+    assert.equal(changes[0].replacement, undefined);
+});
+
+test('one alternative option switch is paired as a replacement', () => {
+    const before = source({
+        id: 'language-korean',
+        identifier: 'language-korean',
+        content: '한국어로 답하세요.',
+        tokenCount: 2,
+        comparisonPolicy: comparisonPolicy({ option: '한국어' }),
+    });
+    const after = source({
+        id: 'language-english',
+        identifier: 'language-english',
+        content: 'Always answer in English.',
+        tokenCount: 4,
+        comparisonPolicy: comparisonPolicy({ option: '영어' }),
+    });
+    const changes = compareSnapshotSources(
+        snapshot({ id: 'base', timestamp: 1, totalTokens: 2, sources: [before] }),
+        snapshot({ id: 'compare', timestamp: 2, totalTokens: 4, sources: [after] }),
+    );
+
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].status, 'replaced');
+    assert.equal(changes[0].before, before);
+    assert.equal(changes[0].after, after);
+    assert.equal(changes[0].source, after);
+    assert.equal(changes[0].tokenDelta, 2);
+    assert.deepEqual(changes[0].replacement, {
+        mode: 'alternative',
+        group: '출력 언어',
+        groupKey: 'output-language',
+        groupInstanceKey: 'global:language:output-language',
+        beforeOption: '한국어',
+        afterOption: '영어',
+    });
+});
+
+test('same alternative option under renamed identifiers remains added and removed', () => {
+    const changes = compareSnapshotSources(
+        snapshot({
+            id: 'base',
+            timestamp: 1,
+            totalTokens: 1,
+            sources: [source({
+                id: 'language-korean-old',
+                identifier: 'language-korean-old',
+                content: '한국어',
+                tokenCount: 1,
+                comparisonPolicy: comparisonPolicy({ option: '한국어' }),
+            })],
+        }),
+        snapshot({
+            id: 'compare',
+            timestamp: 2,
+            totalTokens: 1,
+            sources: [source({
+                id: 'language-korean-new',
+                identifier: 'language-korean-new',
+                content: '한국어',
+                tokenCount: 1,
+                comparisonPolicy: comparisonPolicy({ option: '한국어' }),
+            })],
+        }),
+    );
+
+    assert.deepEqual(changes.map(({ status }) => status).sort(), ['added', 'removed']);
+});
+
+test('replacement requires exactly one active option per alternative group', () => {
+    const retained = source({
+        id: 'language-shared',
+        identifier: 'language-shared',
+        content: '공통 언어 지시',
+        tokenCount: 1,
+        comparisonPolicy: comparisonPolicy({ option: '공통' }),
+    });
+    const changes = compareSnapshotSources(
+        snapshot({
+            id: 'base',
+            timestamp: 1,
+            totalTokens: 2,
+            sources: [
+                retained,
+                source({
+                    id: 'language-korean',
+                    identifier: 'language-korean',
+                    content: '한국어',
+                    tokenCount: 1,
+                    comparisonPolicy: comparisonPolicy({ option: '한국어' }),
+                }),
+            ],
+        }),
+        snapshot({
+            id: 'compare',
+            timestamp: 2,
+            totalTokens: 2,
+            sources: [
+                retained,
+                source({
+                    id: 'language-english',
+                    identifier: 'language-english',
+                    content: '영어',
+                    tokenCount: 1,
+                    comparisonPolicy: comparisonPolicy({ option: '영어' }),
+                }),
+            ],
+        }),
+    );
+
+    assert.deepEqual(changes.map(({ status }) => status).sort(), ['added', 'removed']);
+});
+
+test('different alternative groups remain added and removed', () => {
+    const changes = compareSnapshotSources(
+        snapshot({
+            id: 'base',
+            timestamp: 1,
+            totalTokens: 1,
+            sources: [source({
+                id: 'language-korean',
+                identifier: 'language-korean',
+                content: '한국어',
+                tokenCount: 1,
+                comparisonPolicy: comparisonPolicy({ option: '한국어' }),
+            })],
+        }),
+        snapshot({
+            id: 'compare',
+            timestamp: 2,
+            totalTokens: 1,
+            sources: [source({
+                id: 'format-json',
+                identifier: 'format-json',
+                content: 'JSON',
+                tokenCount: 1,
+                comparisonPolicy: comparisonPolicy({
+                    group: '출력 형식',
+                    groupKey: 'output-format',
+                    groupInstanceKey: 'global:format:output-format',
+                    option: 'JSON',
+                }),
+            })],
+        }),
+    );
+
+    assert.deepEqual(changes.map(({ status }) => status), ['removed', 'added']);
+});
+
+test('missing and internal-ignore policies fall back to added and removed', () => {
+    const ungrouped = compareSnapshotSources(
+        snapshot({
+            id: 'base',
+            timestamp: 1,
+            totalTokens: 1,
+            sources: [source({
+                id: 'plain-before',
+                identifier: 'plain-before',
+                content: 'before',
+                tokenCount: 1,
+            })],
+        }),
+        snapshot({
+            id: 'compare',
+            timestamp: 2,
+            totalTokens: 1,
+            sources: [source({
+                id: 'plain-after',
+                identifier: 'plain-after',
+                content: 'after',
+                tokenCount: 1,
+            })],
+        }),
+    );
+    const ignored = pairAlternativeSourceReplacements([
+        {
+            key: 'before',
+            status: 'removed',
+            before: source({
+                id: 'ignored-before',
+                identifier: 'ignored-before',
+                content: 'before',
+                tokenCount: 1,
+                comparisonPolicy: comparisonPolicy({ option: 'A', mode: 'ignore' }),
+            }),
+            after: null,
+        },
+        {
+            key: 'after',
+            status: 'added',
+            before: null,
+            after: source({
+                id: 'ignored-after',
+                identifier: 'ignored-after',
+                content: 'after',
+                tokenCount: 1,
+                comparisonPolicy: comparisonPolicy({ option: 'B', mode: 'ignore' }),
+            }),
+        },
+    ]);
+
+    assert.deepEqual(ungrouped.map(({ status }) => status), ['removed', 'added']);
+    assert.deepEqual(ignored.map(({ status }) => status), ['removed', 'added']);
+});
+
+test('ambiguous many-to-many alternative switches safely fall back', () => {
+    const policyFor = (option) => comparisonPolicy({ option });
+    const baseSources = ['korean', 'japanese'].map((option) => source({
+        id: `language-${option}`,
+        identifier: `language-${option}`,
+        content: option,
+        tokenCount: 1,
+        comparisonPolicy: policyFor(option),
+    }));
+    const compareSources = ['english', 'german'].map((option) => source({
+        id: `language-${option}`,
+        identifier: `language-${option}`,
+        content: option,
+        tokenCount: 1,
+        comparisonPolicy: policyFor(option),
+    }));
+    const changes = compareSnapshotSources(
+        snapshot({ id: 'base', timestamp: 1, totalTokens: 2, sources: baseSources }),
+        snapshot({ id: 'compare', timestamp: 2, totalTokens: 2, sources: compareSources }),
+    );
+
+    assert.deepEqual(
+        changes.map(({ status }) => status),
+        ['removed', 'removed', 'added', 'added'],
+    );
 });
 
 test('compareSnapshotSources reports stable source metadata without exposing inactive text changes', () => {

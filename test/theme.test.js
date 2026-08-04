@@ -260,7 +260,9 @@ test('bottom app navigation stays in a three-row shell without mobile overflow',
     assert.match(captureStatus, /border-radius:\s*999px/);
     assert.match(css, /\.st-devtools-capture-status\.is-saved[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-success\)/);
     assert.match(css, /\.st-devtools-capture-status\.is-failed[\s\S]*?--st-devtools-capture-color:\s*var\(--st-devtools-status-danger\)/);
-    assert.doesNotMatch(css, /\.st-devtools-help-(?:overlay|panel|header|body)/);
+    assert.match(css, /\.st-devtools-help-overlay/);
+    assert.match(css, /\.st-devtools-help-panel[\s\S]*?overflow:\s*hidden/);
+    assert.match(css, /\.st-devtools-help-body[\s\S]*?overflow-y:\s*auto/);
     assert.match(settingsGroupSummary, /min-height:\s*44px/);
     assert.match(settingsGroupContent, /display:\s*grid/);
     assert.match(

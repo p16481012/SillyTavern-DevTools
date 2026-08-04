@@ -71,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.15.8',
+        extensionVersion: '0.16.0',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1450,7 +1450,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.15.8',
+    version: '0.16.0',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1661,7 +1661,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.15.8',
+        extensionVersion: '0.16.0',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1708,7 +1708,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.15.8',
+        version: '0.16.0',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -1819,6 +1819,7 @@ document.getElementById('sandbox-select-metadata')?.addEventListener('click', ()
 
 const SANDBOX_LAST_TAB_KEY = 'st-devtools:last-tab';
 let onboardingIsolationBaseline = null;
+let helpIsolationBaseline = null;
 
 function sandboxProviderCallCounters() {
     return Object.freeze({
@@ -2108,11 +2109,121 @@ const sandboxOnboardingHook = Object.freeze({
     isolationStatus: sandboxOnboardingIsolationStatus,
 });
 
+function sandboxHelpStatus() {
+    const session = devTools.helpLabSession;
+    return {
+        open: Boolean(devTools.helpOverlay && !devTools.helpOverlay.hidden),
+        view: devTools.helpView,
+        topicId: devTools.helpTopicId,
+        labId: session?.labId ?? null,
+        step: session?.step ?? null,
+        status: session?.status ?? null,
+        completed: Boolean(session?.completed),
+        timerActive: devTools.helpLabTimer != null,
+        primaryRegionsInert: devTools.primaryRegions.length > 0
+            && devTools.primaryRegions.every((region) => (
+                region.inert && region.getAttribute('aria-hidden') === 'true'
+            )),
+    };
+}
+
+function sandboxHelpIsolationSnapshot() {
+    return Object.freeze({
+        ...sandboxIsolationSnapshot(),
+        preferences: JSON.stringify(devTools.preferences),
+        ruleSettings: JSON.stringify(devTools.ruleSettings),
+        comparisonPolicySettings: JSON.stringify(devTools.savedComparisonPolicySettings),
+        semanticSettings: JSON.stringify(devTools.semanticPromptSettings),
+    });
+}
+
+function sandboxHelpIsolationStatus() {
+    const before = helpIsolationBaseline;
+    const after = sandboxHelpIsolationSnapshot();
+    if (!before) return { before: null, after, checks: null, isolated: null };
+    const checks = {
+        liveTimeline: equalStringLists(before.liveTimelineIds, after.liveTimelineIds),
+        storeTimeline: equalStringLists(before.storeTimelineIds, after.storeTimelineIds),
+        selectedId: before.selectedId === after.selectedId,
+        storeSnapshotCount: before.storeSnapshotCount === after.storeSnapshotCount,
+        storageRevision: before.storageRevision === after.storageRevision,
+        providerCalls: JSON.stringify(before.providerCalls) === JSON.stringify(after.providerCalls),
+        preferences: before.preferences === after.preferences,
+        ruleSettings: before.ruleSettings === after.ruleSettings,
+        comparisonPolicySettings: before.comparisonPolicySettings
+            === after.comparisonPolicySettings,
+        semanticSettings: before.semanticSettings === after.semanticSettings,
+    };
+    return {
+        before,
+        after,
+        checks,
+        isolated: Object.values(checks).every(Boolean),
+    };
+}
+
+const sandboxHelpHook = Object.freeze({
+    async openHome(view = 'current') {
+        if (devTools.onboardingIsOpen()) {
+            devTools.closeOnboarding({ persist: null, restoreFocus: false });
+        }
+        await devTools.open();
+        applyRequestedPanelGeometry();
+        helpIsolationBaseline = sandboxHelpIsolationSnapshot();
+        const opened = devTools.openHelpCenter({ view });
+        return {
+            opened,
+            status: sandboxHelpStatus(),
+            isolation: sandboxHelpIsolationStatus(),
+        };
+    },
+    openTopic(topicId) {
+        const opened = devTools.openHelpCenter({ topicId });
+        return { opened, status: sandboxHelpStatus() };
+    },
+    startLab(labId) {
+        if (devTools.helpOverlay?.hidden) devTools.openHelpCenter({ view: 'labs' });
+        const started = devTools.startHelpLab(labId);
+        return { started, status: sandboxHelpStatus() };
+    },
+    perform(action) {
+        const updated = devTools.updateHelpLab(action);
+        return { updated, status: sandboxHelpStatus() };
+    },
+    async waitForCompletion(attempts = 100) {
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+            if (devTools.helpLabSession?.completed) {
+                return { completed: true, status: sandboxHelpStatus() };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return { completed: false, status: sandboxHelpStatus() };
+    },
+    backToLabs() {
+        devTools.clearHelpLabTimer();
+        devTools.helpLabSession = null;
+        devTools.helpView = 'labs';
+        devTools.refreshHelpCenter();
+        return sandboxHelpStatus();
+    },
+    close() {
+        const closed = devTools.closeHelpCenter({ restoreFocus: false });
+        return {
+            closed,
+            status: sandboxHelpStatus(),
+            isolation: sandboxHelpIsolationStatus(),
+        };
+    },
+    status: sandboxHelpStatus,
+    isolationStatus: sandboxHelpIsolationStatus,
+});
+
 const sandboxApi = {
     selectPrivacyFixture,
     setRetroThemeConflict,
     setSemanticFixtureMode,
     onboarding: sandboxOnboardingHook,
+    help: sandboxHelpHook,
     semantic: {
         inspector: sandboxSemanticInspector,
         adapter: sandboxSemanticAdapter,

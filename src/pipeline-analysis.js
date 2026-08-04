@@ -151,6 +151,165 @@ function sourceMetadataChanges(before, after) {
     });
 }
 
+function sourceComparisonPolicy(source) {
+    return source?.comparisonPolicy
+        ?? source?.metadata?.comparisonPolicy
+        ?? null;
+}
+
+function alternativePolicyGroup(policy) {
+    if (policy?.mode !== 'alternative') return null;
+    const groupInstanceKey = stableValue(policy.groupInstanceKey).trim();
+    const groupKey = stableValue(policy.groupKey).trim();
+    if (groupInstanceKey) return `instance:${groupInstanceKey}`;
+    return groupKey ? `group:${groupKey}` : null;
+}
+
+function alternativeReplacementGroup(change) {
+    if (!['added', 'removed'].includes(change?.status)) return null;
+    const source = change.status === 'added' ? change.after : change.before;
+    const policy = sourceComparisonPolicy(source);
+    const identity = alternativePolicyGroup(policy);
+    if (!identity) return null;
+    return {
+        identity,
+        policy,
+    };
+}
+
+function normalizedOption(policy) {
+    return stableValue(policy?.option).trim().toLocaleLowerCase();
+}
+
+function alternativePolicyChange(before, after) {
+    const beforePolicy = sourceComparisonPolicy(before);
+    const afterPolicy = sourceComparisonPolicy(after);
+    if (
+        beforePolicy?.mode !== 'alternative'
+        && afterPolicy?.mode !== 'alternative'
+    ) return null;
+    const beforeGroupIdentity = alternativePolicyGroup(beforePolicy);
+    const afterGroupIdentity = alternativePolicyGroup(afterPolicy);
+    const beforeOption = normalizedOption(beforePolicy);
+    const afterOption = normalizedOption(afterPolicy);
+    if (
+        beforeGroupIdentity === afterGroupIdentity
+        && beforeOption === afterOption
+    ) return null;
+    return {
+        beforeGroup: beforePolicy?.group
+            ?? beforePolicy?.groupKey
+            ?? beforePolicy?.groupInstanceKey
+            ?? null,
+        afterGroup: afterPolicy?.group
+            ?? afterPolicy?.groupKey
+            ?? afterPolicy?.groupInstanceKey
+            ?? null,
+        beforeOption: beforePolicy?.option ?? null,
+        afterOption: afterPolicy?.option ?? null,
+    };
+}
+
+function activeAlternativeGroupCounts(sources = []) {
+    const counts = new Map();
+    for (const source of sources) {
+        if (!sourceIsIncludedInRequest(source)) continue;
+        const identity = alternativePolicyGroup(sourceComparisonPolicy(source));
+        if (!identity) continue;
+        counts.set(identity, (counts.get(identity) ?? 0) + 1);
+    }
+    return counts;
+}
+
+function replacementChange(removed, added, group) {
+    const before = removed.before;
+    const after = added.after;
+    const metadataChanges = sourceMetadataChanges(before, after);
+    const changeKinds = ['option'];
+    if (before.content !== after.content) changeKinds.push('content');
+    if (before.tokenCount !== after.tokenCount) changeKinds.push('tokens');
+    if (before.attribution !== after.attribution) changeKinds.push('attribution');
+    if (metadataChanges.length) changeKinds.push('metadata');
+    const beforePolicy = sourceComparisonPolicy(before);
+    const afterPolicy = sourceComparisonPolicy(after);
+    return {
+        key: `replacement:${group.identity}:${removed.key}->${added.key}`,
+        status: 'replaced',
+        before,
+        after,
+        source: after,
+        tokenDelta: (after.tokenCount ?? 0) - (before.tokenCount ?? 0),
+        changeKinds,
+        metadataChanges,
+        replacement: {
+            mode: 'alternative',
+            group: afterPolicy?.group ?? beforePolicy?.group ?? null,
+            groupKey: afterPolicy?.groupKey ?? beforePolicy?.groupKey ?? null,
+            groupInstanceKey: afterPolicy?.groupInstanceKey
+                ?? beforePolicy?.groupInstanceKey
+                ?? null,
+            beforeOption: beforePolicy?.option ?? null,
+            afterOption: afterPolicy?.option ?? null,
+        },
+    };
+}
+
+export function pairAlternativeSourceReplacements(changes = [], {
+    baseSources = null,
+    compareSources = null,
+} = {}) {
+    const hasSnapshotContext = Array.isArray(baseSources) && Array.isArray(compareSources);
+    const baseGroupCounts = hasSnapshotContext
+        ? activeAlternativeGroupCounts(baseSources)
+        : null;
+    const compareGroupCounts = hasSnapshotContext
+        ? activeAlternativeGroupCounts(compareSources)
+        : null;
+    const groups = new Map();
+    for (const [index, change] of changes.entries()) {
+        const group = alternativeReplacementGroup(change);
+        if (!group) continue;
+        const candidates = groups.get(group.identity) ?? {
+            ...group,
+            added: [],
+            removed: [],
+        };
+        candidates[change.status].push({ change, index });
+        groups.set(group.identity, candidates);
+    }
+
+    const replacements = new Map();
+    const consumed = new Set();
+    for (const group of groups.values()) {
+        if (group.added.length !== 1 || group.removed.length !== 1) continue;
+        const added = group.added[0];
+        const removed = group.removed[0];
+        const beforeOption = normalizedOption(sourceComparisonPolicy(removed.change.before));
+        const afterOption = normalizedOption(sourceComparisonPolicy(added.change.after));
+        if (!beforeOption || !afterOption || beforeOption === afterOption) continue;
+        if (
+            hasSnapshotContext
+            && (
+                baseGroupCounts.get(group.identity) !== 1
+                || compareGroupCounts.get(group.identity) !== 1
+            )
+        ) continue;
+        const insertionIndex = Math.min(added.index, removed.index);
+        replacements.set(
+            insertionIndex,
+            replacementChange(removed.change, added.change, group),
+        );
+        consumed.add(added.index);
+        consumed.add(removed.index);
+    }
+
+    return changes.flatMap((change, index) => {
+        const replacement = replacements.get(index);
+        if (replacement) return [replacement];
+        return consumed.has(index) ? [] : [change];
+    });
+}
+
 export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
     const base = indexSources(baseSnapshot?.sources);
     const compare = indexSources(compareSnapshot?.sources);
@@ -165,6 +324,9 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
         const metadataChanges = before && after
             ? sourceMetadataChanges(before, after)
             : [];
+        const optionChange = before && after
+            ? alternativePolicyChange(before, after)
+            : null;
         const changeKinds = [];
         let status = 'unchanged';
         if (!before) {
@@ -188,6 +350,7 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
                 if (before.attribution !== after.attribution) {
                     changeKinds.push('attribution');
                 }
+                if (optionChange) changeKinds.push('option');
             }
             if (metadataChanges.length) changeKinds.push('metadata');
             if (changeKinds.length) status = 'changed';
@@ -206,9 +369,15 @@ export function compareSnapshotSources(baseSnapshot, compareSnapshot) {
             tokenDelta: (after?.tokenCount ?? 0) - (before?.tokenCount ?? 0),
             changeKinds,
             metadataChanges,
+            ...(changeKinds.includes('option') && optionChange
+                ? { optionChange }
+                : {}),
         });
     }
-    return results;
+    return pairAlternativeSourceReplacements(results, {
+        baseSources: baseSnapshot?.sources ?? [],
+        compareSources: compareSnapshot?.sources ?? [],
+    });
 }
 
 export function sourceIsIncludedInRequest(source) {

@@ -1,4 +1,14 @@
-# v0.15.8 기술 구현 현황
+# v0.16.0 기술 구현 현황
+
+## v0.16.0 도움말·연습실·교체 판정
+
+- `HELP_TOPICS`는 다섯 화면과 캡처·설정의 14개 기능 문서를 immutable registry로 제공하고 현재 화면 필터, 전체 검색, 최근 읽은 3개 항목을 지원합니다.
+- 기존 상단 안내 launcher는 하단 탭을 늘리지 않고 `도움말·연습` dialog를 엽니다. 기능 제목의 책 아이콘도 같은 문서로 deep link하며 기존 `?` tooltip은 짧은 설명 전용입니다.
+- 비교 정책 연습실은 네 개의 고정 소스와 순수 `create/updateHelpLabSession()` 상태 전이로 이름 matcher·대안 그룹·전후 결과를 체험합니다.
+- AI 의미 검사 연습실은 고정 후보·전송 미리보기·동의·running timer·검증 결과·폐기 예시를 재현합니다. store, saved policy, `SemanticInspector`, provider adapter, network와 비용 경로는 사용하지 않습니다.
+- 도움말 modal은 별도 focus scope, Escape, 원래 focus 복원과 timer stale-session guard를 가지며 모바일에서는 전체 화면·단일 body scroll을 사용합니다.
+- diff 입력 source는 저장된 비교 정책으로 주석화한 뒤 Worker 또는 local runtime에 전달합니다. 정확한 source identity의 내용·배치·alternative 분류 변화는 `changed`, 서로 다른 source identity 사이의 안전한 alternative option 1:1 활성 전환은 `replaced`입니다.
+- 교체 pairing은 group instance, 서로 다른 non-empty option, 기준/비교의 활성 group cardinality 1을 모두 요구합니다. 하나라도 확인되지 않으면 added+removed를 유지합니다.
 
 ## v0.15.8 이전 이동·비교 spotlight 보정
 

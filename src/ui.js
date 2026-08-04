@@ -139,6 +139,20 @@ import {
     shouldAutoStartOnboarding,
 } from './onboarding.js';
 import { createOnboardingSession } from './onboarding-fixture.js';
+import {
+    HELP_CATEGORIES,
+    HELP_LABS,
+    createHelpLabSession,
+    helpTopicById,
+    helpTopicsFor,
+    normalizeRecentHelpTopics,
+    rememberHelpTopic,
+    updateHelpLabSession,
+} from './help-center.js';
+import {
+    COMPARISON_POLICY_LAB_FIXTURE,
+    SEMANTIC_AI_LAB_FIXTURE,
+} from './help-fixture.js';
 
 const STORAGE_PREFIX = 'st-devtools:';
 const RULE_SETTINGS_KEY = `${STORAGE_PREFIX}rule-settings:v1`;
@@ -149,6 +163,7 @@ const RULE_AUDIT_LOG_KEY = `${STORAGE_PREFIX}rule-audit:v1`;
 const LEGACY_PRICING_OVERRIDES_KEY = `${STORAGE_PREFIX}pricing-overrides:v1`;
 const LAST_TAB_KEY = `${STORAGE_PREFIX}last-tab`;
 const GEOMETRY_KEY = `${STORAGE_PREFIX}geometry`;
+const HELP_RECENT_KEY = `${STORAGE_PREFIX}help:recent:v1`;
 const KNOWN_LOCAL_DATA_KEYS = [
     RULE_SETTINGS_KEY,
     LEGACY_COMPARISON_POLICY_SETTINGS_KEY,
@@ -160,6 +175,7 @@ const KNOWN_LOCAL_DATA_KEYS = [
     ONBOARDING_STORAGE_KEY,
     LAST_TAB_KEY,
     GEOMETRY_KEY,
+    HELP_RECENT_KEY,
     UI_PREFERENCES_KEY,
     V4_UI_PREFERENCES_KEY,
     V3_UI_PREFERENCES_KEY,
@@ -184,6 +200,13 @@ const TABS = [
     ['rules', 'tab.rules', 'nav.short.rules', 'fa-shield-halved'],
     ['search', 'tab.search', 'nav.short.search', 'fa-magnifying-glass'],
 ];
+const SCREEN_HELP_TOPICS = Object.freeze({
+    explorer: 'prompt-overview',
+    timeline: 'timeline-overview',
+    diff: 'diff-overview',
+    rules: 'rules-overview',
+    search: 'search-overview',
+});
 const CAPTURE_STATUS_STATES = new Set([
     'waiting',
     'capturing',
@@ -444,6 +467,7 @@ function explainedTitle(title, description, {
     tag = 'span',
     titleTag = 'strong',
     className = '',
+    helpTopicId = null,
 } = {}) {
     const wrapper = element(tag, {
         className: `st-devtools-explained-title ${className}`.trim(),
@@ -452,6 +476,22 @@ function explainedTitle(title, description, {
         element(titleTag, { text: title }),
         helpTooltip(description, title),
     );
+    if (helpTopicId) {
+        const details = element('button', {
+            className: 'st-devtools-help-topic-link',
+            title: t('help.center.detailsFor', { title }),
+            type: 'button',
+        });
+        details.dataset.helpTopic = helpTopicId;
+        details.setAttribute(
+            'aria-label',
+            t('help.center.detailsFor', { title }),
+        );
+        const icon = element('i', { className: 'fa-solid fa-book-open' });
+        icon.setAttribute('aria-hidden', 'true');
+        details.appendChild(icon);
+        wrapper.appendChild(details);
+    }
     return wrapper;
 }
 
@@ -934,6 +974,16 @@ export class DevToolsWindow {
         this.settingsOverlay = null;
         this.settingsPanel = null;
         this.settingsRefreshTimer = null;
+        this.helpPreviouslyFocused = null;
+        this.helpOverlay = null;
+        this.helpPanel = null;
+        this.helpBody = null;
+        this.helpView = 'current';
+        this.helpTopicId = null;
+        this.helpQuery = '';
+        this.helpRecentTopicIds = this.loadRecentHelpTopics();
+        this.helpLabSession = null;
+        this.helpLabTimer = null;
         this.themeModeInput = null;
         this.timelineRetentionLimitInput = null;
         this.timelineReadLimitInput = null;
@@ -2864,6 +2914,7 @@ export class DevToolsWindow {
 
     openSettings() {
         if (!this.settingsOverlay || !this.settingsPanel) return;
+        this.closeHelpCenter({ restoreFocus: false });
         this.closeRulesSettings({ restoreFocus: false });
         this.settingsPreviouslyFocused = document.activeElement;
         this.themeModeInput.value = this.preferences.themeMode;
@@ -2973,10 +3024,11 @@ export class DevToolsWindow {
         );
     }
 
-    openRulesSettings() {
+    openRulesSettings({ returnFocus = null } = {}) {
         if (!this.rulesSettingsOverlay || !this.rulesSettingsPanel) return;
+        this.closeHelpCenter({ restoreFocus: false });
         this.closeSettings({ restoreFocus: false });
-        this.rulesSettingsPreviouslyFocused = document.activeElement;
+        this.rulesSettingsPreviouslyFocused = returnFocus ?? document.activeElement;
         this.refreshRulesSettingsPanel();
         this.window.setAttribute('aria-modal', 'false');
         for (const region of this.primaryRegions) {
@@ -3363,6 +3415,7 @@ export class DevToolsWindow {
         this.disposeVirtualLists();
         this.closeSemanticConsent(false, { restoreFocus: false });
         this.closeOnboarding({ persist: null, restoreFocus: false });
+        this.closeHelpCenter({ restoreFocus: false });
         this.cancelSemanticProviderEvaluation();
         this.cancelSemanticInspection();
         this.closeRulesSettings({ restoreFocus: false });
@@ -3410,15 +3463,17 @@ export class DevToolsWindow {
         const headerActions = element('div', { className: 'st-devtools-header-actions' });
         const onboarding = element('button', {
             className: 'menu_button st-devtools-icon-button st-devtools-onboarding-launcher',
-            title: t('action.onboarding'),
+            title: t('help.center.open'),
             type: 'button',
         });
-        onboarding.setAttribute('aria-label', t('action.onboarding'));
-        const onboardingIcon = element('i', { className: 'fa-solid fa-compass' });
+        onboarding.setAttribute('aria-label', t('help.center.open'));
+        onboarding.setAttribute('aria-haspopup', 'dialog');
+        onboarding.setAttribute('aria-controls', 'st-devtools-help-dialog');
+        const onboardingIcon = element('i', { className: 'fa-solid fa-book-open' });
         onboardingIcon.setAttribute('aria-hidden', 'true');
         onboarding.appendChild(onboardingIcon);
         onboarding.addEventListener('click', () => {
-            this.startOnboarding({ invitation: true, force: true });
+            this.openHelpCenter({ view: 'current' });
         });
         this.onboardingLauncher = onboarding;
         const settings = element('button', {
@@ -3495,6 +3550,7 @@ export class DevToolsWindow {
             this.buildSettingsPanel(),
             this.buildRulesSettingsPanel(),
             this.buildSemanticConsentDialog(),
+            this.buildHelpCenter(),
             this.buildOnboardingInvitationLayer(),
             this.buildOnboardingGuide(),
         );
@@ -3508,10 +3564,840 @@ export class DevToolsWindow {
                 closeHelpTooltips(this.root);
             }
         });
+        this.root.addEventListener('click', (event) => {
+            const link = event.target.closest?.('[data-help-topic]');
+            if (!link) return;
+            event.preventDefault();
+            closeHelpTooltips(this.root);
+            this.openHelpCenter({ topicId: link.dataset.helpTopic });
+        });
         document.addEventListener('keydown', (event) => this.handleDialogKeydown(event));
         this.enableDragging(header);
         this.observeGeometry();
         this.selectTab(this.activeTab);
+    }
+
+    loadRecentHelpTopics() {
+        try {
+            return normalizeRecentHelpTopics(JSON.parse(
+                localStorage.getItem(HELP_RECENT_KEY) ?? '[]',
+            ));
+        } catch {
+            return [];
+        }
+    }
+
+    rememberHelpTopic(topicId) {
+        this.helpRecentTopicIds = rememberHelpTopic(
+            this.helpRecentTopicIds,
+            topicId,
+        );
+        try {
+            localStorage.setItem(
+                HELP_RECENT_KEY,
+                JSON.stringify(this.helpRecentTopicIds),
+            );
+        } catch {
+            // Help remains available when recent-topic persistence is blocked.
+        }
+    }
+
+    buildHelpCenter() {
+        const overlay = element('div', {
+            className: 'st-devtools-settings-overlay st-devtools-help-overlay',
+        });
+        overlay.hidden = true;
+        overlay.addEventListener('pointerdown', (event) => {
+            if (event.target === overlay) this.closeHelpCenter();
+        });
+        const panel = element('section', {
+            className: 'st-devtools-settings-panel st-devtools-help-panel',
+        });
+        panel.id = 'st-devtools-help-dialog';
+        panel.tabIndex = -1;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'st-devtools-help-title');
+
+        const header = element('header', {
+            className: 'st-devtools-settings-header st-devtools-help-header',
+        });
+        const titleGroup = element('div');
+        const title = element('h2', { text: t('help.center.title') });
+        title.id = 'st-devtools-help-title';
+        titleGroup.append(
+            title,
+            proseElement('p', t('help.center.description')),
+        );
+        const close = element('button', {
+            className: 'menu_button st-devtools-icon-button st-devtools-settings-close',
+            title: t('action.close'),
+            type: 'button',
+        });
+        close.setAttribute('aria-label', t('action.close'));
+        close.appendChild(closeIcon());
+        close.addEventListener('click', () => this.closeHelpCenter());
+        header.append(titleGroup, close);
+
+        const body = element('div', { className: 'st-devtools-help-body' });
+        panel.append(header, body);
+        overlay.appendChild(panel);
+        this.helpOverlay = overlay;
+        this.helpPanel = panel;
+        this.helpBody = body;
+        return overlay;
+    }
+
+    openHelpCenter({ view = 'current', topicId = null, labId = null } = {}) {
+        if (!this.helpOverlay || !this.helpPanel) return false;
+        const topic = topicId ? helpTopicById(topicId) : null;
+        const lab = labId ? HELP_LABS.find(({ id }) => id === labId) : null;
+        const wasOpen = !this.helpOverlay.hidden;
+        this.closeSettings({ restoreFocus: false });
+        this.closeRulesSettings({ restoreFocus: false });
+        if (!wasOpen) this.helpPreviouslyFocused = document.activeElement;
+        this.clearHelpLabTimer();
+        this.helpView = ['current', 'all', 'labs'].includes(view) ? view : 'current';
+        this.helpTopicId = topic?.id ?? null;
+        this.helpLabSession = lab ? createHelpLabSession(lab.id) : null;
+        if (topic) {
+            this.helpView = topic.tabId === this.activeTabId() ? 'current' : 'all';
+            this.rememberHelpTopic(topic.id);
+        }
+        if (lab) this.helpView = 'labs';
+        this.window.setAttribute('aria-modal', 'false');
+        for (const region of this.primaryRegions) {
+            region.inert = true;
+            region.setAttribute('aria-hidden', 'true');
+        }
+        this.helpOverlay.hidden = false;
+        this.refreshHelpCenter();
+        this.resetHelpScroll();
+        queueMicrotask(() => {
+            if (this.helpOverlay && !this.helpOverlay.hidden) {
+                this.helpPanel?.focus({ preventScroll: true });
+            }
+        });
+        return true;
+    }
+
+    closeHelpCenter({ restoreFocus = true } = {}) {
+        if (!this.helpOverlay || this.helpOverlay.hidden) return false;
+        this.clearHelpLabTimer();
+        this.helpOverlay.hidden = true;
+        this.helpTopicId = null;
+        this.helpLabSession = null;
+        this.helpQuery = '';
+        this.window.setAttribute('aria-modal', 'true');
+        for (const region of this.primaryRegions) {
+            region.inert = false;
+            region.removeAttribute('aria-hidden');
+        }
+        if (
+            restoreFocus
+            && this.helpPreviouslyFocused?.isConnected
+            && typeof this.helpPreviouslyFocused.focus === 'function'
+        ) {
+            this.helpPreviouslyFocused.focus({ preventScroll: true });
+        }
+        this.helpPreviouslyFocused = null;
+        return true;
+    }
+
+    clearHelpLabTimer() {
+        if (this.helpLabTimer == null) return;
+        clearTimeout(this.helpLabTimer);
+        this.helpLabTimer = null;
+    }
+
+    resetHelpScroll() {
+        if (this.helpBody) this.helpBody.scrollTop = 0;
+    }
+
+    helpTabLabel(tabId = this.activeTabId()) {
+        const tab = TABS.find(([id]) => id === tabId);
+        return tab ? t(tab[1]) : t('help.center.allFeatures');
+    }
+
+    helpCategoryLabel(categoryId) {
+        return HELP_CATEGORIES.find(({ id }) => id === categoryId)?.label
+            ?? t('help.center.allFeatures');
+    }
+
+    renderHelpBackButton(label, action) {
+        const button = element('button', {
+            className: 'menu_button st-devtools-help-back',
+            type: 'button',
+        });
+        const icon = element('i', { className: 'fa-solid fa-arrow-left' });
+        icon.setAttribute('aria-hidden', 'true');
+        button.append(icon, element('span', { text: label }));
+        button.addEventListener('click', action);
+        return button;
+    }
+
+    renderHelpTopicList(topics, { emptyText = t('help.center.noResults') } = {}) {
+        const list = element('div', { className: 'st-devtools-help-list' });
+        if (!topics.length) {
+            list.appendChild(proseElement('p', emptyText, {
+                className: 'st-devtools-help-empty',
+            }));
+            return list;
+        }
+        for (const topic of topics) {
+            const row = element('button', {
+                className: 'st-devtools-help-list-row',
+                type: 'button',
+            });
+            const copy = element('span', { className: 'st-devtools-help-list-copy' });
+            copy.append(
+                element('strong', { text: topic.title }),
+                element('small', { text: topic.summary }),
+            );
+            const arrow = element('i', { className: 'fa-solid fa-chevron-right' });
+            arrow.setAttribute('aria-hidden', 'true');
+            row.append(copy, arrow);
+            row.addEventListener('click', () => {
+                this.helpTopicId = topic.id;
+                this.rememberHelpTopic(topic.id);
+                this.refreshHelpCenter({ focusTitle: true });
+                this.resetHelpScroll();
+            });
+            list.appendChild(row);
+        }
+        return list;
+    }
+
+    renderHelpHubNavigation() {
+        const navigation = element('div', {
+            className: 'st-devtools-help-hub-nav',
+        });
+        navigation.setAttribute('role', 'group');
+        navigation.setAttribute('aria-label', t('help.center.sections'));
+        for (const [view, label] of [
+            ['current', t('help.center.currentScreen')],
+            ['all', t('help.center.allFeatures')],
+            ['labs', t('help.center.labs')],
+        ]) {
+            const button = element('button', {
+                className: 'menu_button',
+                text: label,
+                type: 'button',
+            });
+            const active = this.helpView === view;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-pressed', String(active));
+            button.addEventListener('click', () => {
+                this.clearHelpLabTimer();
+                this.helpView = view;
+                this.helpTopicId = null;
+                this.helpLabSession = null;
+                this.refreshHelpCenter({ focusTitle: true });
+                this.resetHelpScroll();
+            });
+            navigation.appendChild(button);
+        }
+        return navigation;
+    }
+
+    renderHelpHub() {
+        const view = element('div', { className: 'st-devtools-help-view' });
+        const start = element('section', {
+            className: 'st-devtools-help-start-row',
+        });
+        const startCopy = element('div');
+        startCopy.append(
+            element('strong', { text: t('help.center.startTitle') }),
+            proseElement('p', t('help.center.startDescription')),
+        );
+        const startButton = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: t('help.center.startAction'),
+            type: 'button',
+        });
+        startButton.addEventListener('click', () => {
+            this.closeHelpCenter();
+            queueMicrotask(() => {
+                this.startOnboarding({ invitation: true, force: true });
+            });
+        });
+        start.append(startCopy, startButton);
+        view.append(start, this.renderHelpHubNavigation());
+
+        if (this.helpView === 'current') {
+            const current = element('section', { className: 'st-devtools-help-section' });
+            current.append(
+                element('h3', {
+                    className: 'st-devtools-help-view-title',
+                    text: t('help.center.currentTitle', {
+                        screen: this.helpTabLabel(),
+                    }),
+                }),
+                proseElement('p', t('help.center.currentDescription')),
+                this.renderHelpTopicList(helpTopicsFor({
+                    tabId: this.activeTabId(),
+                })),
+            );
+            view.appendChild(current);
+            const recentTopics = this.helpRecentTopicIds
+                .map((id) => helpTopicById(id))
+                .filter(Boolean);
+            if (recentTopics.length) {
+                const recent = element('section', {
+                    className: 'st-devtools-help-section',
+                });
+                recent.append(
+                    element('h3', { text: t('help.center.recent') }),
+                    this.renderHelpTopicList(recentTopics),
+                );
+                view.appendChild(recent);
+            }
+        } else if (this.helpView === 'all') {
+            const section = element('section', { className: 'st-devtools-help-section' });
+            section.append(
+                element('h3', {
+                    className: 'st-devtools-help-view-title',
+                    text: t('help.center.allFeatures'),
+                }),
+                proseElement('p', t('help.center.allDescription')),
+            );
+            const search = element('input');
+            search.type = 'search';
+            search.value = this.helpQuery;
+            search.placeholder = t('help.center.searchPlaceholder');
+            search.setAttribute('aria-label', t('help.center.searchPlaceholder'));
+            const results = element('div');
+            const renderResults = () => {
+                this.helpQuery = search.value;
+                results.replaceChildren(this.renderHelpTopicList(
+                    helpTopicsFor({ query: this.helpQuery }),
+                ));
+            };
+            search.addEventListener('input', renderResults);
+            section.append(search, results);
+            renderResults();
+            view.appendChild(section);
+        } else {
+            const section = element('section', { className: 'st-devtools-help-section' });
+            section.append(
+                element('h3', {
+                    className: 'st-devtools-help-view-title',
+                    text: t('help.center.labs'),
+                }),
+                proseElement('p', t('help.center.labsDescription')),
+            );
+            const labs = element('div', { className: 'st-devtools-help-list' });
+            for (const lab of HELP_LABS) {
+                const row = element('button', {
+                    className: 'st-devtools-help-list-row',
+                    type: 'button',
+                });
+                const copy = element('span', { className: 'st-devtools-help-list-copy' });
+                copy.append(
+                    element('strong', { text: lab.title }),
+                    element('small', { text: lab.description }),
+                    element('span', {
+                        className: 'st-devtools-help-duration',
+                        text: lab.duration,
+                    }),
+                );
+                const arrow = element('i', { className: 'fa-solid fa-chevron-right' });
+                arrow.setAttribute('aria-hidden', 'true');
+                row.append(copy, arrow);
+                row.addEventListener('click', () => this.startHelpLab(lab.id));
+                labs.appendChild(row);
+            }
+            section.appendChild(labs);
+            view.appendChild(section);
+        }
+        return view;
+    }
+
+    renderHelpTopicArticle(topic) {
+        const article = element('article', {
+            className: 'st-devtools-help-view st-devtools-help-topic',
+        });
+        article.appendChild(this.renderHelpBackButton(
+            t('help.center.backToHelp'),
+            () => {
+                this.helpTopicId = null;
+                this.refreshHelpCenter({ focusTitle: true });
+                this.resetHelpScroll();
+            },
+        ));
+        article.append(
+            element('span', {
+                className: 'st-devtools-help-eyebrow',
+                text: this.helpCategoryLabel(topic.category),
+            }),
+            element('h3', {
+                className: 'st-devtools-help-view-title',
+                text: topic.title,
+            }),
+            proseElement('p', topic.summary, {
+                className: 'st-devtools-help-topic-summary',
+            }),
+        );
+        for (const [title, body] of topic.sections) {
+            const section = element('section', {
+                className: 'st-devtools-help-topic-section',
+            });
+            section.append(
+                element('h4', { text: title }),
+                proseElement('p', body),
+            );
+            article.appendChild(section);
+        }
+        if (topic.labId) {
+            const actions = element('div', { className: 'st-devtools-help-actions' });
+            const practice = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: t('help.center.openLab'),
+                type: 'button',
+            });
+            practice.addEventListener('click', () => this.startHelpLab(topic.labId));
+            actions.appendChild(practice);
+            article.appendChild(actions);
+        }
+        return article;
+    }
+
+    startHelpLab(labId) {
+        const session = createHelpLabSession(labId);
+        if (!session) return false;
+        this.clearHelpLabTimer();
+        this.helpTopicId = null;
+        this.helpView = 'labs';
+        this.helpLabSession = session;
+        this.refreshHelpCenter({ focusTitle: true });
+        this.resetHelpScroll();
+        return true;
+    }
+
+    updateHelpLab(action) {
+        if (!this.helpLabSession) return false;
+        const previous = this.helpLabSession;
+        this.helpLabSession = updateHelpLabSession(previous, action);
+        this.refreshHelpCenter({ focusTitle: true });
+        this.resetHelpScroll();
+        if (
+            this.helpLabSession?.labId === 'semantic-ai'
+            && this.helpLabSession.status === 'running'
+        ) {
+            this.clearHelpLabTimer();
+            const expectedSession = this.helpLabSession;
+            this.helpLabTimer = setTimeout(() => {
+                this.helpLabTimer = null;
+                if (
+                    this.helpOverlay?.hidden
+                    || this.helpLabSession !== expectedSession
+                    || expectedSession.status !== 'running'
+                ) return;
+                this.helpLabSession = updateHelpLabSession(
+                    expectedSession,
+                    { type: 'complete' },
+                );
+                this.refreshHelpCenter({ focusTitle: true });
+                this.resetHelpScroll();
+            }, 650);
+        }
+        return this.helpLabSession !== previous;
+    }
+
+    renderHelpLabBanner() {
+        const banner = element('div', {
+            className: 'st-devtools-help-practice-banner',
+        });
+        banner.setAttribute('role', 'status');
+        const icon = element('i', { className: 'fa-solid fa-flask' });
+        icon.setAttribute('aria-hidden', 'true');
+        banner.append(
+            icon,
+            element('span', { text: t('help.lab.isolation') }),
+        );
+        return banner;
+    }
+
+    renderComparisonPolicyLab(session) {
+        const fixture = COMPARISON_POLICY_LAB_FIXTURE;
+        const stage = element('section', {
+            className: 'st-devtools-help-practice-stage',
+        });
+        if (session.step === 0) {
+            stage.append(
+                element('h4', { text: '1. 이름에서 그룹과 옵션 찾기' }),
+                proseElement('p', '세 언어 프롬프트는 같은 목적의 선택지입니다. 이름을 어떤 규칙으로 나눌지 직접 선택하세요.'),
+            );
+            const sources = element('div', { className: 'st-devtools-help-source-list' });
+            for (const source of fixture.sources) {
+                sources.appendChild(element('div', {
+                    className: 'st-devtools-help-source-row',
+                    text: source.name,
+                }));
+            }
+            const select = element('select');
+            select.setAttribute('aria-label', '이름 해석 규칙');
+            for (const [value, label] of [
+                ['', '이름 규칙을 선택하세요'],
+                ['[{group}] {option}', '[출력언어] 한국어 형식'],
+                ['{group} | {option}', '출력언어 | 한국어 형식'],
+            ]) {
+                const option = element('option', { text: label });
+                option.value = value;
+                select.appendChild(option);
+            }
+            const apply = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: '이 규칙으로 해석하기',
+                type: 'button',
+            });
+            apply.disabled = true;
+            select.addEventListener('change', () => {
+                apply.disabled = !select.value;
+            });
+            apply.addEventListener('click', () => this.updateHelpLab({
+                type: 'choose-matcher',
+                value: select.value,
+            }));
+            stage.append(sources, select, apply);
+        } else if (session.step === 1) {
+            const correct = session.matcher === fixture.matcher;
+            stage.append(
+                element('h4', { text: '2. 해석 결과 확인' }),
+                proseElement('p', correct
+                    ? '출력언어는 그룹, 한국어·일본어·영어는 각 옵션으로 정확히 나뉘었습니다.'
+                    : '이 규칙은 현재 이름 형식과 맞지 않아 그룹을 찾지 못했습니다.'),
+            );
+            if (correct) {
+                const parsed = element('div', { className: 'st-devtools-help-parsed-grid' });
+                for (const source of fixture.sources.slice(0, 3)) {
+                    parsed.append(
+                        element('span', { text: source.name }),
+                        element('span', { text: `그룹 ${source.group}` }),
+                        element('span', { text: `옵션 ${source.option}` }),
+                    );
+                }
+                const mode = element('select');
+                mode.setAttribute('aria-label', '그룹 동작');
+                for (const [value, label] of [
+                    ['', '그룹 동작을 선택하세요'],
+                    ['alternative', '대안 그룹 · 내부 비교 제외'],
+                    ['ignore', '내부 무시 그룹 · 경고도 숨김'],
+                ]) {
+                    const option = element('option', { text: label });
+                    option.value = value;
+                    mode.appendChild(option);
+                }
+                const apply = element('button', {
+                    className: 'menu_button st-devtools-primary-button',
+                    text: '그룹 동작 적용하기',
+                    type: 'button',
+                });
+                apply.disabled = true;
+                mode.addEventListener('change', () => {
+                    apply.disabled = !mode.value;
+                });
+                apply.addEventListener('click', () => this.updateHelpLab({
+                    type: 'choose-mode',
+                    value: mode.value,
+                }));
+                stage.append(parsed, mode, apply);
+            } else {
+                const retry = element('button', {
+                    className: 'menu_button',
+                    text: '이름 규칙 다시 선택하기',
+                    type: 'button',
+                });
+                retry.addEventListener('click', () => this.updateHelpLab({ type: 'reset' }));
+                stage.appendChild(retry);
+            }
+        } else if (session.step === 2) {
+            const correct = session.mode === fixture.mode;
+            stage.append(
+                element('h4', { text: '3. 그룹 동작의 차이 이해하기' }),
+                proseElement('p', correct
+                    ? '대안 그룹은 같은 목적의 옵션끼리만 비교를 건너뛰고 다른 그룹과의 비교는 계속합니다.'
+                    : '내부 무시 그룹은 경고 자체를 숨기는 용도라서 언어 옵션 전환을 교체로 해석하기에 적합하지 않습니다.'),
+            );
+            if (correct) {
+                const preview = element('button', {
+                    className: 'menu_button st-devtools-primary-button',
+                    text: '적용 전후 미리보기',
+                    type: 'button',
+                });
+                preview.addEventListener('click', () => this.updateHelpLab({ type: 'preview' }));
+                stage.appendChild(preview);
+            } else {
+                const retry = element('button', {
+                    className: 'menu_button',
+                    text: '대안 그룹으로 다시 선택하기',
+                    type: 'button',
+                });
+                retry.addEventListener('click', () => {
+                    this.helpLabSession = {
+                        ...session,
+                        mode: null,
+                        step: 1,
+                    };
+                    this.refreshHelpCenter({ focusTitle: true });
+                    this.resetHelpScroll();
+                });
+                stage.appendChild(retry);
+            }
+        } else if (session.step === 3) {
+            const comparison = element('div', { className: 'st-devtools-help-before-after' });
+            comparison.append(
+                this.renderHelpMetric('적용 전', `${fixture.before.internalPairs}쌍`, '그룹 내부도 서로 비교'),
+                this.renderHelpMetric('적용 후', `${fixture.after.internalPairs}쌍`, '출력언어 내부 비교 제외'),
+            );
+            stage.append(
+                element('h4', { text: '4. 결과가 어떻게 달라졌는지 확인' }),
+                comparison,
+                proseElement('p', '말투 | 존댓말처럼 다른 그룹의 프롬프트와는 계속 비교합니다. 같은 대안 그룹에서 한국어를 끄고 영어를 켜면 변경 비교에서는 “교체”로 묶을 수 있습니다.'),
+            );
+            const finish = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: '연습 결과 확인하기',
+                type: 'button',
+            });
+            finish.addEventListener('click', () => this.updateHelpLab({ type: 'finish' }));
+            stage.appendChild(finish);
+        } else {
+            stage.append(
+                element('div', {
+                    className: 'st-devtools-help-success-mark',
+                    text: '✓',
+                }),
+                element('h4', { text: '비교 정책 연습을 마쳤어요' }),
+                proseElement('p', '대안 그룹은 옵션 내부 비교만 제외하고, 수동 지정은 이름 규칙보다 우선합니다. 연습 내용은 실제 설정에 저장되지 않았습니다.'),
+            );
+            const actions = element('div', { className: 'st-devtools-help-actions' });
+            const real = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: '실제 비교 정책 설정 열기',
+                type: 'button',
+            });
+            real.addEventListener('click', () => {
+                const returnFocus = this.helpPreviouslyFocused ?? this.onboardingLauncher;
+                this.closeHelpCenter({ restoreFocus: false });
+                this.selectTab('rules');
+                this.openRulesSettings({ returnFocus });
+            });
+            const retry = element('button', {
+                className: 'menu_button',
+                text: '다시 연습하기',
+                type: 'button',
+            });
+            retry.addEventListener('click', () => this.updateHelpLab({ type: 'reset' }));
+            actions.append(real, retry);
+            stage.appendChild(actions);
+        }
+        return stage;
+    }
+
+    renderHelpMetric(label, value, description) {
+        const item = element('div', { className: 'st-devtools-help-metric' });
+        item.append(
+            element('small', { text: label }),
+            element('strong', { text: value }),
+            element('span', { text: description }),
+        );
+        return item;
+    }
+
+    renderSemanticAiLab(session) {
+        const fixture = SEMANTIC_AI_LAB_FIXTURE;
+        const stage = element('section', {
+            className: 'st-devtools-help-practice-stage',
+        });
+        if (session.step === 0) {
+            stage.append(
+                element('h4', { text: '1. AI가 자세히 볼 후보 선택' }),
+                proseElement('p', '실제 기능에서는 로컬 규칙 검사 결과 중 필요한 후보만 선택합니다. 아래 연습 후보를 선택하세요.'),
+            );
+            const finding = element('button', {
+                className: 'st-devtools-help-finding',
+                type: 'button',
+            });
+            finding.append(
+                element('span', { text: fixture.finding.severity }),
+                element('strong', { text: fixture.finding.title }),
+                element('small', { text: fixture.finding.sources.join(' · ') }),
+            );
+            finding.addEventListener('click', () => this.updateHelpLab({
+                type: 'select-finding',
+                value: fixture.finding.id,
+            }));
+            stage.appendChild(finding);
+        } else if (session.step === 1) {
+            stage.append(
+                element('h4', { text: '2. 선택한 근거 확인' }),
+                element('strong', { text: fixture.finding.title }),
+                proseElement('p', fixture.finding.reason),
+            );
+            const preview = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: '전송 미리보기 확인',
+                type: 'button',
+            });
+            preview.addEventListener('click', () => this.updateHelpLab({ type: 'preview' }));
+            stage.appendChild(preview);
+        } else if (session.step === 2) {
+            const preview = element('dl', { className: 'st-devtools-help-preview' });
+            for (const [label, value] of [
+                ['연결 프로필', fixture.preview.profile],
+                ['모델', fixture.preview.model],
+                ['요청', fixture.preview.prompt],
+                ['원문 일부', fixture.preview.sourceExcerpt],
+            ]) {
+                preview.append(
+                    element('dt', { text: label }),
+                    element('dd', { text: value }),
+                );
+            }
+            const consentLabel = element('label', {
+                className: 'st-devtools-help-consent',
+            });
+            const consent = element('input');
+            consent.type = 'checkbox';
+            const consentText = element('span', {
+                text: '연습 데이터이며 실제로 전송되지 않음을 확인했습니다.',
+            });
+            consentLabel.append(consent, consentText);
+            const run = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: '연습 AI 분석 실행',
+                type: 'button',
+            });
+            run.disabled = !session.consented;
+            consent.checked = session.consented;
+            consent.addEventListener('change', () => {
+                this.helpLabSession = updateHelpLabSession(this.helpLabSession, {
+                    type: 'consent',
+                    value: consent.checked,
+                });
+                run.disabled = !this.helpLabSession.consented;
+            });
+            run.addEventListener('click', () => this.updateHelpLab({ type: 'run' }));
+            stage.append(
+                element('h4', { text: '3. 무엇을 보낼지 먼저 확인' }),
+                preview,
+                consentLabel,
+                run,
+            );
+        } else if (session.step === 3) {
+            const spinner = element('i', { className: 'fa-solid fa-spinner fa-spin' });
+            spinner.setAttribute('aria-hidden', 'true');
+            stage.setAttribute('aria-live', 'polite');
+            stage.append(
+                spinner,
+                element('h4', { text: '연습 응답을 검사하고 있어요' }),
+                proseElement('p', '실제 기능은 응답 구조와 근거가 선택한 원문에 맞는지 확인한 뒤 결과를 표시합니다.'),
+            );
+        } else {
+            const result = element('div', { className: 'st-devtools-help-ai-result' });
+            for (const [label, value] of [
+                ['판정', fixture.result.conclusion],
+                ['근거', fixture.result.evidence],
+                ['개선 방향', fixture.result.suggestion],
+            ]) {
+                const row = element('section');
+                row.append(
+                    element('strong', { text: label }),
+                    proseElement('p', value),
+                );
+                result.appendChild(row);
+            }
+            const rejected = element('details', {
+                className: 'st-devtools-disclosure st-devtools-help-rejected',
+            });
+            rejected.append(
+                element('summary', { text: fixture.rejected.title }),
+                proseElement('p', fixture.rejected.reason),
+            );
+            stage.append(
+                element('div', {
+                    className: 'st-devtools-help-success-mark',
+                    text: '✓',
+                }),
+                element('h4', { text: 'AI 의미 검사 흐름을 마쳤어요' }),
+                result,
+                rejected,
+                proseElement('p', '실제 AI 결과도 자동 적용되거나 저장되지 않습니다. 제안을 복사해 원래 프롬프트 편집 화면에서 검토하세요.'),
+            );
+            const actions = element('div', { className: 'st-devtools-help-actions' });
+            const real = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: '실제 규칙 검사 화면 보기',
+                type: 'button',
+            });
+            real.addEventListener('click', () => {
+                this.closeHelpCenter({ restoreFocus: false });
+                this.selectTab('rules');
+                queueMicrotask(() => this.activeTabButton()?.focus({ preventScroll: true }));
+            });
+            const retry = element('button', {
+                className: 'menu_button',
+                text: '다시 연습하기',
+                type: 'button',
+            });
+            retry.addEventListener('click', () => this.updateHelpLab({ type: 'reset' }));
+            actions.append(real, retry);
+            stage.appendChild(actions);
+        }
+        return stage;
+    }
+
+    renderHelpLab(session) {
+        const lab = HELP_LABS.find(({ id }) => id === session.labId);
+        const view = element('div', {
+            className: 'st-devtools-help-view st-devtools-help-practice',
+        });
+        view.append(
+            this.renderHelpBackButton(t('help.center.backToLabs'), () => {
+                this.clearHelpLabTimer();
+                this.helpLabSession = null;
+                this.helpView = 'labs';
+                this.refreshHelpCenter({ focusTitle: true });
+                this.resetHelpScroll();
+            }),
+            this.renderHelpLabBanner(),
+            element('span', {
+                className: 'st-devtools-help-eyebrow',
+                text: t('help.center.labProgress', {
+                    current: Math.min(5, session.step + 1),
+                    total: 5,
+                }),
+            }),
+            element('h3', {
+                className: 'st-devtools-help-view-title',
+                text: lab?.title ?? t('help.center.labs'),
+            }),
+        );
+        view.appendChild(session.labId === 'comparison-policy'
+            ? this.renderComparisonPolicyLab(session)
+            : this.renderSemanticAiLab(session));
+        return view;
+    }
+
+    refreshHelpCenter({ focusTitle = false } = {}) {
+        if (!this.helpBody) return;
+        const topic = this.helpTopicId ? helpTopicById(this.helpTopicId) : null;
+        const content = this.helpLabSession
+            ? this.renderHelpLab(this.helpLabSession)
+            : topic
+                ? this.renderHelpTopicArticle(topic)
+                : this.renderHelpHub();
+        this.helpBody.replaceChildren(content);
+        if (focusTitle) {
+            const title = this.helpLabSession
+                ? this.helpBody.querySelector('.st-devtools-help-practice-stage > h4')
+                : this.helpBody.querySelector('.st-devtools-help-view-title');
+            if (title) {
+                title.tabIndex = -1;
+                queueMicrotask(() => title.focus({ preventScroll: true }));
+            }
+        }
     }
 
     buildOnboardingInvitationLayer() {
@@ -3731,6 +4617,7 @@ export class DevToolsWindow {
             (this.settingsOverlay && !this.settingsOverlay.hidden)
             || (this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden)
             || (this.semanticConsentOverlay && !this.semanticConsentOverlay.hidden)
+            || (this.helpOverlay && !this.helpOverlay.hidden)
         );
         return !semanticBusy
             && !semanticProviderBusy
@@ -5147,6 +6034,7 @@ export class DevToolsWindow {
                 tag: 'div',
                 titleTag: 'h1',
                 className: 'st-devtools-screen-title',
+                helpTopicId: SCREEN_HELP_TOPICS[tabId],
             },
         ));
         if (tabId === 'rules') {
@@ -5813,7 +6701,9 @@ export class DevToolsWindow {
                 && !this.semanticConsentOverlay.hidden
             )
                 ? this.semanticConsentPanel
-                : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
+                : this.helpOverlay && !this.helpOverlay.hidden
+                    ? this.helpPanel
+                    : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
                     ? this.rulesSettingsPanel
                     : this.settingsOverlay && !this.settingsOverlay.hidden
                         ? this.settingsPanel
@@ -5841,6 +6731,8 @@ export class DevToolsWindow {
                 && !this.semanticConsentOverlay.hidden
             ) {
                 this.closeSemanticConsent(false);
+            } else if (this.helpOverlay && !this.helpOverlay.hidden) {
+                this.closeHelpCenter();
             } else if (
                 this.rulesSettingsOverlay
                 && !this.rulesSettingsOverlay.hidden
@@ -5873,12 +6765,14 @@ export class DevToolsWindow {
                 && !this.semanticConsentOverlay.hidden
             )
                 ? this.semanticConsentPanel
-                : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
+                : this.helpOverlay && !this.helpOverlay.hidden
+                    ? this.helpPanel
+                    : this.rulesSettingsOverlay && !this.rulesSettingsOverlay.hidden
                     ? this.rulesSettingsPanel
                     : this.settingsOverlay && !this.settingsOverlay.hidden
                         ? this.settingsPanel
                         : this.window;
-        if (!focusScope.contains(active)) {
+        if (!focusScope.contains(active) || active === focusScope) {
             event.preventDefault();
             (event.shiftKey ? last : first).focus();
         } else if (event.shiftKey && active === first) {
@@ -8289,6 +9183,18 @@ export class DevToolsWindow {
         return wrapper;
     }
 
+    snapshotWithSavedComparisonPolicies(snapshot) {
+        if (!snapshot) return snapshot;
+        return {
+            ...snapshot,
+            sources: annotateSourcesWithPolicies(
+                snapshot.sources ?? [],
+                this.savedComparisonPolicySettings,
+                snapshot,
+            ),
+        };
+    }
+
     renderDiff() {
         const page = element('div', { className: 'st-devtools-page' });
         const timeline = this.activeTimeline();
@@ -8369,6 +9275,8 @@ export class DevToolsWindow {
             sourceSection.replaceChildren();
             loreSection.replaceChildren();
             if (!selectedBase || !selectedCompare) return;
+            const comparisonBase = this.snapshotWithSavedComparisonPolicies(selectedBase);
+            const comparisonCompare = this.snapshotWithSavedComparisonPolicies(selectedCompare);
 
             if (fullDiff.open) renderFullDiff();
             if (!this.shouldUseAsyncAnalysis(
@@ -8377,8 +9285,8 @@ export class DevToolsWindow {
             )) {
                 this.renderSourceChanges(
                     sourceSection,
-                    selectedBase,
-                    selectedCompare,
+                    comparisonBase,
+                    comparisonCompare,
                 );
                 this.renderLoreChanges(
                     loreSection,
@@ -8403,16 +9311,21 @@ export class DevToolsWindow {
             try {
                 const response = await this.runUiAnalysis('diff', {
                     baseSnapshot: {
-                        sources: selectedBase.sources ?? [],
+                        sources: comparisonBase.sources ?? [],
                         lorebookEntries: selectedBase.lorebookEntries ?? [],
                     },
                     compareSnapshot: {
-                        sources: selectedCompare.sources ?? [],
+                        sources: comparisonCompare.sources ?? [],
                         lorebookEntries: selectedCompare.lorebookEntries ?? [],
                     },
                 }, {
                     snapshots: [selectedBase, selectedCompare],
-                    configuration: { operation: 'source-lore-diff:v1' },
+                    configuration: {
+                        operation: 'source-lore-diff:v2',
+                        comparisonPolicyDigest: configurationDigest(
+                            this.savedComparisonPolicySettings,
+                        ),
+                    },
                     controller,
                 });
                 if (
@@ -8427,8 +9340,8 @@ export class DevToolsWindow {
                 loreSection.replaceChildren();
                 this.renderSourceChanges(
                     sourceSection,
-                    selectedBase,
-                    selectedCompare,
+                    comparisonBase,
+                    comparisonCompare,
                     response.result?.sources ?? [],
                 );
                 this.renderLoreChanges(
@@ -8526,6 +9439,9 @@ export class DevToolsWindow {
                 }
             });
             const summary = element('summary');
+            const sourceLabel = change.status === 'replaced'
+                ? `${sourceDisplayLabel(change.before)} → ${sourceDisplayLabel(change.after)}`
+                : sourceDisplayLabel(change.source);
             const kindBadges = element('span', {
                 className: 'st-devtools-source-change-kinds',
                 title: t('diff.changeKinds'),
@@ -8537,7 +9453,7 @@ export class DevToolsWindow {
                 }));
             }
             summary.append(
-                element('strong', { text: sourceDisplayLabel(change.source) }),
+                element('strong', { text: sourceLabel }),
                 element('span', {
                     className: 'st-devtools-source-change-status',
                     text: t(`diff.status.${change.status}`),
@@ -8553,6 +9469,45 @@ export class DevToolsWindow {
                 const body = element('div', {
                     className: 'st-devtools-source-change-content',
                 });
+                if (change.status === 'replaced' && change.replacement) {
+                    const replacement = element('section', {
+                        className: 'st-devtools-source-replacement',
+                    });
+                    replacement.append(
+                        element('strong', { text: t('diff.replacementTitle') }),
+                        proseElement('p', t('diff.replacementDescription', {
+                            group: change.replacement.group
+                                ?? change.replacement.groupKey
+                                ?? t('common.unknown'),
+                            before: change.replacement.beforeOption
+                                ?? sourceDisplayLabel(change.before),
+                            after: change.replacement.afterOption
+                                ?? sourceDisplayLabel(change.after),
+                        })),
+                    );
+                    body.appendChild(replacement);
+                }
+                if (change.status === 'changed' && change.optionChange) {
+                    const beforeOption = [
+                        change.optionChange.beforeGroup,
+                        change.optionChange.beforeOption,
+                    ].filter(Boolean).join(' · ') || t('common.unknown');
+                    const afterOption = [
+                        change.optionChange.afterGroup,
+                        change.optionChange.afterOption,
+                    ].filter(Boolean).join(' · ') || t('common.unknown');
+                    const optionChange = element('section', {
+                        className: 'st-devtools-source-replacement',
+                    });
+                    optionChange.append(
+                        element('strong', { text: t('diff.optionChangeTitle') }),
+                        proseElement('p', t('diff.optionChangeDescription', {
+                            before: beforeOption,
+                            after: afterOption,
+                        })),
+                    );
+                    body.appendChild(optionChange);
+                }
                 const hasContentChange = (
                     change.status === 'added'
                     || change.status === 'removed'

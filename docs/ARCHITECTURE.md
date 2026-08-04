@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.15.8의 직접 체험형 coachmark hands-on 온보딩과 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.0의 도움말·격리 연습실과 직접 체험형 coachmark hands-on 온보딩, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -9,6 +9,16 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
+
+### 도움말·연습실 경계
+
+`src/help-center.js`는 사용자 화면별 기능 문서와 두 연습실의 순수 상태 전이를 정의하고 `src/help-fixture.js`는 출력 언어 비교 정책과 AI 의미 검사의 결정적 더미 사례를 제공합니다. 상단 기존 안내 control은 `현재 화면`·`전체 기능`·`연습실`을 가진 하나의 modal dialog를 열며, 각 화면 제목의 별도 책 아이콘은 같은 registry의 상세 문서로 이동합니다. 짧은 `?` tooltip은 기억을 돕는 비대화형 설명으로 유지합니다.
+
+비교 정책 연습은 이름 matcher·그룹 mode·적용 전후를 메모리의 `helpLabSession`에서만 바꿉니다. AI 의미 검사 연습은 선택·미리보기·동의·실행·완료 상태를 고정 응답과 짧은 UI timer로 재현하지만 `SemanticInspector`, Connection Manager, `fetch`, snapshot store, 실제 비교 정책 저장 함수를 호출하지 않습니다. dialog를 닫거나 다른 문서·연습으로 이동하면 timer를 취소하고 session을 버립니다. 최근 읽은 문서 ID만 별도 bounded localStorage key에 최대 3개 저장합니다.
+
+도움말 dialog가 열리면 제품의 header·workspace·bottom navigation을 `inert`·`aria-hidden` 처리하고 dialog 안에서 focus를 순환합니다. Escape와 닫기는 timer와 격리 session을 정리하고 원래 focus를 복원합니다. 모바일은 dialog 전체 화면을 사용하며 고정 header 아래 `.st-devtools-help-body` 하나만 scroll owner입니다.
+
+변경 비교는 렌더 시 저장된 비교 정책을 두 snapshot source에 다시 주석화합니다. 같은 source identity가 유지된 상태에서 내용·토큰·귀속·메타데이터 또는 alternative group·option 분류가 바뀌면 `changed`, 동일한 `alternative` group에서 기준과 비교 각각 활성 옵션이 정확히 하나이고 option도 서로 다르면 removed+added 한 쌍을 `replaced`로 결합합니다. 정책 누락, 동일 option, 다대다나 추가 활성 옵션처럼 모호한 경우에는 결합하지 않습니다.
 
 ### hands-on 온보딩의 view-session 격리 경계
 

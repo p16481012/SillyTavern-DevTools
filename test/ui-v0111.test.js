@@ -401,7 +401,9 @@ test('header actions and capture status expose explicit accessible names', async
             new RegExp(`${icon}\\.setAttribute\\('aria-hidden', 'true'\\)`, 'u'),
         );
     }
-    assert.doesNotMatch(build, /action\.help|openHelp|st-devtools-help-overlay/u);
+    assert.match(build, /onboarding\.setAttribute\('aria-label', t\('help\.center\.open'\)\)/u);
+    assert.match(build, /onboardingIcon\.setAttribute\('aria-hidden', 'true'\)/u);
+    assert.match(build, /this\.openHelpCenter\(\{ view: 'current' \}\)/u);
     assert.match(build, /tabList\.setAttribute\('aria-label',\s*t\('nav\.label'\)\)/u);
     assert.doesNotMatch(build, /nav\.secondaryLabel/u);
     assert.match(
@@ -483,7 +485,7 @@ test('rule results separate AI mode and settings from local supporting sections'
     const refreshSettings = sourceBlock(
         ui,
         '\n    refreshRulesSettingsPanel() {',
-        '\n    openRulesSettings() {',
+        '\n    openRulesSettings({ returnFocus = null } = {}) {',
     );
     const screenHeader = sourceBlock(
         ui,
