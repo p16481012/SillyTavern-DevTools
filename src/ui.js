@@ -3782,8 +3782,13 @@ export class DevToolsWindow {
         return button;
     }
 
-    renderHelpTopicList(topics, { emptyText = t('help.center.noResults') } = {}) {
-        const list = element('div', { className: 'st-devtools-help-list' });
+    renderHelpTopicList(topics, {
+        emptyText = t('help.center.noResults'),
+        compact = false,
+    } = {}) {
+        const list = element('div', {
+            className: `st-devtools-help-list${compact ? ' is-compact' : ''}`,
+        });
         if (!topics.length) {
             list.appendChild(proseElement('p', emptyText, {
                 className: 'st-devtools-help-empty',
@@ -4044,15 +4049,27 @@ export class DevToolsWindow {
                 return;
             }
             const fragment = document.createDocumentFragment();
+            let openedCategory = false;
             for (const category of HELP_CATEGORIES) {
                 const categoryTopics = topics.filter(({ category: id }) => id === category.id);
                 if (!categoryTopics.length) continue;
-                const group = element('section', {
-                    className: 'st-devtools-help-section st-devtools-help-doc-category',
+                const group = element('details', {
+                    className: 'st-devtools-help-doc-category',
                 });
+                if (!openedCategory) {
+                    group.open = true;
+                    openedCategory = true;
+                }
+                const summary = element('summary', {
+                    className: 'st-devtools-help-doc-category-summary',
+                });
+                summary.append(
+                    element('strong', { text: category.label }),
+                    element('span', { text: `${categoryTopics.length}개` }),
+                );
                 group.append(
-                    element('h4', { text: category.label }),
-                    this.renderHelpTopicList(categoryTopics),
+                    summary,
+                    this.renderHelpTopicList(categoryTopics, { compact: true }),
                 );
                 fragment.appendChild(group);
             }
@@ -4116,11 +4133,15 @@ export class DevToolsWindow {
                 className: 'st-devtools-help-topic-section-copy',
             });
             copy.append(
+                element('span', {
+                    className: 'st-devtools-help-topic-section-number',
+                    text: String(index + 1).padStart(2, '0'),
+                }),
                 element('h4', { text: title }),
                 proseElement('p', body),
             );
             if (visualFragments[index]) {
-                section.append(visualFragments[index], copy);
+                section.append(copy, visualFragments[index]);
             } else {
                 section.appendChild(copy);
             }
@@ -4139,10 +4160,6 @@ export class DevToolsWindow {
             'aria-label',
             `${visual.ariaLabel} (${sectionIndex + 1})`,
         );
-        const caption = element('figcaption');
-        caption.append(
-            element('strong', { text: '실제 화면의 해당 부분' }),
-        );
         const preview = element('div', {
             className: 'st-devtools-help-visual-preview st-devtools-help-product-excerpt',
         });
@@ -4151,7 +4168,7 @@ export class DevToolsWindow {
         preview.dataset.helpSource = 'product-renderer';
         preview.dataset.helpFragment = String(sectionIndex);
         preview.appendChild(productFragment);
-        figure.append(caption, preview);
+        figure.appendChild(preview);
         return figure;
     }
 
@@ -5716,6 +5733,7 @@ export class DevToolsWindow {
         }
         this.onboardingRevealSettleDeadline = null;
         this.onboardingDisclosureScrollPosition = null;
+        this.setOnboardingDisclosureRevealing?.(false);
         this.cancelOnboardingPreposition?.();
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
@@ -6143,6 +6161,9 @@ export class DevToolsWindow {
                 (stepChanged || stageChanged)
                 && !disclosureCompleted,
             );
+            if ((stepChanged || stageChanged) && !disclosureCompleted) {
+                this.setOnboardingDisclosureRevealing(false);
+            }
             this.synchronizeOnboardingPrepositionState({
                 shouldPreposition,
                 contextChanged: stepChanged || stageChanged,
@@ -6803,6 +6824,11 @@ export class DevToolsWindow {
                     top: Number(this.content.scrollTop || 0),
                     left: Number(this.content.scrollLeft || 0),
                 };
+                this.setOnboardingDisclosureRevealing(true);
+                // Native <details> toggle events normally replace this deadline
+                // after the debrief target has been measured. Keep a fallback so
+                // an interrupted toggle can never leave transition suppression on.
+                this.scheduleOnboardingRevealSettle(360);
             }
             return;
         }
@@ -6989,6 +7015,13 @@ export class DevToolsWindow {
         );
     }
 
+    setOnboardingDisclosureRevealing(active) {
+        this.onboardingGuide?.classList.toggle(
+            'is-disclosure-revealing',
+            Boolean(active),
+        );
+    }
+
     synchronizeOnboardingPrepositionState({
         shouldPreposition = false,
         contextChanged = false,
@@ -7025,15 +7058,21 @@ export class DevToolsWindow {
         if (!viewport || !Number.isFinite(Number(top))) return false;
         const nextTop = Math.max(0, Number(top));
         const nextLeft = Number.isFinite(Number(left)) ? Number(left) : 0;
-        if (typeof viewport.scrollTo === 'function') {
-            viewport.scrollTo({
-                top: nextTop,
-                left: nextLeft,
-                behavior: 'auto',
-            });
-        } else {
-            viewport.scrollTop = nextTop;
-            viewport.scrollLeft = nextLeft;
+        const moved = (
+            Math.abs(Number(viewport.scrollTop || 0) - nextTop) > 0.5
+            || Math.abs(Number(viewport.scrollLeft || 0) - nextLeft) > 0.5
+        );
+        if (moved) {
+            if (typeof viewport.scrollTo === 'function') {
+                viewport.scrollTo({
+                    top: nextTop,
+                    left: nextLeft,
+                    behavior: 'auto',
+                });
+            } else {
+                viewport.scrollTop = nextTop;
+                viewport.scrollLeft = nextLeft;
+            }
         }
         this.positionOnboardingGuide();
         return true;
@@ -7365,7 +7404,10 @@ export class DevToolsWindow {
 
     scheduleOnboardingRevealSettle(delay = 120) {
         const target = this.onboardingTarget;
-        if (!target || !this.tutorialIsActive()) return false;
+        if (!target || !this.tutorialIsActive()) {
+            this.setOnboardingDisclosureRevealing(false);
+            return false;
+        }
         const now = Date.now();
         const deadline = Math.max(
             Number(this.onboardingRevealSettleDeadline) || 0,
@@ -7378,6 +7420,7 @@ export class DevToolsWindow {
         this.onboardingRevealSettleTimer = setTimeout(() => {
             this.onboardingRevealSettleTimer = null;
             this.onboardingRevealSettleDeadline = null;
+            this.setOnboardingDisclosureRevealing(false);
             if (
                 !this.tutorialIsActive()
                 || this.onboardingStepStage !== 'debrief'

@@ -1,4 +1,11 @@
-# v0.16.9 기술 구현 현황
+# v0.16.10 기술 구현 현황
+
+## v0.16.10 토글 암막 안정화·도움말 정보 구조
+
+- spotlight의 전체 화면 shadow에는 opacity·box-shadow·filter 애니메이션을 적용하지 않습니다. practice에서 debrief로 바뀔 때 암막은 한 프레임에서 교체되며 하단부터 번지는 중간 상태를 만들지 않습니다.
+- `is-disclosure-revealing` 상태에서는 spotlight 자체의 크기 transition을 중지합니다. details의 240ms 높이 변화와 `ResizeObserver`가 계산한 실제 rect를 그대로 사용하고 settle 시 상태를 제거합니다.
+- 고급 기능 가이드는 40px 아이콘, 독립된 설명·소요 시간, 전체 너비 44px 시작 버튼을 갖는 카드 목록입니다.
+- 기능 설명서 기본 화면은 `details` 카테고리와 얇은 내부 문서 목록을 사용합니다. 상세 문서는 절 번호와 설명을 실제 제품 renderer 조각보다 먼저 배치하고 조각의 임의 13rem 절단을 제거합니다.
 
 ## v0.16.9 코치마크 preposition·viewport 고정
 

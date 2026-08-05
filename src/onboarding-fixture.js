@@ -293,7 +293,7 @@ function buildSnapshot(spec, index) {
 
     return {
         schemaVersion: FIXTURE_SCHEMA_VERSION,
-        extensionVersion: '0.16.9',
+        extensionVersion: '0.16.10',
         id: `tutorial:snapshot:${snapshotNumber}`,
         tutorialLabel: `연습 요청 ${snapshotNumber}`,
         timestamp,

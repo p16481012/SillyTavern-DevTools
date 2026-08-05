@@ -157,7 +157,8 @@ test('detailed help articles reuse inert product renderers with onboarding fixtu
     assert.match(article, /helpTopicVisualById\(topic\.id\)/u);
     assert.match(article, /this\.renderHelpTopicFragments\(visual, topic\.sections\.length\)/u);
     assert.match(article, /for \(const \[index, \[title, body\]\] of topic\.sections\.entries\(\)\)/u);
-    assert.match(article, /section\.append\(visualFragments\[index\], copy\)/u);
+    assert.match(article, /section\.append\(copy, visualFragments\[index\]\)/u);
+    assert.match(article, /st-devtools-help-topic-section-number/u);
     assert.match(article, /section\.dataset\.helpSection = String\(index\)/u);
     assert.match(article, /article\.appendChild\(sections\)/u);
     assert.match(visual, /className: `st-devtools-help-visual is-\$\{visual\.type\}/u);
@@ -168,6 +169,7 @@ test('detailed help articles reuse inert product renderers with onboarding fixtu
     assert.match(visual, /preview\.setAttribute\('inert', ''\)/u);
     assert.match(visual, /preview\.dataset\.helpSource = 'product-renderer'/u);
     assert.match(visual, /preview\.dataset\.helpFragment = String\(sectionIndex\)/u);
+    assert.doesNotMatch(visual, /실제 화면의 해당 부분/u);
     assert.match(visual, /this\.renderHelpProductExcerpt\(visual\.id\)/u);
     assert.match(visual, /this\.helpProductFragmentNodes\(productSurface, visual\.id\)/u);
     assert.match(visual, /groups\[index\] \?\? groups\.at\(-1\)/u);
@@ -215,6 +217,9 @@ test('empty state and help indexes keep compact, mobile-safe vertical rhythm', a
     assert.match(ui, /st-devtools-help-full-start/u);
     assert.match(ui, /st-devtools-help-doc-results/u);
     assert.match(ui, /st-devtools-help-doc-category/u);
+    assert.match(ui, /element\('details', \{[\s\S]*?st-devtools-help-doc-category/u);
+    assert.match(ui, /st-devtools-help-doc-category-summary/u);
+    assert.match(ui, /compact: true/u);
     assert.match(
         style,
         /\.st-devtools-empty \{[\s\S]*?display: grid;[\s\S]*?gap: 0\.75rem;/u,
@@ -237,15 +242,27 @@ test('empty state and help indexes keep compact, mobile-safe vertical rhythm', a
     );
     assert.match(
         style,
+        /\.st-devtools-help-advanced-index[\s\S]*?\.st-devtools-help-accordion-list \{[\s\S]*?gap: 0\.75rem;/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-help-section-row\.is-advanced-guide \{[\s\S]*?padding: 0\.9rem;/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-help-list\.is-compact[\s\S]*?gap: 0;[\s\S]*?padding: 0\.18rem 0\.75rem;/u,
+    );
+    assert.match(
+        style,
         /@container \(min-width: 680px\) \{[\s\S]*?\.st-devtools-help-list \{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
     );
     assert.match(
         style,
-        /\.st-devtools-help-topic-section \{[\s\S]*?grid-template-columns: minmax\(14rem, 0\.9fr\) minmax\(0, 1\.1fr\);/u,
+        /\.st-devtools-help-topic-section \{[\s\S]*?grid-template-columns: minmax\(14rem, 0\.8fr\) minmax\(0, 1\.2fr\);/u,
     );
     assert.match(
         style,
-        /\.st-devtools-help-product-surface\[data-help-part\] \{[\s\S]*?max-height: 13rem;/u,
+        /\.st-devtools-help-product-surface\[data-help-part\] \{[\s\S]*?max-height: none;[\s\S]*?overflow: visible;/u,
     );
 });
 
@@ -672,6 +689,16 @@ test('coachmark stages preposition before reveal and keep disclosure expansion s
         '\n    scheduleOnboardingRevealSettle(',
         '\n    onboardingAutoScrollAtDestination(',
     );
+    const stableCoachmark = sourceBlock(
+        style,
+        '/* v0.16.10 — stable coachmark shading and calmer help information hierarchy. */',
+        '.st-devtools-advanced-guide-card',
+    );
+    const stableSpotlight = sourceBlock(
+        stableCoachmark,
+        '.st-devtools-onboarding-spotlight {',
+        '.st-devtools-onboarding-guide.is-prepositioning',
+    );
 
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingGuidePanel, modalStage\)/u);
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingPracticeDock, !modalStage\)/u);
@@ -718,6 +745,19 @@ test('coachmark stages preposition before reveal and keep disclosure expansion s
     assert.match(preposition, /behavior: 'auto'/u);
     assert.doesNotMatch(preposition, /behavior: 'smooth'/u);
     assert.doesNotMatch(settle, /refocus:\s*true/u);
+    assert.match(settle, /setOnboardingDisclosureRevealing\(false\)/u);
+    assert.doesNotMatch(
+        stableSpotlight,
+        /transition:[^;]*(?:opacity|box-shadow)/u,
+    );
+    assert.match(
+        stableCoachmark,
+        /\.is-disclosure-revealing[\s\S]*?\.st-devtools-onboarding-spotlight \{[\s\S]*?transition: none;[\s\S]*?animation: none;/u,
+    );
+    assert.match(
+        stableCoachmark,
+        /\[data-stage='debrief'\][\s\S]*?\.st-devtools-onboarding-spotlight \{[\s\S]*?filter: none;[\s\S]*?animation: none;/u,
+    );
     assert.match(surface, /surface\.hidden = false/u);
     assert.match(surface, /classList\.toggle\('is-active', active\)/u);
     assert.match(surface, /toggleAttribute\('inert', !active\)/u);
@@ -827,6 +867,7 @@ test('completed onboarding actions remain available to the deferred positioning 
         setOnboardingPrepositioning(active) {
             this.onboardingGuide.classList.toggle('is-prepositioning', active);
         },
+        setOnboardingDisclosureRevealing() {},
         synchronizeOnboardingPrepositionState(options) {
             return DevToolsWindow.prototype.synchronizeOnboardingPrepositionState.call(
                 this,

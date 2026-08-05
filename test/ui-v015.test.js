@@ -412,6 +412,12 @@ test('a disclosure click captures scroll position before the native toggle', () 
         content: { scrollTop: 398, scrollLeft: 0 },
         tutorialIsActive: () => true,
         currentOnboardingStep: () => ({ interaction }),
+        setOnboardingDisclosureRevealing(active) {
+            this.disclosureRevealing = active;
+        },
+        scheduleOnboardingRevealSettle(delay) {
+            this.disclosureRevealSettleDelay = delay;
+        },
     };
     const target = {
         matches: () => false,
@@ -429,6 +435,8 @@ test('a disclosure click captures scroll position before the native toggle', () 
         top: 398,
         left: 0,
     });
+    assert.equal(state.disclosureRevealing, true);
+    assert.equal(state.disclosureRevealSettleDelay, 360);
 });
 
 test('switch completion waits until the control event has committed its new state', async () => {
@@ -671,6 +679,9 @@ test('an expanded action target settles its spotlight without moving the viewpor
         onboardingRevealSettleDeadline: null,
         onboardingStepStage: 'debrief',
         tutorialIsActive: () => true,
+        setOnboardingDisclosureRevealing(active) {
+            this.disclosureRevealing = active;
+        },
         scheduleOnboardingGuidePosition(options) {
             positionCalls.push(options);
         },
@@ -684,6 +695,7 @@ test('an expanded action target settles its spotlight without moving the viewpor
     assert.deepEqual(positionCalls, [undefined]);
     assert.equal(state.onboardingRevealSettleTimer, null);
     assert.equal(state.onboardingRevealSettleDeadline, null);
+    assert.equal(state.disclosureRevealing, false);
 });
 
 test('disclosure completion restores the exact pre-expansion viewport position', () => {
@@ -715,6 +727,31 @@ test('disclosure completion restores the exact pre-expansion viewport position',
         ['scroll', { top: 398, left: 0, behavior: 'auto' }],
         ['position', 398],
     ]);
+});
+
+test('disclosure completion skips a redundant scroll when the viewport is already fixed', () => {
+    const calls = [];
+    const state = {
+        content: {
+            scrollTop: 398,
+            scrollLeft: 0,
+            scrollTo(options) {
+                calls.push(['scroll', options]);
+            },
+        },
+        positionOnboardingGuide() {
+            calls.push(['position']);
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.restoreOnboardingScrollPosition.call(state, {
+            top: 398,
+            left: 0,
+        }),
+        true,
+    );
+    assert.deepEqual(calls, [['position']]);
 });
 
 test('an explicit refocus follows one position-focus-position path', async () => {

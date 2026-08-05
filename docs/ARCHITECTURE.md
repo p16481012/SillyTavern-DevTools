@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.9의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.10의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -16,7 +16,7 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 `HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 topic registry입니다. `renderHelpTopicFragments()`는 `createOnboardingSession()`의 결정적 fixture를 사용하는 분리 preview facade에서 실제 explorer·timeline·diff·rules·search·settings renderer를 한 번 렌더하고, `helpProductFragmentNodes()`의 topic별 route로 각 설명 section에 대응하는 fragment를 1:1로 선택합니다. 선택한 노드는 다시 `cloneNode(true)`로 복제하며 ID·label·ARIA 참조·tour 표식과 clone 안에서 실행할 수 없는 `.st-devtools-help-tooltip`을 제거합니다. 각 fragment wrapper에는 `inert`·`aria-hidden`·`pointer-events: none`을 적용하므로 live UI event와 focus 경계가 섞이지 않습니다. 실제 snapshot store·저장 정책·Connection Manager·provider·network는 호출하지 않으며 AI·provider 평가는 고정 fixture와 no-op harness로만 표현합니다.
 
-기능 설명서 index는 category와 문서 row의 불필요한 세로 간격을 줄이고 넓은 도움말 panel에서는 여러 항목을 병렬 배치합니다. topic article은 하나의 전체 excerpt 뒤에 모든 설명을 모으지 않고 `실제 renderer fragment → 해당 section 제목·설명`을 같은 구획에 반복합니다. 모바일은 한 열, 넓은 panel은 fragment 0.9fr·설명 1.1fr의 병렬 배치를 사용하고 fragment 높이와 가로 overflow를 제한합니다. 고급 기능 가이드도 제목·설명·단계 수·예상 시간을 짧은 목록 행에 모으고 실제 연습 화면의 field·note·result 간격을 압축합니다. 정보 밀도 조정은 fixture 격리나 `inert` clone 경계를 바꾸지 않습니다.
+기능 설명서 index는 기본 상태에서 category를 접을 수 있는 목차로 표시하고 첫 category만 엽니다. 검색 결과는 평면 목록을 유지합니다. topic article은 각 구획을 `번호 → 제목·설명 → 실제 renderer fragment` 순서로 반복하고 임의 높이에서 fragment를 자르지 않습니다. 모바일은 한 열, 넓은 panel은 설명 0.8fr·fragment 1.2fr의 병렬 배치를 사용합니다. 고급 기능 가이드는 제목·설명·단계 수·예상 시간과 전체 너비 시작 버튼을 여유 있는 카드에 분리합니다. 정보 구조 조정은 fixture 격리나 `inert` clone 경계를 바꾸지 않습니다.
 
 짧은 `?` tooltip은 기능을 다시 떠올릴 한두 문장과 텍스트형 `자세히 보기`만 포함합니다. `자세히 보기`는 별도의 창이나 중간 목록을 거치지 않고 같은 도움말 dialog의 해당 topic ID로 deep link합니다. 도움말을 닫으면 deep link를 연 실제 control로 focus를 복원합니다.
 
