@@ -15,10 +15,10 @@ import { SemanticInspector } from './src/semantic-inspector.js';
 import { SemanticProviderAdapter } from './src/semantic-provider-adapter.js';
 import { SemanticProviderEvaluationHarness } from './src/semantic-provider-evaluation-harness.js';
 import { SnapshotStore } from './src/storage.js';
-import { DevToolsWindow } from './src/ui.js?v=0.16.8';
+import { DevToolsWindow } from './src/ui.js?v=0.16.9';
 
 const EXTENSION_ID = 'st-devtools';
-const VERSION = '0.16.8';
+const VERSION = '0.16.9';
 const REQUIRED_EVENTS = [
     'CHAT_COMPLETION_PROMPT_READY',
     'GENERATE_AFTER_COMBINE_PROMPTS',

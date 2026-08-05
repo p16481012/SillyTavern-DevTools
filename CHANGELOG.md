@@ -1,5 +1,15 @@
 # 변경 기록
 
+## 0.16.9 - 2026-08-05
+
+### 코치마크 선배치와 펼침 화면 고정
+
+- 새 단계의 target과 spotlight를 첫 paint 전에 안전 영역의 상단~중앙으로 즉시 선배치하고, 최종 좌표가 확정된 뒤 강조 표시
+- 자동 단계 전환에서 지연 smooth scroll을 제거해 화면 하단의 강조가 먼저 보인 뒤 viewport가 따라오는 현상 수정
+- disclosure를 펼치기 직전 실제 탭 시점의 viewport를 보존하고 지연 refocus를 제거해, 현재 scroll 위치를 유지한 채 기존 240ms 본문 전개와 spotlight 높이만 갱신
+- 중복 render refresh가 선배치보다 먼저 spotlight를 노출하지 않도록 preposition 상태에서는 자동 geometry 예약을 보류
+- upper-center anchor, 선배치 호출 순서, 펼침 후 무스크롤 동작을 회귀 테스트로 고정
+
 ## 0.16.8 - 2026-08-05
 
 ### 실제 확장 캐시와 모바일 자동 스크롤 완료 경합 수정

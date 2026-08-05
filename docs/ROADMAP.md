@@ -1,10 +1,18 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.16.8 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.16.9 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.16.8은 실제 확장 진입점의 UI 모듈 URL을 버전별로 분리해 이전 튜토리얼 코드가 캐시에서 재사용되지 않게 합니다. 모바일 smooth scroll은 같은 단계·대상에 묶인 작업으로 추적하고 완료 뒤 안전 영역을 재검증해, 프롬프트 13단계 부분 투어와 disclosure 펼침에서도 사용자의 수동 스크롤 없이 대상이 나타나도록 보정합니다.
+v0.16.9는 자동 단계 전환을 `강조 숨김 → target 선배치 → 최종 geometry 측정 → 강조 표시` 순서로 바꿉니다. disclosure는 viewport를 고정한 채 본문과 spotlight만 확장하며, 명시적 대상 찾기를 제외한 늦은 smooth scroll은 실행하지 않습니다.
+
+## v0.16.9 — 코치마크 선배치·펼침 화면 고정 · 완료
+
+- target 중심을 안전 영역 상단~중앙에 첫 paint 전에 맞추는 upper-center anchor
+- render refresh와 전환 refresh를 preposition 상태로 합쳐 잘못된 첫 spotlight 노출 방지
+- 최종 위치에서 spotlight·target outline을 짧게 공개하고 불필요한 좌표 이동 animation 제거
+- disclosure open 뒤 delayed refocus를 제거해 scroll 위치를 유지하며 spotlight 크기만 확장
+- 다음 후보: 실제 호스트 테마별 상단 고정 요소가 안전 영역을 추가로 차지하는 사례 수집
 
 ## v0.16.8 — 실제 확장 캐시·모바일 자동 스크롤 수명주기 · 완료
 

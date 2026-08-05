@@ -1,4 +1,12 @@
-# v0.16.8 기술 구현 현황
+# v0.16.9 기술 구현 현황
+
+## v0.16.9 코치마크 preposition·viewport 고정
+
+- `updateOnboardingView()`는 단계·stage 전환을 감지하면 target outline·spotlight·callout을 staging 상태로 숨기고, render가 만든 최종 target을 연결한 뒤 `prepositionOnboardingTarget()`을 실행합니다.
+- `focusOnboardingTarget({ anchor: 'upper-center', behavior: 'auto' })`는 target 중심을 callout을 제외한 안전 영역의 약 36% 지점에 첫 paint 전에 맞춥니다. 자동 전환은 smooth-scroll 작업을 만들지 않습니다.
+- preposition 중 `refreshOnboardingTarget()`의 독립 geometry 예약을 보류해 render microtask와 전환 microtask가 서로 다른 위치의 spotlight를 먼저 그리지 않게 합니다.
+- disclosure open 완료는 예외적으로 preposition하지 않습니다. capture-phase `click`에서 native toggle보다 먼저 scroll 위치를 보존하고 debrief 전환 뒤 같은 좌표를 복원합니다. 이후 `ResizeObserver`와 details의 240ms block-size transition이 spotlight 크기만 갱신하며, settle timer는 최종 위치 측정만 수행합니다.
+- 명시적인 대상 찾기와 viewport resize용 refocus 경로는 유지하되 자동 단계 전환에서는 사용하지 않습니다.
 
 ## v0.16.8 실제 확장 캐시·모바일 자동 스크롤 수명주기
 

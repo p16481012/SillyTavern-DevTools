@@ -9648,6 +9648,50 @@ i {
     }
 }
 
+/* v0.16.9 — place a coachmark before revealing it and keep disclosures still. */
+.st-devtools-onboarding-spotlight {
+    transform: scale(1);
+    transform-origin: center;
+    opacity: 1;
+    transition:
+        width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        height 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        opacity 140ms ease,
+        transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        box-shadow 180ms ease,
+        border-color 180ms ease;
+}
+
+.st-devtools-onboarding-guide.is-prepositioning
+.st-devtools-onboarding-spotlight {
+    transform: scale(0.96);
+    opacity: 0;
+}
+
+.st-devtools-onboarding-guide.is-prepositioning
+.st-devtools-onboarding-blocker {
+    background: rgb(3 7 18 / 80%);
+}
+
+.st-devtools-onboarding-guide.is-prepositioning
+:is(.st-devtools-onboarding-guide-body, .st-devtools-onboarding-practice-dock) {
+    opacity: 0 !important;
+    visibility: hidden !important;
+}
+
+.st-devtools-window[data-onboarding-stage='practice']
+.st-devtools-onboarding-target {
+    transition:
+        outline-color 140ms ease,
+        box-shadow 180ms ease;
+}
+
+.st-devtools-window.is-onboarding-prepositioning
+.st-devtools-onboarding-target {
+    outline-color: transparent !important;
+    box-shadow: none !important;
+}
+
 .st-devtools-advanced-guide-card
 .st-devtools-source-change.status-replaced > p {
     margin: 0;

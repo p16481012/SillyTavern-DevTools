@@ -397,6 +397,40 @@ test('interaction validation enforces value, open, and checked contracts', () =>
     }
 });
 
+test('a disclosure click captures scroll position before the native toggle', () => {
+    const disclosure = { open: false };
+    const interaction = {
+        event: 'toggle',
+        selector: '.configured-group',
+        state: 'open',
+    };
+    const state = {
+        onboardingStepStage: 'practice',
+        onboardingApplyingSkippedState: false,
+        onboardingGuide: { contains: () => false },
+        onboardingDisclosureScrollPosition: null,
+        content: { scrollTop: 398, scrollLeft: 0 },
+        tutorialIsActive: () => true,
+        currentOnboardingStep: () => ({ interaction }),
+    };
+    const target = {
+        matches: () => false,
+        closest: (selector) => selector === interaction.selector
+            ? disclosure
+            : null,
+    };
+
+    DevToolsWindow.prototype.handleOnboardingInteraction.call(state, {
+        type: 'click',
+        target,
+    });
+
+    assert.deepEqual(state.onboardingDisclosureScrollPosition, {
+        top: 398,
+        left: 0,
+    });
+});
+
 test('switch completion waits until the control event has committed its new state', async () => {
     const step = onboardingStep('explorer-included-filter');
     const toggle = (checked) => ({
@@ -628,9 +662,8 @@ test('an intentional navigation action highlights its declared result target', (
     );
 });
 
-test('an expanded action target gets a debounced smooth reveal after layout settles', async () => {
+test('an expanded action target settles its spotlight without moving the viewport', async () => {
     const target = {};
-    const reveal = {};
     const positionCalls = [];
     const state = {
         onboardingTarget: target,
@@ -638,10 +671,6 @@ test('an expanded action target gets a debounced smooth reveal after layout sett
         onboardingRevealSettleDeadline: null,
         onboardingStepStage: 'debrief',
         tutorialIsActive: () => true,
-        onboardingRevealVisibilityTarget(candidate) {
-            assert.equal(candidate, target);
-            return reveal;
-        },
         scheduleOnboardingGuidePosition(options) {
             positionCalls.push(options);
         },
@@ -652,15 +681,43 @@ test('an expanded action target gets a debounced smooth reveal after layout sett
         true,
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(positionCalls, [{
-        refocus: true,
-        visibilityTarget: reveal,
-    }]);
+    assert.deepEqual(positionCalls, [undefined]);
     assert.equal(state.onboardingRevealSettleTimer, null);
     assert.equal(state.onboardingRevealSettleDeadline, null);
 });
 
-test('transition refocus follows one position-focus-position path', async () => {
+test('disclosure completion restores the exact pre-expansion viewport position', () => {
+    const calls = [];
+    const content = {
+        scrollTop: 358,
+        scrollLeft: 0,
+        scrollTo(options) {
+            calls.push(['scroll', options]);
+            this.scrollTop = options.top;
+            this.scrollLeft = options.left;
+        },
+    };
+    const state = {
+        content,
+        positionOnboardingGuide() {
+            calls.push(['position', content.scrollTop]);
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.restoreOnboardingScrollPosition.call(state, {
+            top: 398,
+            left: 0,
+        }),
+        true,
+    );
+    assert.deepEqual(calls, [
+        ['scroll', { top: 398, left: 0, behavior: 'auto' }],
+        ['position', 398],
+    ]);
+});
+
+test('an explicit refocus follows one position-focus-position path', async () => {
     const calls = [];
     const visibilityTarget = {};
     const state = {
@@ -694,6 +751,192 @@ test('transition refocus follows one position-focus-position path', async () => 
         }],
         'position',
     ]);
+});
+
+test('automatic practice entry anchors the target in the upper-center safe lane', () => {
+    const initialScrollTop = 40;
+    const targetDocumentTop = 630;
+    const content = {
+        scrollTop: initialScrollTop,
+        scrollLeft: 0,
+        contains: (candidate) => candidate === target,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 390,
+            bottom: 700,
+            width: 390,
+            height: 600,
+        }),
+        scrollTo(options) {
+            this.scrollTop = options.top;
+            this.scrollLeft = options.left;
+            this.lastScroll = options;
+        },
+    };
+    const target = {
+        getBoundingClientRect: () => {
+            const top = targetDocumentTop - content.scrollTop;
+            return {
+                left: 20,
+                top,
+                right: 370,
+                bottom: top + 60,
+                width: 350,
+                height: 60,
+            };
+        },
+    };
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'practice',
+        onboardingPracticeDock: null,
+        onboardingGuideBody: null,
+        content,
+        window: {
+            querySelector(selector) {
+                if (selector !== '.st-devtools-app-nav') return null;
+                return {
+                    hidden: false,
+                    getBoundingClientRect: () => ({
+                        left: 0,
+                        top: 650,
+                        right: 390,
+                        bottom: 730,
+                        width: 390,
+                        height: 80,
+                    }),
+                };
+            },
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            anchor: 'upper-center',
+            behavior: 'auto',
+            reserveCallout: false,
+        }),
+        true,
+    );
+    assert.equal(content.lastScroll.behavior, 'auto');
+    assert.equal(content.lastScroll.left, 0);
+    const finalRect = target.getBoundingClientRect();
+    const safeTop = 112;
+    const safeBottom = 638;
+    const centerRatio = (
+        (finalRect.top + finalRect.height / 2) - safeTop
+    ) / (safeBottom - safeTop);
+    assert.ok(Math.abs(centerRatio - 0.36) < 0.001);
+});
+
+test('practice prepositioning finishes before the spotlight is revealed', async () => {
+    const calls = [];
+    const classList = () => {
+        const values = new Set();
+        return {
+            add: (...names) => names.forEach((name) => values.add(name)),
+            remove: (...names) => names.forEach((name) => values.delete(name)),
+            toggle(name, force) {
+                if (force) values.add(name);
+                else values.delete(name);
+            },
+            contains: (name) => values.has(name),
+        };
+    };
+    const guideClasses = classList();
+    const windowClasses = classList();
+    const target = {};
+    const state = {
+        onboardingTarget: target,
+        onboardingGuide: { classList: guideClasses },
+        window: { classList: windowClasses },
+        onboardingGuidePositionFrame: null,
+        onboardingPrepositionFrame: null,
+        onboardingPrepositionSequence: 0,
+        onboardingStepStage: 'practice',
+        tutorialIsActive: () => true,
+        currentOnboardingStep: () => ({ id: 'explorer-configured-group' }),
+        finishOnboardingAutoScroll() {
+            calls.push('cancel-scroll');
+        },
+        setOnboardingPrepositioning(active) {
+            DevToolsWindow.prototype.setOnboardingPrepositioning.call(this, active);
+            calls.push(['staging', active]);
+        },
+        focusOnboardingTarget(options) {
+            calls.push([
+                'focus',
+                options.anchor,
+                options.behavior,
+                guideClasses.contains('is-prepositioning'),
+            ]);
+            return true;
+        },
+        positionOnboardingGuide() {
+            calls.push([
+                'position',
+                guideClasses.contains('is-prepositioning'),
+            ]);
+            return true;
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.prepositionOnboardingTarget.call(state),
+        true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(calls.slice(0, 4), [
+        'cancel-scroll',
+        ['staging', true],
+        ['focus', 'upper-center', 'auto', true],
+        ['position', true],
+    ]);
+    assert.equal(
+        calls.some((call) => Array.isArray(call) && call[2] === 'smooth'),
+        false,
+    );
+    assert.deepEqual(calls.at(-2), ['staging', false]);
+    assert.deepEqual(calls.at(-1), ['position', false]);
+    assert.equal(guideClasses.contains('is-prepositioning'), false);
+    assert.equal(windowClasses.contains('is-onboarding-prepositioning'), false);
+});
+
+test('a same-step rerender retains an in-flight preposition until its frames finish', () => {
+    const calls = [];
+    const state = {
+        onboardingGuide: {
+            classList: {
+                contains: (name) => name === 'is-prepositioning',
+            },
+        },
+        setOnboardingPrepositioning(active) {
+            calls.push(['set', active]);
+        },
+        cancelOnboardingPreposition() {
+            calls.push(['cancel']);
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.synchronizeOnboardingPrepositionState.call(
+            state,
+            { shouldPreposition: false, contextChanged: false },
+        ),
+        'retained',
+    );
+    assert.deepEqual(calls, []);
+
+    assert.equal(
+        DevToolsWindow.prototype.synchronizeOnboardingPrepositionState.call(
+            state,
+            { shouldPreposition: false, contextChanged: true },
+        ),
+        'cancelled',
+    );
+    assert.deepEqual(calls, [['cancel']]);
 });
 
 test('debrief pipeline rejects a thin adjacent lane and reveals the whole target', async () => {

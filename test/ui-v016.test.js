@@ -627,7 +627,7 @@ test('coachmark no-fit placement uses an opaque collision-safe callout', async (
     );
 });
 
-test('coachmark stages switch immediately, isolate inactive surfaces, and only animate revealed layout', async () => {
+test('coachmark stages preposition before reveal and keep disclosure expansion stationary', async () => {
     const [ui, style] = await Promise.all([
         readFile(UI_URL, 'utf8'),
         readFile(STYLE_URL, 'utf8'),
@@ -657,11 +657,26 @@ test('coachmark stages switch immediately, isolate inactive surfaces, and only a
         '\n    recordOnboardingAction(',
         '\n    handleOnboardingInteraction(',
     );
+    const preposition = sourceBlock(
+        ui,
+        '\n    prepositionOnboardingTarget() {',
+        '\n    onboardingSafeViewportBounds(',
+    );
+    const syncPreposition = sourceBlock(
+        ui,
+        '\n    synchronizeOnboardingPrepositionState(',
+        '\n    cancelOnboardingPreposition(',
+    );
+    const settle = sourceBlock(
+        ui,
+        '\n    scheduleOnboardingRevealSettle(',
+        '\n    onboardingAutoScrollAtDestination(',
+    );
 
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingGuidePanel, modalStage\)/u);
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingPracticeDock, !modalStage\)/u);
     assert.match(update, /refreshOnboardingTarget\(\{ preserveGuideGeometry \}\)/u);
-    assert.match(update, /const settlingReveal = Boolean/u);
+    assert.match(update, /const settlingReveal = disclosureCompleted/u);
     assert.match(
         update,
         /const targetAvailable = Boolean\(this\.onboardingTarget\)/u,
@@ -670,13 +685,39 @@ test('coachmark stages switch immediately, isolate inactive surfaces, and only a
     assert.match(update, /actionCompleted = Boolean\([\s\S]*?!stepChanged[\s\S]*?stageChanged/u);
     assert.match(
         update,
-        /scheduleOnboardingGuidePosition\(\{[\s\S]*?refocus: actionCompleted \|\| stepChanged \|\| stageChanged/u,
+        /shouldPreposition = Boolean\([\s\S]*?\(stepChanged \|\| stageChanged\)[\s\S]*?!disclosureCompleted/u,
+    );
+    assert.match(update, /synchronizeOnboardingPrepositionState\(\{/u);
+    assert.match(
+        syncPreposition,
+        /if \(shouldPreposition\) \{[\s\S]*?setOnboardingPrepositioning\(true\)/u,
+    );
+    assert.match(
+        syncPreposition,
+        /if \(contextChanged \|\| !prepositionInProgress\)[\s\S]*?cancelOnboardingPreposition/u,
+    );
+    assert.match(update, /if \(shouldPreposition && targetAvailable\) \{[\s\S]*?prepositionOnboardingTarget\(\)/u);
+    assert.match(
+        update,
+        /else if \(shouldPreposition\) \{[\s\S]*?cancelOnboardingPreposition\(\)[\s\S]*?clearOnboardingTarget\(\)[\s\S]*?scheduleOnboardingGuidePosition\(\)/u,
+    );
+    assert.match(
+        update,
+        /if \(disclosureCompleted && this\.content\)[\s\S]*?top: Number\(this\.content\.scrollTop/u,
+    );
+    assert.match(
+        update,
+        /if \(disclosureScrollPosition\) \{[\s\S]*?restoreOnboardingScrollPosition\(disclosureScrollPosition\)/u,
     );
     assert.match(
         update,
         /if \(settlingReveal\)[\s\S]*?scheduleOnboardingRevealSettle\(300\)/u,
     );
     assert.doesNotMatch(update, /const targetAvailable[\s\S]*?focusOnboardingTarget/u);
+    assert.match(preposition, /anchor: 'upper-center'/u);
+    assert.match(preposition, /behavior: 'auto'/u);
+    assert.doesNotMatch(preposition, /behavior: 'smooth'/u);
+    assert.doesNotMatch(settle, /refocus:\s*true/u);
     assert.match(surface, /surface\.hidden = false/u);
     assert.match(surface, /classList\.toggle\('is-active', active\)/u);
     assert.match(surface, /toggleAttribute\('inert', !active\)/u);
@@ -699,6 +740,7 @@ test('coachmark stages switch immediately, isolate inactive surfaces, and only a
     assert.doesNotMatch(style, /st-devtools-onboarding-copy-entering/u);
     assert.match(style, /@supports \(interpolate-size: allow-keywords\)/u);
     assert.match(style, /details::details-content \{[\s\S]*?transition: block-size 240ms/u);
+    assert.match(style, /\.st-devtools-onboarding-guide\.is-prepositioning[\s\S]*?\.st-devtools-onboarding-spotlight \{[\s\S]*?opacity:\s*0/u);
     assert.match(style, /\.st-devtools-onboarding-practice-dock\.has-panel-action \{[\s\S]*?width: min\(560px/u);
     assert.match(
         style,
@@ -715,6 +757,8 @@ test('completed onboarding actions remain available to the deferred positioning 
     assert.ok(step);
 
     const scheduledPositions = [];
+    const prepositioned = [];
+    const guideClasses = new Set();
     const state = {
         onboardingPhase: 'steps',
         onboardingSteps: [step],
@@ -726,6 +770,13 @@ test('completed onboarding actions remain available to the deferred positioning 
             dataset: {
                 step: step.id,
                 stage: 'practice',
+            },
+            classList: {
+                toggle(name, force) {
+                    if (force) guideClasses.add(name);
+                    else guideClasses.delete(name);
+                },
+                contains: (name) => guideClasses.has(name),
             },
         },
         onboardingSession: {
@@ -760,7 +811,10 @@ test('completed onboarding actions remain available to the deferred positioning 
         },
         window: {
             dataset: {},
-            classList: { remove() {} },
+            classList: {
+                remove() {},
+                toggle() {},
+            },
         },
         onboardingIsOpen: () => true,
         onboardingGroupLabel: () => '프롬프트',
@@ -770,8 +824,21 @@ test('completed onboarding actions remain available to the deferred positioning 
         setOnboardingSurfaceActive() {},
         replaceOnboardingGuideBody() {},
         renderOnboardingStep: () => ({}),
+        setOnboardingPrepositioning(active) {
+            this.onboardingGuide.classList.toggle('is-prepositioning', active);
+        },
+        synchronizeOnboardingPrepositionState(options) {
+            return DevToolsWindow.prototype.synchronizeOnboardingPrepositionState.call(
+                this,
+                options,
+            );
+        },
+        cancelOnboardingPreposition() {},
         refreshOnboardingTarget() {
             this.onboardingTarget = {};
+        },
+        prepositionOnboardingTarget() {
+            prepositioned.push(this.onboardingTarget);
         },
         scheduleOnboardingRevealSettle() {
             assert.fail('a click action must not use the toggle reveal-settle path');
@@ -802,7 +869,8 @@ test('completed onboarding actions remain available to the deferred positioning 
         }
     }
 
-    assert.deepEqual(scheduledPositions, [{ refocus: true }]);
+    assert.equal(prepositioned.length, 1);
+    assert.deepEqual(scheduledPositions, []);
 });
 
 test('advanced guide previews and results stay hidden until their step reveals them', async () => {
