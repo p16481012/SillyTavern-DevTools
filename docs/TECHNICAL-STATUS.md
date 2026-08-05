@@ -1,4 +1,12 @@
-# v0.16.7 기술 구현 현황
+# v0.16.8 기술 구현 현황
+
+## v0.16.8 실제 확장 캐시·모바일 자동 스크롤 수명주기
+
+- 실제 확장 진입점은 `./src/ui.js?v=0.16.8`을 import합니다. manifest 버전만 바뀌고 하위 모듈 URL이 같아 이전 UI 코드가 재사용되는 경로를 차단하며, `test/version.test.js`가 무버전 UI import의 재발을 막습니다.
+- 자동 스크롤은 시작 당시 target과 단계에 연결됩니다. 늦게 도착한 `scrollend`나 fallback timer는 현재 target이 달라졌으면 새 단계의 위치 계산을 끝내지 않습니다.
+- 네이티브 smooth scroll을 호출한 직후 같은 scroller에 `scrollLeft = 0`을 다시 대입하지 않습니다. 가로 위치는 같은 `scrollTo({ left: 0 })` 호출에서 고정해 모바일 브라우저가 세로 animation을 취소할 여지를 없앱니다.
+- scroll 완료 뒤 현재 target을 안전 영역 기준으로 다시 검사합니다. 레이아웃·폰트·callout 배치가 이동 중 바뀌어 대상이 벗어났다면 즉시 최종 좌표를 보정하고 spotlight geometry를 다시 계산합니다.
+- 프롬프트 부분 투어 7/13의 포함 필터 완료 결과와 8/13의 프리셋 묶음, 열린 disclosure 본문을 실제 모바일 viewport에서 순서대로 검증합니다.
 
 ## v0.16.7 coachmark 안전 영역·단일 자동 스크롤
 

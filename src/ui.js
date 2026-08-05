@@ -202,6 +202,10 @@ const STORAGE_TOOL_METADATA_LIMIT = 25;
 const VIRTUAL_LIST_THRESHOLD = 100;
 const VIRTUAL_LIST_OVERSCAN = 6;
 const VIRTUAL_LIST_FALLBACK_VIEWPORT = 640;
+const ONBOARDING_SCROLL_INITIAL_TIMEOUT = 480;
+const ONBOARDING_SCROLL_RETRY_INTERVAL = 120;
+const ONBOARDING_SCROLL_MAX_DURATION = 1800;
+const ONBOARDING_SCROLL_DESTINATION_TOLERANCE = 2;
 const TABS = [
     ['explorer', 'tab.explorer', 'nav.short.explorer', 'fa-layer-group'],
     ['timeline', 'tab.timeline', 'nav.short.timeline', 'fa-clock-rotate-left'],
@@ -1091,6 +1095,8 @@ export class DevToolsWindow {
         this.onboardingTargetAddedTabIndex = false;
         this.onboardingLocateTimer = null;
         this.onboardingAutoScrollTimer = null;
+        this.onboardingAutoScrollSequence = 0;
+        this.onboardingAutoScrollOperation = null;
         this.onboardingRevealSettleTimer = null;
         this.onboardingRevealSettleDeadline = null;
         this.onboardingGuidePositionFrame = null;
@@ -1100,8 +1106,8 @@ export class DevToolsWindow {
         this.onboardingGuideRepositionHandler = () => {
             this.scheduleOnboardingGuidePosition();
         };
-        this.onboardingAutoScrollEndHandler = () => {
-            this.finishOnboardingAutoScroll();
+        this.onboardingAutoScrollEndHandler = (event) => {
+            this.handleOnboardingAutoScrollEnd(event);
         };
         this.onboardingViewportResizeHandler = () => {
             this.scheduleOnboardingGuidePosition({ refocus: true });
@@ -7070,7 +7076,17 @@ export class DevToolsWindow {
         const sufficientlyVisible = fullyVisible || (
             oversized && visibleHeight >= minimumUsefulReveal
         );
-        if ((!nearestOnly || !sufficientlyVisible) && targetInContent) {
+        const currentScrollLeft = targetInContent
+            ? Number(viewport.scrollLeft || 0)
+            : 0;
+        if (
+            targetInContent
+            && (
+                !nearestOnly
+                || !sufficientlyVisible
+                || Math.abs(currentScrollLeft) > 0.5
+            )
+        ) {
             let desiredTop = visibleTop;
             if (nearestOnly) {
                 if (targetRect.top < visibleTop) {
@@ -7094,10 +7110,21 @@ export class DevToolsWindow {
             const scrollBehavior = behavior === 'smooth' && !reduceMotion
                 ? 'smooth'
                 : 'auto';
-            const shouldScroll = Math.abs(nextScrollTop - currentScrollTop) > 0.5;
+            const shouldScroll = (
+                Math.abs(nextScrollTop - currentScrollTop) > 0.5
+                || Math.abs(currentScrollLeft) > 0.5
+            );
             if (shouldScroll) {
                 if (typeof viewport.scrollTo === 'function') {
-                    if (scrollBehavior === 'smooth') this.startOnboardingAutoScroll();
+                    if (scrollBehavior === 'smooth') {
+                        this.startOnboardingAutoScroll({
+                            viewport,
+                            target,
+                            visibilityTarget,
+                            expectedTop: nextScrollTop,
+                            expectedLeft: 0,
+                        });
+                    }
                     viewport.scrollTo({
                         top: nextScrollTop,
                         left: 0,
@@ -7109,7 +7136,6 @@ export class DevToolsWindow {
                 }
             }
         }
-        if (targetInContent) viewport.scrollLeft = 0;
         if (focus) {
             if (this.onboardingLocateTimer != null) {
                 clearTimeout(this.onboardingLocateTimer);
@@ -7165,26 +7191,119 @@ export class DevToolsWindow {
         return true;
     }
 
-    startOnboardingAutoScroll() {
-        if (!this.onboardingGuide) return;
-        this.onboardingGuide.classList.add('is-auto-scrolling');
+    onboardingAutoScrollAtDestination(
+        operation = this.onboardingAutoScrollOperation,
+        tolerance = ONBOARDING_SCROLL_DESTINATION_TOLERANCE,
+    ) {
+        const viewport = operation?.viewport;
+        if (!viewport) return false;
+        const requestedTop = Number(operation.expectedTop);
+        const requestedLeft = Number(operation.expectedLeft);
+        if (!Number.isFinite(requestedTop) || !Number.isFinite(requestedLeft)) {
+            return false;
+        }
+        const scrollHeight = Number(viewport.scrollHeight);
+        const clientHeight = Number(viewport.clientHeight);
+        const maximumTop = Number.isFinite(scrollHeight) && Number.isFinite(clientHeight)
+            ? Math.max(0, scrollHeight - clientHeight)
+            : null;
+        const expectedTop = maximumTop == null
+            ? requestedTop
+            : Math.min(Math.max(0, requestedTop), maximumTop);
+        return (
+            Math.abs(Number(viewport.scrollTop || 0) - expectedTop) <= tolerance
+            && Math.abs(Number(viewport.scrollLeft || 0) - requestedLeft) <= tolerance
+        );
+    }
+
+    startOnboardingAutoScroll({
+        viewport = this.content,
+        target = this.onboardingTarget,
+        visibilityTarget = null,
+        expectedTop = Number(viewport?.scrollTop || 0),
+        expectedLeft = 0,
+    } = {}) {
+        if (!this.onboardingGuide || !viewport || !target) return null;
+        const token = (Number(this.onboardingAutoScrollSequence) || 0) + 1;
+        this.onboardingAutoScrollSequence = token;
         if (this.onboardingAutoScrollTimer != null) {
             clearTimeout(this.onboardingAutoScrollTimer);
         }
-        this.onboardingAutoScrollTimer = setTimeout(() => {
-            this.finishOnboardingAutoScroll();
-        }, 480);
+        const operation = {
+            token,
+            viewport,
+            target,
+            visibilityTarget,
+            expectedTop,
+            expectedLeft,
+            stepId: this.currentOnboardingStep()?.id ?? null,
+            stage: this.onboardingStepStage,
+            deadline: Date.now() + ONBOARDING_SCROLL_MAX_DURATION,
+        };
+        this.onboardingAutoScrollOperation = operation;
+        this.onboardingGuide.classList.add('is-auto-scrolling');
+        const pollForCompletion = () => {
+            if (this.onboardingAutoScrollOperation?.token !== token) return;
+            this.onboardingAutoScrollTimer = null;
+            if (
+                DevToolsWindow.prototype.onboardingAutoScrollAtDestination.call(
+                    this,
+                    operation,
+                )
+                || Date.now() >= operation.deadline
+            ) {
+                this.finishOnboardingAutoScroll({ token });
+                return;
+            }
+            this.onboardingAutoScrollTimer = setTimeout(
+                pollForCompletion,
+                ONBOARDING_SCROLL_RETRY_INTERVAL,
+            );
+        };
+        this.onboardingAutoScrollTimer = setTimeout(
+            pollForCompletion,
+            ONBOARDING_SCROLL_INITIAL_TIMEOUT,
+        );
+        return token;
     }
 
-    finishOnboardingAutoScroll({ reposition = true } = {}) {
+    handleOnboardingAutoScrollEnd(event) {
+        const operation = this.onboardingAutoScrollOperation;
+        if (!operation || event?.currentTarget !== operation.viewport) return false;
+        if (!DevToolsWindow.prototype.onboardingAutoScrollAtDestination.call(
+            this,
+            operation,
+        )) return false;
+        return this.finishOnboardingAutoScroll({ token: operation.token });
+    }
+
+    finishOnboardingAutoScroll({ token = null, reposition = true } = {}) {
+        const operation = this.onboardingAutoScrollOperation;
+        if (token != null && operation?.token !== token) return false;
         if (this.onboardingAutoScrollTimer != null) {
             clearTimeout(this.onboardingAutoScrollTimer);
             this.onboardingAutoScrollTimer = null;
         }
+        this.onboardingAutoScrollOperation = null;
         this.onboardingGuide?.classList.remove('is-auto-scrolling');
-        if (reposition && this.tutorialIsActive()) {
-            this.scheduleOnboardingGuidePosition();
-        }
+        if (!reposition || !operation) return Boolean(operation);
+        if (!this.tutorialIsActive() || !this.onboardingTarget) return false;
+        const contextMatches = (
+            this.onboardingTarget === operation.target
+            && this.currentOnboardingStep()?.id === operation.stepId
+            && this.onboardingStepStage === operation.stage
+        );
+        this.positionOnboardingGuide();
+        this.focusOnboardingTarget({
+            nearestOnly: true,
+            focus: false,
+            behavior: 'auto',
+            visibilityTarget: contextMatches
+                ? operation.visibilityTarget
+                : null,
+        });
+        this.positionOnboardingGuide();
+        return contextMatches;
     }
 
     scheduleOnboardingGuidePosition({

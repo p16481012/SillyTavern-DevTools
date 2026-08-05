@@ -709,6 +709,7 @@ test('debrief pipeline rejects a thin adjacent lane and reveals the whole target
     const initialScrollTop = 76;
     const targetHeight = 48.37;
     const calloutHeight = 168.86;
+    let pendingSmoothScroll = null;
     const content = {
         scrollTop: initialScrollTop,
         scrollLeft: 0,
@@ -722,6 +723,10 @@ test('debrief pipeline rejects a thin adjacent lane and reveals the whole target
             height: 600,
         }),
         scrollTo(options) {
+            if (options.behavior === 'smooth') {
+                pendingSmoothScroll = options;
+                return;
+            }
             this.scrollTop = options.top;
             this.scrollLeft = options.left;
         },
@@ -791,7 +796,11 @@ test('debrief pipeline rejects a thin adjacent lane and reveals the whole target
         onboardingGuidePositionFrame: null,
         onboardingRefocusAfterPosition: false,
         onboardingRefocusVisibilityTarget: null,
+        onboardingAutoScrollTimer: null,
+        onboardingAutoScrollSequence: 0,
+        onboardingAutoScrollOperation: null,
         tutorialIsActive: () => true,
+        currentOnboardingStep: () => ({ id: 'explorer-included-filter' }),
         content,
         window: {
             style: fakeStyle(),
@@ -818,7 +827,18 @@ test('debrief pipeline rejects a thin adjacent lane and reveals the whole target
                 };
             },
         },
-        startOnboardingAutoScroll() {},
+        startOnboardingAutoScroll(options) {
+            return DevToolsWindow.prototype.startOnboardingAutoScroll.call(
+                this,
+                options,
+            );
+        },
+        finishOnboardingAutoScroll(options) {
+            return DevToolsWindow.prototype.finishOnboardingAutoScroll.call(
+                this,
+                options,
+            );
+        },
         positionOnboardingGuide() {
             calls.push('position');
             return DevToolsWindow.prototype.positionOnboardingGuide.call(this);
@@ -838,11 +858,125 @@ test('debrief pipeline rejects a thin adjacent lane and reveals the whole target
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.deepEqual(calls, ['position', 'focus', 'position']);
+    assert.ok(pendingSmoothScroll);
+    assert.equal(content.scrollTop, initialScrollTop);
+    assert.ok(state.onboardingAutoScrollOperation);
+
+    content.scrollTop = pendingSmoothScroll.top;
+    content.scrollLeft = pendingSmoothScroll.left;
+    assert.equal(
+        DevToolsWindow.prototype.handleOnboardingAutoScrollEnd.call(
+            state,
+            { currentTarget: content },
+        ),
+        true,
+    );
+
+    assert.deepEqual(calls, [
+        'position',
+        'focus',
+        'position',
+        'position',
+        'focus',
+        'position',
+    ]);
+    assert.equal(state.onboardingAutoScrollOperation, null);
     const finalTargetRect = target.getBoundingClientRect();
     const finalCalloutRect = callout.getBoundingClientRect();
     assert.ok(finalTargetRect.top >= finalCalloutRect.bottom + 12);
     assert.ok(finalTargetRect.bottom <= actions.getBoundingClientRect().top - 12);
     assert.ok(content.scrollTop > initialScrollTop);
+});
+
+test('smooth-scroll completion ignores stale tokens and unrelated scrollend events', () => {
+    const guideClasses = new Set();
+    const lifecycleCalls = [];
+    const firstTarget = {};
+    const secondTarget = {};
+    const viewport = {
+        scrollTop: 0,
+        scrollLeft: 0,
+        scrollHeight: 1000,
+        clientHeight: 400,
+    };
+    const state = {
+        onboardingGuide: {
+            classList: {
+                add: (name) => guideClasses.add(name),
+                remove: (name) => guideClasses.delete(name),
+            },
+        },
+        onboardingTarget: firstTarget,
+        onboardingStepStage: 'practice',
+        onboardingAutoScrollTimer: null,
+        onboardingAutoScrollSequence: 0,
+        onboardingAutoScrollOperation: null,
+        currentOnboardingStep: () => ({ id: 'search-query' }),
+        tutorialIsActive: () => true,
+        finishOnboardingAutoScroll(options) {
+            return DevToolsWindow.prototype.finishOnboardingAutoScroll.call(
+                this,
+                options,
+            );
+        },
+        positionOnboardingGuide() {
+            lifecycleCalls.push(['position']);
+        },
+        focusOnboardingTarget(options) {
+            lifecycleCalls.push(['focus', options]);
+        },
+    };
+
+    const firstToken = DevToolsWindow.prototype.startOnboardingAutoScroll.call(
+        state,
+        { viewport, target: firstTarget, expectedTop: 120, expectedLeft: 0 },
+    );
+    state.onboardingTarget = secondTarget;
+    const secondToken = DevToolsWindow.prototype.startOnboardingAutoScroll.call(
+        state,
+        { viewport, target: secondTarget, expectedTop: 240, expectedLeft: 0 },
+    );
+
+    assert.notEqual(firstToken, secondToken);
+    assert.equal(
+        DevToolsWindow.prototype.finishOnboardingAutoScroll.call(
+            state,
+            { token: firstToken },
+        ),
+        false,
+    );
+    assert.equal(state.onboardingAutoScrollOperation.token, secondToken);
+    assert.equal(
+        DevToolsWindow.prototype.handleOnboardingAutoScrollEnd.call(
+            state,
+            { currentTarget: {} },
+        ),
+        false,
+    );
+    assert.equal(state.onboardingAutoScrollOperation.token, secondToken);
+    assert.deepEqual(lifecycleCalls, []);
+
+    viewport.scrollTop = 240;
+    state.onboardingStepStage = 'debrief';
+    assert.equal(
+        DevToolsWindow.prototype.handleOnboardingAutoScrollEnd.call(
+            state,
+            { currentTarget: viewport },
+        ),
+        false,
+    );
+    assert.equal(state.onboardingAutoScrollOperation, null);
+    assert.equal(guideClasses.has('is-auto-scrolling'), false);
+    assert.deepEqual(lifecycleCalls, [
+        ['position'],
+        ['focus', {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'auto',
+            visibilityTarget: null,
+        }],
+        ['position'],
+    ]);
 });
 
 test('reveal scrolling measures the opened body instead of the disclosure summary', () => {
@@ -932,6 +1066,70 @@ test('practice entry makes one nearest smooth scroll for an offscreen target', (
     }]);
     assert.equal(autoScrollStarts, 1);
     assert.equal(content.scrollLeft, 0);
+});
+
+test('a visible onboarding target resets horizontal drift in the same scroll request', () => {
+    const scrollCalls = [];
+    let directScrollLeftWrites = 0;
+    let storedScrollLeft = 24;
+    const target = {
+        getBoundingClientRect: () => ({
+            left: 32,
+            top: 220,
+            right: 360,
+            bottom: 280,
+            width: 328,
+            height: 60,
+        }),
+    };
+    const content = {
+        scrollTop: 140,
+        contains: (candidate) => candidate === target,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 400,
+            bottom: 700,
+            width: 400,
+            height: 600,
+        }),
+        scrollTo(options) {
+            scrollCalls.push(options);
+            this.scrollTop = options.top;
+            storedScrollLeft = options.left;
+        },
+    };
+    Object.defineProperty(content, 'scrollLeft', {
+        get: () => storedScrollLeft,
+        set(value) {
+            directScrollLeftWrites += 1;
+            storedScrollLeft = value;
+        },
+    });
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'practice',
+        content,
+        window: {},
+        onboardingGuideActions: null,
+        startOnboardingAutoScroll() {},
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+        }),
+        true,
+    );
+    assert.deepEqual(scrollCalls, [{
+        top: 140,
+        left: 0,
+        behavior: 'smooth',
+    }]);
+    assert.equal(directScrollLeftWrites, 0);
+    assert.equal(storedScrollLeft, 0);
 });
 
 test('practice scrolling keeps the target between the top callout and bottom navigation', () => {

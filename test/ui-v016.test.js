@@ -567,9 +567,15 @@ test('search onboarding keeps horizontal scroll pinned while moving targets vert
         focusTarget,
         /viewport\.scrollTo\(\{[\s\S]*?top: nextScrollTop,[\s\S]*?left: 0,[\s\S]*?behavior: scrollBehavior,[\s\S]*?\}\)/u,
     );
-    assert.match(focusTarget, /const shouldScroll = Math\.abs\(nextScrollTop - currentScrollTop\) > 0\.5/u);
+    assert.match(
+        focusTarget,
+        /const shouldScroll = \([\s\S]*?Math\.abs\(nextScrollTop - currentScrollTop\) > 0\.5[\s\S]*?Math\.abs\(currentScrollLeft\) > 0\.5[\s\S]*?\);/u,
+    );
     assert.match(focusTarget, /if \(shouldScroll\) \{/u);
-    assert.match(focusTarget, /if \(targetInContent\) viewport\.scrollLeft = 0/u);
+    assert.doesNotMatch(
+        focusTarget,
+        /if \(targetInContent\) viewport\.scrollLeft = 0/u,
+    );
     assert.match(
         selectTab,
         /if \(changed && this\.content\) \{[\s\S]*?this\.content\.scrollTop = 0;[\s\S]*?this\.content\.scrollLeft = 0;/u,

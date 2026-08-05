@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.7의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 상단 설명·하단 메뉴 사이의 안전 영역과 열린 disclosure 전체를 따라가는 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.8의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 상단 설명·하단 메뉴 사이의 안전 영역과 열린 disclosure 전체를 따라가는 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -28,7 +28,9 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.16.7의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+v0.16.8의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+
+실제 확장 진입점은 `ui.js`를 확장 버전이 포함된 module URL로 import합니다. 브라우저의 ESM module map은 이미 열린 문서 안의 모듈을 교체하지 않으므로 업데이트 뒤 페이지 새로고침 한 번은 필요하지만, 새 문서에서는 버전이 바뀐 URL이 이전 튜토리얼 UI 모듈과 다른 캐시 키를 사용합니다. manifest·package·runtime·sandbox와 import query는 하나의 버전 계약 테스트로 묶습니다.
 
 상호작용을 완료해 `debrief`로 들어가거나 새 단계의 `practice`를 시작하면 `onboardingSafeViewportBounds()`가 target과 가로로 겹치는 상단 callout, 하단 `.st-devtools-app-nav`, debrief 진행 action을 content viewport에서 제외합니다. `scheduleOnboardingGuidePosition({ refocus: true })`는 한 animation frame에서 callout을 먼저 배치하고, target을 이 안전 영역의 가장 가까운 위치로 한 번만 smooth scroll한 뒤 최종 spotlight·callout geometry를 다시 맞춥니다. 이미 충분히 보이는 target에는 scroll을 만들지 않으며 oversized target은 안전 영역 상단부터 읽을 수 있도록 배치합니다.
 

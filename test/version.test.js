@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const expectedVersion = '0.16.7';
+const expectedVersion = '0.16.8';
 
 test('manifest, package and runtime versions stay aligned', () => {
     const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
@@ -12,4 +12,9 @@ test('manifest, package and runtime versions stay aligned', () => {
     assert.equal(manifest.version, expectedVersion);
     assert.equal(packageJson.version, expectedVersion);
     assert.match(indexSource, new RegExp(`VERSION = ['"]${expectedVersion.replaceAll('.', '\\.')}['"]`));
+    assert.match(
+        indexSource,
+        new RegExp(`from ['"]\\./src/ui\\.js\\?v=${expectedVersion.replaceAll('.', '\\.')}['"]`),
+    );
+    assert.doesNotMatch(indexSource, /from ['"]\.\/src\/ui\.js['"]/);
 });
