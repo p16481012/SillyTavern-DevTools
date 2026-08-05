@@ -569,7 +569,7 @@ test('practice recognizes value, open, and checked states that are already satis
     assert.equal(panel.calls.length, 0);
 });
 
-test('an opened disclosure highlights its revealed result instead of only its summary', () => {
+test('a disclosure keeps its clicked summary highlighted instead of jumping to revealed content', () => {
     const step = onboardingStep('explorer-configured-group');
     const summary = { tagName: 'SUMMARY' };
     const revealed = { tagName: 'DIV' };
@@ -591,18 +591,40 @@ test('an opened disclosure highlights its revealed result instead of only its su
 
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
-        revealed,
+        summary,
     );
     state.onboardingStepStage = 'practice';
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
-        disclosure,
+        summary,
     );
     state.onboardingStepStage = 'debrief';
     disclosure.open = false;
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
         summary,
+    );
+});
+
+test('an intentional navigation action highlights its declared result target', () => {
+    const step = onboardingStep('rules-related-sources');
+    const action = {};
+    const result = {};
+    const state = {
+        onboardingStepStage: 'debrief',
+        currentOnboardingStep: () => step,
+        window: {
+            querySelector(selector) {
+                if (selector === step.target) return action;
+                if (selector === step.resultTarget) return result;
+                return null;
+            },
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
+        result,
     );
 });
 
@@ -1092,7 +1114,7 @@ test('spotlight geometry never overrides the real target position', async () => 
     const practiceTarget = sourceBlock(
         spotlightStyle,
         ".st-devtools-window[data-onboarding-stage='practice']\n.st-devtools-onboarding-target {",
-        ".st-devtools-window[data-onboarding-stage='practice']\n.st-devtools-onboarding-target.is-locating {",
+        '.st-devtools-onboarding-invitation-overlay {',
     );
 
     assert.match(position, /Object\.assign\(this\.onboardingSpotlight\.style,\s*\{/u);
@@ -1151,7 +1173,7 @@ test('unrelated practice interactions remain available and are never cancelled',
     assert.doesNotMatch(interaction, /preventDefault|stopImmediatePropagation/u);
 });
 
-test('target recovery uses the content viewport, reserves sheet space, and focuses the target', () => {
+test('target recovery uses the content viewport without treating a corner back button as full-width occlusion', () => {
     const scrollOptions = [];
     const focusOptions = [];
     const classNames = new Set();
@@ -1239,11 +1261,8 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         ),
         true,
     );
-    assert.deepEqual(scrollOptions[1], {
-        top: 122,
-        left: 0,
-        behavior: 'auto',
-    });
+    assert.equal(scrollOptions.length, 1);
+    assert.equal(state.content.scrollTop, 72);
 
     assert.equal(
         DevToolsWindow.prototype.focusOnboardingTarget.call(
@@ -1252,7 +1271,7 @@ test('target recovery uses the content viewport, reserves sheet space, and focus
         ),
         true,
     );
-    assert.deepEqual(scrollOptions[2], {
+    assert.deepEqual(scrollOptions[1], {
         top: 408,
         left: 0,
         behavior: 'auto',

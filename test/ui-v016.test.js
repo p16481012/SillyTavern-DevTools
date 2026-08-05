@@ -155,7 +155,9 @@ test('detailed help articles reuse inert product renderers with onboarding fixtu
     );
 
     assert.match(article, /helpTopicVisualById\(topic\.id\)/u);
-    assert.match(article, /if \(visual\) article\.appendChild\(this\.renderHelpTopicVisual\(visual\)\)/u);
+    assert.match(article, /if \(visual\) content\.appendChild\(this\.renderHelpTopicVisual\(visual\)\)/u);
+    assert.match(article, /content\.appendChild\(sections\)/u);
+    assert.match(article, /article\.appendChild\(content\)/u);
     assert.match(visual, /className: `st-devtools-help-visual is-\$\{visual\.type\}`/u);
     assert.match(visual, /figure\.setAttribute\('role', 'img'\)/u);
     assert.match(visual, /figure\.setAttribute\('aria-label', visual\.ariaLabel\)/u);
@@ -184,7 +186,7 @@ test('detailed help articles reuse inert product renderers with onboarding fixtu
     assert.doesNotMatch(visual, /localStorage|fetch\(/u);
 });
 
-test('empty state and help indexes keep explicit mobile-safe vertical rhythm', async () => {
+test('empty state and help indexes keep compact, mobile-safe vertical rhythm', async () => {
     const [ui, style] = await Promise.all([
         readFile(UI_URL, 'utf8'),
         readFile(STYLE_URL, 'utf8'),
@@ -207,11 +209,19 @@ test('empty state and help indexes keep explicit mobile-safe vertical rhythm', a
     );
     assert.match(
         style,
-        /\.st-devtools-help-doc-results \{[\s\S]*?gap: 1\.35rem;/u,
+        /\.st-devtools-help-doc-results \{[\s\S]*?gap: 0\.8rem;[\s\S]*?margin-top: 0\.45rem;/u,
     );
     assert.match(
         style,
-        /button\.st-devtools-help-list-row \{[\s\S]*?min-height: 72px !important;/u,
+        /button\.st-devtools-help-list-row \{[\s\S]*?min-height: 60px !important;/u,
+    );
+    assert.match(
+        style,
+        /@container \(min-width: 680px\) \{[\s\S]*?\.st-devtools-help-list \{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-help-topic-content \{[\s\S]*?grid-template-columns: minmax\(0, 1\.3fr\) minmax\(15rem, 0\.7fr\);/u,
     );
 });
 
@@ -229,6 +239,27 @@ test('basic sections cover the complete walkthrough once in the requested order'
     ));
     assert.equal(stepIds.length, ONBOARDING_STEPS.length);
     assert.equal(new Set(stepIds).size, ONBOARDING_STEPS.length);
+});
+
+test('navigation actions keep their product destination as the debrief target', () => {
+    const expected = new Map([
+        [
+            'rules-related-sources',
+            ['explorer', '.st-devtools-source[data-source-id="tutorial:source:output"]'],
+        ],
+        ['timeline-open-snapshot', ['explorer', '.st-devtools-overview-card']],
+        [
+            'search-result-main-source',
+            ['explorer', '.st-devtools-source[data-source-id="tutorial:source:main"]'],
+        ],
+    ]);
+
+    for (const [id, [tabId, target]] of expected) {
+        const step = ONBOARDING_STEPS.find((candidate) => candidate.id === id);
+        assert.ok(step, `missing onboarding step: ${id}`);
+        assert.equal(step.resultTabId, tabId);
+        assert.equal(step.resultTarget, target);
+    }
 });
 
 test('advanced entries are coachmark step collections with no provider action', async () => {
@@ -493,11 +524,15 @@ test('search onboarding keeps horizontal scroll pinned while moving targets vert
 
     assert.match(content, /overflow-x:\s*hidden/u);
     assert.match(content, /overflow-y:\s*auto/u);
+    assert.match(style, /\.st-devtools-window\.is-onboarding-practice \.st-devtools-content \{[\s\S]*?overflow-anchor: none;/u);
     assert.doesNotMatch(focusTarget, /scrollIntoView/u);
+    assert.doesNotMatch(focusTarget, /onboardingPracticeBackButton/u);
     assert.match(
         focusTarget,
-        /viewport\.scrollTo\(\{ top: nextScrollTop, left: 0, behavior: 'auto' \}\)/u,
+        /viewport\.scrollTo\(\{[\s\S]*?top: nextScrollTop,[\s\S]*?left: 0,[\s\S]*?behavior: scrollBehavior,[\s\S]*?\}\)/u,
     );
+    assert.match(focusTarget, /const shouldScroll = Math\.abs\(nextScrollTop - currentScrollTop\) > 0\.5/u);
+    assert.match(focusTarget, /if \(shouldScroll\) \{/u);
     assert.match(focusTarget, /if \(targetInContent\) viewport\.scrollLeft = 0/u);
     assert.match(
         selectTab,
@@ -550,7 +585,7 @@ test('coachmark no-fit placement uses an opaque collision-safe callout', async (
     );
 });
 
-test('coachmark stages crossfade continuously and stack the capture action on mobile', async () => {
+test('coachmark stages switch immediately, isolate inactive surfaces, and only animate revealed layout', async () => {
     const [ui, style] = await Promise.all([
         readFile(UI_URL, 'utf8'),
         readFile(STYLE_URL, 'utf8'),
@@ -570,35 +605,49 @@ test('coachmark stages crossfade continuously and stack the capture action on mo
         '\n    focusableElements() {',
         '\n    handleDialogKeydown(',
     );
-    const navigation = sourceBlock(
+    const replaceBody = sourceBlock(
         ui,
-        '\n    nextOnboardingStep() {',
-        '\n    skipOnboardingStep() {',
+        '\n    replaceOnboardingGuideBody(',
+        '\n    synchronizeOnboardingStepCompletion(',
+    );
+    const recordAction = sourceBlock(
+        ui,
+        '\n    recordOnboardingAction(',
+        '\n    handleOnboardingInteraction(',
     );
 
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingGuidePanel, modalStage\)/u);
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingPracticeDock, !modalStage\)/u);
     assert.match(update, /refreshOnboardingTarget\(\{ preserveGuideGeometry \}\)/u);
+    assert.match(
+        update,
+        /const targetAvailable = actionCompleted[\s\S]*?\? Boolean\(this\.onboardingTarget\)[\s\S]*?: this\.focusOnboardingTarget/u,
+    );
+    assert.match(update, /const actionCompleted = Boolean\([\s\S]*?!stepChanged[\s\S]*?stageChanged/u);
+    assert.match(update, /behavior: stepChanged \? 'smooth' : 'auto'/u);
+    assert.doesNotMatch(update, /scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u);
     assert.match(surface, /surface\.hidden = false/u);
     assert.match(surface, /classList\.toggle\('is-active', active\)/u);
     assert.match(surface, /toggleAttribute\('inert', !active\)/u);
-    assert.match(surface, /st-devtools-onboarding-copy-leaving/u);
-    assert.match(surface, /st-devtools-onboarding-copy-entering/u);
-    assert.match(surface, /this\.onboardingTransitionLocked = true/u);
-    assert.match(surface, /this\.onboardingTransitionLocked = false/u);
-    assert.match(navigation, /if \(this\.onboardingTransitionLocked\) return false/u);
+    assert.match(surface, /setAttribute\('aria-hidden', String\(!active\)\)/u);
+    assert.match(replaceBody, /body\.replaceChildren\(content\)/u);
+    assert.doesNotMatch(recordAction, /preserveContentScrollTop|restoreActionScroll/u);
+    assert.doesNotMatch(ui, /st-devtools-onboarding-copy-leaving/u);
+    assert.doesNotMatch(ui, /st-devtools-onboarding-copy-entering/u);
+    assert.doesNotMatch(ui, /onboardingTransitionLocked/u);
     assert.match(
         focusable,
         /!node\.closest\('\[hidden\], \[inert\], \[aria-hidden="true"\]'\)/u,
     );
     assert.match(
         style,
-        /\.st-devtools-onboarding-guide-panel,[\s\S]*?transition:[\s\S]*?opacity 180ms[\s\S]*?visibility 0s/u,
+        /\.st-devtools-onboarding-guide-panel:not\(\.is-active\),[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none !important;/u,
     );
-    assert.match(style, /@keyframes st-devtools-onboarding-copy-enter/u);
-    assert.match(style, /\.st-devtools-onboarding-copy-leaving\.is-leaving/u);
-    assert.match(style, /\.st-devtools-onboarding-copy-entering\.is-entered/u);
+    assert.doesNotMatch(style, /@keyframes st-devtools-onboarding-copy-enter/u);
+    assert.doesNotMatch(style, /st-devtools-onboarding-copy-leaving/u);
+    assert.doesNotMatch(style, /st-devtools-onboarding-copy-entering/u);
     assert.match(style, /@supports \(interpolate-size: allow-keywords\)/u);
+    assert.match(style, /details::details-content \{[\s\S]*?transition: block-size 240ms/u);
     assert.match(style, /\.st-devtools-onboarding-practice-dock\.has-panel-action \{[\s\S]*?width: min\(560px/u);
     assert.match(
         style,

@@ -24,7 +24,7 @@ function defineInteraction(event, selector, { value, state } = {}) {
     });
 }
 
-function defineStep(groupId, id, target, interaction) {
+function defineStep(groupId, id, target, interaction, result = {}) {
     const group = GROUP_BY_ID.get(groupId);
     return Object.freeze({
         id,
@@ -33,6 +33,8 @@ function defineStep(groupId, id, target, interaction) {
         target,
         icon: group.icon,
         ...(interaction ? { interaction } : {}),
+        ...(result.tabId ? { resultTabId: result.tabId } : {}),
+        ...(result.target ? { resultTarget: result.target } : {}),
     });
 }
 
@@ -149,6 +151,10 @@ export const ONBOARDING_STEPS = Object.freeze([
             'click',
             '.st-devtools-rule-card[data-rule-id="format"] .st-devtools-rule-actions button:first-child',
         ),
+        {
+            tabId: 'explorer',
+            target: '.st-devtools-source[data-source-id="tutorial:source:output"]',
+        },
     ),
     defineStep(
         'rules',
@@ -180,6 +186,7 @@ export const ONBOARDING_STEPS = Object.freeze([
         'timeline-open-snapshot',
         '.st-devtools-growth-detail .menu_button',
         defineInteraction('click', '.st-devtools-growth-detail .menu_button'),
+        { tabId: 'explorer', target: '.st-devtools-overview-card' },
     ),
     defineStep(
         'timeline',
@@ -297,6 +304,10 @@ export const ONBOARDING_STEPS = Object.freeze([
             'click',
             '.st-devtools-search-result[data-source-id="tutorial:source:main"]',
         ),
+        {
+            tabId: 'explorer',
+            target: '.st-devtools-source[data-source-id="tutorial:source:main"]',
+        },
     ),
     defineStep('search', 'search-finish', null),
 ]);

@@ -1,10 +1,14 @@
-# v0.16.4 기술 구현 현황
+# v0.16.5 기술 구현 현황
 
-## v0.16.4 좌표 유지형 코치마크·제품 renderer excerpt
+## v0.16.5 위치 안정화 코치마크·고밀도 도움말
 
-- 안내 surface는 단계 전환 때 DOM을 즉시 숨기지 않고 `is-active`·`inert`·`aria-hidden` 상태를 전환합니다. 직전 guide geometry를 유지한 상태에서 새 target을 계산해 패널·dock·blocker·spotlight가 opacity와 작은 translate로 교차 페이드합니다.
-- 안내 본문과 상세 disclosure에는 짧은 진입·펼침 animation을 적용하며 `prefers-reduced-motion: reduce`에서는 transition·animation을 제거합니다.
+- 상호작용 완료 후 `debrief`로 바뀔 때 현재 콘텐츠 scroll offset과 완료한 target geometry를 보존합니다. 사용자가 방금 조작한 위치를 떠나지 않은 채 결과 설명을 읽을 수 있습니다.
+- disclosure 단계는 펼친 본문을 새 target으로 바꾸지 않고 사용자가 클릭한 직접 `summary`를 완료·결과 target으로 유지합니다. 긴 본문 때문에 화면이 갑자기 재배치되지 않습니다.
+- 새 단계 target이 현재 콘텐츠 viewport 안에 있으면 scroll을 유지합니다. viewport 밖에 있을 때만 target의 필요한 부분이 보이도록 가장 가까운 경계까지 최소 scroll합니다.
+- 페이지 전체, 설명 문구와 button 상태에 일괄 animation을 적용하지 않습니다. spotlight 위치와 실제 disclosure처럼 맥락 이해에 필요한 짧은 변화만 남기며 `prefers-reduced-motion: reduce`에서는 이 transition도 제거합니다.
 - 캡처 단계의 action이 있는 coachmark는 넓은 화면에서 충분한 본문 폭을 확보하고, 520px 이하 container에서는 CTA가 설명 아래 full-width로 재배치됩니다.
+- 고급 기능 가이드 목록은 제목·설명·단계 수·예상 시간을 짧은 행으로 재배치하고, 연습 화면의 field·note·result 간격과 typography를 줄여 같은 viewport에서 더 많은 설정 맥락을 보여 줍니다.
+- 기능 설명서 index의 category·row 간격과 article의 제목·설명·section 배치를 압축하고, 전후 상태가 있는 실제 UI excerpt는 넓은 화면에서 병렬로 비교할 수 있게 배치합니다. 44px 상호작용 경계와 모바일 한 열 fallback은 유지합니다.
 - `renderHelpTopicVisual()`은 19개 topic마다 `createOnboardingSession()`의 결정적 fixture로 분리된 preview facade를 만들고 실제 explorer·timeline·diff·rules·search·settings renderer에서 필요한 fragment를 렌더합니다.
 - 문서에 삽입하는 노드는 렌더 결과의 `cloneNode(true)`이며 `inert`·`aria-hidden`·`pointer-events: none`을 적용하고 ID·label·ARIA 참조·tour 표식을 제거합니다. 실제 UI DOM과 event handler를 공유하지 않습니다.
 - preview facade는 실제 timeline store, 저장 정책, Connection Manager, Semantic Inspector provider, clipboard, export와 network를 호출하지 않습니다. AI·평가 화면은 고정 fixture와 no-op harness만 사용합니다.
@@ -57,7 +61,7 @@
 - 이전 이동이 실행 중인 연습 캡처를 벗어나면 timer와 대기를 취소하고 안전한 대기 상태로 되돌립니다. 종료 시 modal·practice 이전 control과 viewport listener도 함께 정리합니다.
 - `positionOnboardingGuide()`는 `.st-devtools-app-nav`의 실제 높이를 읽어 CSS 변수로 공유합니다. 이전·다음 control은 이 높이 위에 놓이고 본문에는 같은 값만큼 임시 하단 공간을 만들어 마지막 target도 control 뒤에 숨지 않습니다.
 - `focusOnboardingTarget()`은 practice 이전 control의 상단을 본문 가시 영역 하한으로 사용합니다. viewport 크기가 바뀌면 활성 target을 다시 보이는 위치로 옮긴 뒤 spotlight를 재계산합니다.
-- toggle practice는 interaction selector인 `<details>` 전체를 강조해 `.st-devtools-source-change { overflow: hidden; }` 안에서 summary outline이 잘리는 문제를 피합니다. 완료 debrief는 기존처럼 새로 펼쳐진 본문을 강조합니다.
+- toggle practice와 완료 debrief는 사용자가 클릭한 직접 `summary`를 같은 target으로 유지합니다. `.st-devtools-source-change { overflow: hidden; }` 안에서도 summary outline이 잘리지 않으며 펼친 본문으로 scroll이 점프하지 않습니다.
 - 비교 결과의 비동기 렌더가 끝나면 현재 단계가 comparison인지 확인해 target을 다시 연결합니다. 320×640·390×844에서 6개 comparison 조작 target이 각각 하나이며 spotlight가 보이고 target·dock·이전 control이 겹치지 않음을 검증했습니다.
 
 ## v0.15.7 직접 체험 진입·이벤트 판정 보정
@@ -77,7 +81,7 @@
 - `synchronizeOnboardingStepCompletion()`은 practice 진입 때 value·checked·open 조건이 이미 충족됐는지 일반적으로 검사합니다. panel형 action은 실제 실행 전 자동 완료하지 않습니다.
 - toggle 완료 뒤 `onboardingVisualTarget()`은 열린 disclosure의 첫 non-summary body를 결과 target으로 선택합니다. spotlight geometry는 body와 콘텐츠 viewport의 교차 영역을 사용해 긴 본문이 전체 화면을 덮지 않습니다.
 - interactive debrief는 단계 제목과 `잘했어요!`·관찰 결과를 분리하고 녹색 result spotlight를 사용합니다. 마지막 읽기 단계도 사용자가 익힌 조사 흐름과 연습 데이터 종료를 명시합니다.
-- copy·practice dock·spotlight geometry·success mark는 180~420ms one-shot animation만 사용하며 practice target pulse는 2회 뒤 정적 ring으로 남습니다. `prefers-reduced-motion`에서는 모든 새 animation을 제거합니다.
+- 현재 경로는 page·copy·button의 장식 animation을 제거하고 target ring과 필요한 spotlight·disclosure 상태 변화만 짧게 표시합니다. `prefers-reduced-motion`에서는 이 변화도 정적으로 표시합니다.
 
 ## v0.15.5 레퍼런스형 코치마크
 

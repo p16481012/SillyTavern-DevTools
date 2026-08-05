@@ -1090,29 +1090,24 @@ export class DevToolsWindow {
         this.onboardingTargetDescriptionId = null;
         this.onboardingTargetAddedTabIndex = false;
         this.onboardingLocateTimer = null;
+        this.onboardingAutoScrollTimer = null;
         this.onboardingGuidePositionFrame = null;
         this.onboardingRefocusAfterPosition = false;
         this.onboardingTargetResizeObserver = null;
         this.onboardingGuideRepositionHandler = () => {
             this.scheduleOnboardingGuidePosition();
         };
+        this.onboardingAutoScrollEndHandler = () => {
+            this.finishOnboardingAutoScroll();
+        };
         this.onboardingViewportResizeHandler = () => {
             this.scheduleOnboardingGuidePosition({ refocus: true });
-        };
-        this.onboardingMotionEndHandler = (event) => {
-            if (
-                !this.tutorialIsActive()
-                || !event.target?.closest?.('.st-devtools-page, details')
-            ) return;
-            this.scheduleOnboardingGuidePosition();
         };
         this.onboardingInteractionHandler = (event) => {
             this.handleOnboardingInteraction(event);
         };
         this.onboardingCaptureTimer = null;
         this.onboardingCaptureWaitResolve = null;
-        this.onboardingCopyTransitionTimer = null;
-        this.onboardingTransitionLocked = false;
         this.onboardingSessionBadge = null;
         this.storageToolsStatus = null;
         this.activeBlockingTaskCount = 0;
@@ -3963,7 +3958,9 @@ export class DevToolsWindow {
     }
 
     renderAdvancedHelpIndex() {
-        const view = element('div', { className: 'st-devtools-help-view' });
+        const view = element('div', {
+            className: 'st-devtools-help-view st-devtools-help-advanced-index',
+        });
         const header = element('section', { className: 'st-devtools-help-index-header' });
         header.append(
             this.renderHelpBackButton('도움말 홈', () => this.showHelpView('home')),
@@ -3975,12 +3972,16 @@ export class DevToolsWindow {
         );
         const list = element('div', { className: 'st-devtools-help-accordion-list' });
         for (const guide of ADVANCED_ONBOARDING_GUIDES) {
-            const row = element('section', { className: 'st-devtools-help-section-row' });
+            const row = element('section', {
+                className: 'st-devtools-help-section-row is-advanced-guide',
+            });
             const iconWrap = element('span', { className: 'st-devtools-help-home-card-icon' });
             const icon = element('i', { className: `fa-solid ${guide.icon}` });
             icon.setAttribute('aria-hidden', 'true');
             iconWrap.appendChild(icon);
-            const meta = element('div', { className: 'st-devtools-help-section-meta' });
+            const meta = element('div', {
+                className: 'st-devtools-help-section-meta is-advanced-guide',
+            });
             meta.append(
                 element('strong', { text: guide.title }),
                 proseElement('p', guide.description),
@@ -4003,7 +4004,9 @@ export class DevToolsWindow {
     }
 
     renderHelpDocsIndex() {
-        const view = element('div', { className: 'st-devtools-help-view' });
+        const view = element('div', {
+            className: 'st-devtools-help-view st-devtools-help-docs-index',
+        });
         const section = element('section', { className: 'st-devtools-help-section' });
         section.append(
             this.renderHelpBackButton('도움말 홈', () => this.showHelpView('home')),
@@ -4085,8 +4088,14 @@ export class DevToolsWindow {
                 className: 'st-devtools-help-topic-summary',
             }),
         );
+        const content = element('div', {
+            className: 'st-devtools-help-topic-content',
+        });
         const visual = helpTopicVisualById(topic.id);
-        if (visual) article.appendChild(this.renderHelpTopicVisual(visual));
+        if (visual) content.appendChild(this.renderHelpTopicVisual(visual));
+        const sections = element('div', {
+            className: 'st-devtools-help-topic-sections',
+        });
         for (const [title, body] of topic.sections) {
             const section = element('section', {
                 className: 'st-devtools-help-topic-section',
@@ -4095,8 +4104,10 @@ export class DevToolsWindow {
                 element('h4', { text: title }),
                 proseElement('p', body),
             );
-            article.appendChild(section);
+            sections.appendChild(section);
         }
+        content.appendChild(sections);
+        article.appendChild(content);
         return article;
     }
 
@@ -5430,18 +5441,13 @@ export class DevToolsWindow {
         const liveDataChanged = Boolean(this.onboardingSession?.liveDataChanged);
         const latestLiveCaptureStatus = this.onboardingSession?.latestLiveCaptureStatus ?? null;
         this.cancelOnboardingCaptureWait();
-        if (this.onboardingCopyTransitionTimer != null) {
-            clearTimeout(this.onboardingCopyTransitionTimer);
-            this.onboardingCopyTransitionTimer = null;
-        }
-        this.onboardingTransitionLocked = false;
-        this.onboardingGuide?.classList.remove('is-transitioning');
         this.clearOnboardingTarget();
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
             cancelFrame(this.onboardingGuidePositionFrame);
             this.onboardingGuidePositionFrame = null;
         }
+        this.finishOnboardingAutoScroll({ reposition: false });
         this.onboardingRefocusAfterPosition = false;
         this.window?.removeEventListener('click', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('change', this.onboardingInteractionHandler, true);
@@ -5452,12 +5458,8 @@ export class DevToolsWindow {
             this.onboardingGuideRepositionHandler,
         );
         this.content?.removeEventListener(
-            'transitionend',
-            this.onboardingMotionEndHandler,
-        );
-        this.content?.removeEventListener(
-            'animationend',
-            this.onboardingMotionEndHandler,
+            'scrollend',
+            this.onboardingAutoScrollEndHandler,
         );
         globalThis.removeEventListener?.(
             'resize',
@@ -5481,6 +5483,7 @@ export class DevToolsWindow {
         delete this.onboardingGuide.dataset.step;
         delete this.onboardingGuide.dataset.group;
         delete this.onboardingGuide.dataset.stage;
+        delete this.onboardingGuide.dataset.kind;
         delete this.onboardingGuide.dataset.placement;
         delete this.window.dataset.onboardingStage;
         this.onboardingPhase = 'idle';
@@ -5589,12 +5592,9 @@ export class DevToolsWindow {
             { passive: true },
         );
         this.content?.addEventListener(
-            'transitionend',
-            this.onboardingMotionEndHandler,
-        );
-        this.content?.addEventListener(
-            'animationend',
-            this.onboardingMotionEndHandler,
+            'scrollend',
+            this.onboardingAutoScrollEndHandler,
+            { passive: true },
         );
         globalThis.addEventListener?.(
             'resize',
@@ -5614,7 +5614,6 @@ export class DevToolsWindow {
 
     nextOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
-        if (this.onboardingTransitionLocked) return false;
         if (this.onboardingPhase === 'invitation') {
             return this.beginOnboardingPractice();
         }
@@ -5677,7 +5676,6 @@ export class DevToolsWindow {
 
     previousOnboardingStep() {
         if (!this.onboardingIsOpen()) return false;
-        if (this.onboardingTransitionLocked) return false;
         if (this.onboardingPhase === 'invitation') return false;
         const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
         const current = steps[this.onboardingStepIndex];
@@ -5837,14 +5835,23 @@ export class DevToolsWindow {
             const stepChanged = this.onboardingGuide.dataset.step !== step.id;
             const stageChanged = this.onboardingGuide.dataset.stage
                 !== this.onboardingStepStage;
+            const actionCompleted = Boolean(
+                !stepChanged
+                && stageChanged
+                && this.onboardingStepStage === 'debrief'
+                && step.interaction,
+            );
             preserveGuideGeometry = stepChanged || stageChanged;
+            const expectedTabId = this.onboardingStepStage === 'debrief'
+                ? step.resultTabId ?? step.tabId
+                : step.tabId;
             if (
                 !step.id.endsWith('-tab')
                 && step.target
                 && !step.interaction?.selector?.includes('.st-devtools-app-nav-item')
-                && this.onboardingSession.tabId !== step.tabId
+                && this.onboardingSession.tabId !== expectedTabId
             ) {
-                this.onboardingSession.tabId = step.tabId;
+                this.onboardingSession.tabId = expectedTabId;
                 this.render();
             }
             this.onboardingStepComplete = Boolean(
@@ -5858,6 +5865,7 @@ export class DevToolsWindow {
             this.onboardingGuide.dataset.step = step.id;
             this.onboardingGuide.dataset.group = group.id;
             this.onboardingGuide.dataset.stage = this.onboardingStepStage;
+            this.onboardingGuide.dataset.kind = this.onboardingKind;
             this.window.dataset.onboardingStage = this.onboardingStepStage;
             this.onboardingProgress.textContent = `${this.onboardingGroupLabel(group)} · ${
                 this.onboardingStepIndex + 1
@@ -5904,27 +5912,31 @@ export class DevToolsWindow {
                 this.onboardingPracticeActions.replaceChildren();
                 if (stepChanged || stageChanged) this.onboardingBody.scrollTop = 0;
             } else {
-                this.onboardingPracticeCopy.replaceChildren(
+                const advancedPractice = this.onboardingKind === 'advanced';
+                const practiceCopy = [
                     element('strong', {
                         className: 'st-devtools-onboarding-practice-title',
                         text: this.onboardingStepCopy(step, 'title'),
                     }),
-                    proseElement(
+                ];
+                if (!advancedPractice) {
+                    practiceCopy.push(proseElement(
                         'p',
                         onboardingSentence(this.onboardingStepCopy(step, 'what')),
                         { className: 'st-devtools-onboarding-practice-meaning' },
-                    ),
-                    proseElement(
+                    ));
+                    practiceCopy.push(proseElement(
                         'p',
                         this.onboardingStepCopy(step, 'when'),
                         { className: 'st-devtools-onboarding-practice-context' },
-                    ),
-                    proseElement(
-                        'p',
-                        onboardingSentence(this.onboardingStepCopy(step, 'task')),
-                        { className: 'st-devtools-onboarding-practice-task' },
-                    ),
-                );
+                    ));
+                }
+                practiceCopy.push(proseElement(
+                    'p',
+                    onboardingSentence(this.onboardingStepCopy(step, 'task')),
+                    { className: 'st-devtools-onboarding-practice-task' },
+                ));
+                this.onboardingPracticeCopy.replaceChildren(...practiceCopy);
                 this.renderOnboardingPracticeActions(step);
                 this.synchronizeOnboardingStepCompletion(step);
             }
@@ -5937,15 +5949,18 @@ export class DevToolsWindow {
                 || this.onboardingStepStage !== expectedStage
             ) return;
             this.refreshOnboardingTarget({ preserveGuideGeometry });
-            const targetAvailable = this.focusOnboardingTarget({
-                nearestOnly: this.onboardingStepStage === 'practice',
-                focus: false,
-            });
+            const targetAvailable = actionCompleted
+                ? Boolean(this.onboardingTarget)
+                : this.focusOnboardingTarget({
+                    nearestOnly: true,
+                    focus: false,
+                    behavior: stepChanged ? 'smooth' : 'auto',
+                });
             if (this.onboardingStepStage === 'practice') {
                 if (!targetAvailable || guidePanelHadFocus) {
                     this.onboardingPracticeDock?.focus({ preventScroll: true });
                 }
-                this.scheduleOnboardingGuidePosition({ refocus: true });
+                this.scheduleOnboardingGuidePosition();
             } else {
                 this.scheduleOnboardingGuidePosition();
                 this.onboardingGuidePanel?.focus({ preventScroll: true });
@@ -5973,72 +5988,7 @@ export class DevToolsWindow {
     replaceOnboardingGuideBody(content) {
         const body = this.onboardingBody;
         if (!body) return;
-        if (this.onboardingCopyTransitionTimer != null) {
-            clearTimeout(this.onboardingCopyTransitionTimer);
-            this.onboardingCopyTransitionTimer = null;
-        }
-        for (const stale of body.querySelectorAll(
-            ':scope > .st-devtools-onboarding-copy-leaving',
-        )) {
-            stale.remove();
-        }
-        const previous = body.firstElementChild;
-        previous?.classList.remove(
-            'st-devtools-onboarding-copy-entering',
-            'is-entered',
-        );
-        const reduceMotion = globalThis.matchMedia?.(
-            '(prefers-reduced-motion: reduce)',
-        )?.matches;
-        if (!previous || reduceMotion) {
-            this.onboardingTransitionLocked = false;
-            this.onboardingGuide?.classList.remove('is-transitioning');
-            body.style.removeProperty('min-height');
-            body.replaceChildren(content);
-            return;
-        }
-
-        this.onboardingTransitionLocked = true;
-        this.onboardingGuide?.classList.add('is-transitioning');
-        if (this.onboardingBackButton) this.onboardingBackButton.disabled = true;
-        if (this.onboardingNextButton) this.onboardingNextButton.disabled = true;
-        for (const identified of [previous, ...previous.querySelectorAll('[id]')]) {
-            identified.removeAttribute('id');
-        }
-        previous.classList.add('st-devtools-onboarding-copy-leaving');
-        previous.inert = true;
-        previous.setAttribute('aria-hidden', 'true');
-        content.classList.add('st-devtools-onboarding-copy-entering');
-        body.appendChild(content);
-        const transitionHeight = Math.max(
-            previous.getBoundingClientRect?.().height ?? 0,
-            content.getBoundingClientRect?.().height ?? 0,
-        );
-        if (transitionHeight > 0) body.style.minHeight = `${transitionHeight}px`;
-        const nextFrame = globalThis.requestAnimationFrame
-            ?? ((callback) => setTimeout(callback, 16));
-        nextFrame(() => {
-            if (!previous.isConnected || !content.isConnected) return;
-            previous.classList.add('is-leaving');
-            content.classList.add('is-entered');
-        });
-        this.onboardingCopyTransitionTimer = setTimeout(() => {
-            previous.remove();
-            content.classList.remove(
-                'st-devtools-onboarding-copy-entering',
-                'is-entered',
-            );
-            if (body.childElementCount <= 1) body.style.removeProperty('min-height');
-            this.onboardingCopyTransitionTimer = null;
-            this.onboardingTransitionLocked = false;
-            this.onboardingGuide?.classList.remove('is-transitioning');
-            if (this.onboardingBackButton) {
-                this.onboardingBackButton.disabled = this.onboardingStepIndex <= 0;
-            }
-            if (this.onboardingNextButton && this.onboardingIsOpen()) {
-                this.onboardingNextButton.disabled = false;
-            }
-        }, 220);
+        body.replaceChildren(content);
     }
 
     synchronizeOnboardingStepCompletion(step) {
@@ -6117,6 +6067,8 @@ export class DevToolsWindow {
                 : copy.title,
         });
         title.id = 'st-devtools-onboarding-step-title';
+        const advancedBriefing = this.onboardingKind === 'advanced'
+            && stage === 'briefing';
         const descriptions = stage === 'debrief'
             ? [onboardingSentence(copy.task, 'last')]
             : [
@@ -6124,6 +6076,9 @@ export class DevToolsWindow {
                 step.interaction
                     ? copy.when
                     : onboardingSentence(copy.task),
+                ...(advancedBriefing && step.interaction
+                    ? [onboardingSentence(copy.task)]
+                    : []),
             ];
         content.appendChild(title);
         descriptions
@@ -6131,7 +6086,11 @@ export class DevToolsWindow {
             .forEach((text, index) => {
                 const description = proseElement('p', text, {
                     className: `st-devtools-onboarding-step-copy ${
-                        index === 0 ? 'is-core' : 'is-supporting'
+                        index === 0
+                            ? 'is-core'
+                            : advancedBriefing && index === 2
+                                ? 'is-task'
+                                : 'is-supporting'
                     }`,
                 });
                 if (index === 0) {
@@ -6578,29 +6537,15 @@ export class DevToolsWindow {
     }
 
     onboardingVisualTarget(step = this.currentOnboardingStep()) {
+        const resultTarget = this.onboardingStepStage === 'debrief'
+            && step?.resultTarget
+            ? this.window?.querySelector(step.resultTarget)
+            : null;
+        if (resultTarget) return resultTarget;
         const fallback = step?.target
             ? this.window?.querySelector(step.target)
             : null;
-        if (
-            this.onboardingStepStage === 'practice'
-            && step?.interaction?.event === 'toggle'
-        ) {
-            return this.window?.querySelector(step.interaction.selector) ?? fallback;
-        }
-        if (
-            this.onboardingStepStage !== 'debrief'
-            || step?.interaction?.event !== 'toggle'
-            || step.interaction.state !== 'open'
-        ) return fallback;
-        const disclosure = this.window?.querySelector(step.interaction.selector);
-        if (!disclosure?.open) return fallback;
-        mountDetailsContent(disclosure);
-        const revealed = Array.from(disclosure.children ?? [])
-            .find((child) => child?.tagName !== 'SUMMARY');
-        const boundedReveal = revealed?.querySelector?.(
-            '[data-onboarding-reveal-target]',
-        );
-        return boundedReveal ?? revealed ?? disclosure ?? fallback;
+        return fallback;
     }
 
     refreshOnboardingTarget({ preserveGuideGeometry = false } = {}) {
@@ -6637,19 +6582,30 @@ export class DevToolsWindow {
         if (!this.tutorialIsActive()) return false;
         const step = this.currentOnboardingStep();
         if (!step?.target) return false;
-        if (this.onboardingSession.tabId !== step.tabId) {
-            this.onboardingSession.tabId = step.tabId;
+        const expectedTabId = this.onboardingStepStage === 'debrief'
+            ? step.resultTabId ?? step.tabId
+            : step.tabId;
+        if (this.onboardingSession.tabId !== expectedTabId) {
+            this.onboardingSession.tabId = expectedTabId;
             this.render();
         }
         queueMicrotask(() => {
             if (this.currentOnboardingStep()?.id !== step.id) return;
             this.refreshOnboardingTarget({ preserveGuideGeometry: true });
-            this.focusOnboardingTarget({ focus: true });
+            this.focusOnboardingTarget({
+                nearestOnly: true,
+                focus: true,
+                behavior: 'smooth',
+            });
         });
         return true;
     }
 
-    focusOnboardingTarget({ nearestOnly = false, focus = false } = {}) {
+    focusOnboardingTarget({
+        nearestOnly = false,
+        focus = false,
+        behavior = 'auto',
+    } = {}) {
         const target = this.onboardingTarget;
         const targetInContent = Boolean(this.content?.contains(target));
         const viewport = targetInContent ? this.content : this.window;
@@ -6657,44 +6613,72 @@ export class DevToolsWindow {
         const targetRect = target?.getBoundingClientRect?.();
         if (!target || !viewportRect || !targetRect) return false;
         const inset = 12;
-        const practiceBackRect = targetInContent
-            && this.onboardingStepStage === 'practice'
-            && !this.onboardingPracticeBackButton?.hidden
-            ? this.onboardingPracticeBackButton?.getBoundingClientRect?.()
+        const modalActionsRect = targetInContent
+            && this.onboardingStepStage !== 'practice'
+            ? this.onboardingGuideActions?.getBoundingClientRect?.()
             : null;
-        const visibleBottom = practiceBackRect?.top
-            ? Math.min(viewportRect.bottom - inset, practiceBackRect.top - inset)
+        const occlusionTop = modalActionsRect?.top;
+        const visibleBottom = occlusionTop
+            ? Math.min(viewportRect.bottom - inset, occlusionTop - inset)
             : viewportRect.bottom - inset;
+        const visibleTop = viewportRect.top + inset;
+        const availableHeight = Math.max(0, visibleBottom - visibleTop);
         const fullyVisible = (
-            targetRect.top >= viewportRect.top + inset
+            targetRect.top >= visibleTop
             && targetRect.right <= viewportRect.right - inset
             && targetRect.bottom <= visibleBottom
             && targetRect.left >= viewportRect.left + inset
         );
-        if ((!nearestOnly || !fullyVisible) && targetInContent) {
-            const visibleHeight = Math.max(
-                0,
-                visibleBottom - viewportRect.top - inset * 2,
-            );
-            let desiredTop = viewportRect.top + inset;
-            if (nearestOnly && targetRect.height <= visibleHeight) {
-                if (targetRect.top < viewportRect.top + inset) {
-                    desiredTop = viewportRect.top + inset;
+        const visibleHeight = Math.max(
+            0,
+            Math.min(targetRect.bottom, visibleBottom)
+                - Math.max(targetRect.top, visibleTop),
+        );
+        const oversized = targetRect.height > availableHeight;
+        const minimumUsefulReveal = Math.min(
+            160,
+            Math.max(80, availableHeight * 0.35),
+        );
+        const sufficientlyVisible = fullyVisible || (
+            oversized && visibleHeight >= minimumUsefulReveal
+        );
+        if ((!nearestOnly || !sufficientlyVisible) && targetInContent) {
+            let desiredTop = visibleTop;
+            if (nearestOnly) {
+                if (targetRect.top < visibleTop) {
+                    desiredTop = visibleTop;
                 } else if (targetRect.bottom > visibleBottom) {
-                    desiredTop = visibleBottom - targetRect.height;
+                    desiredTop = oversized
+                        ? visibleBottom - minimumUsefulReveal
+                        : visibleBottom - targetRect.height;
                 } else {
                     desiredTop = targetRect.top;
                 }
             }
+            const currentScrollTop = Number(viewport.scrollTop || 0);
             const nextScrollTop = Math.max(
                 0,
-                Number(viewport.scrollTop || 0) + targetRect.top - desiredTop,
+                currentScrollTop + targetRect.top - desiredTop,
             );
-            if (typeof viewport.scrollTo === 'function') {
-                viewport.scrollTo({ top: nextScrollTop, left: 0, behavior: 'auto' });
-            } else {
-                viewport.scrollTop = nextScrollTop;
-                viewport.scrollLeft = 0;
+            const reduceMotion = globalThis.matchMedia?.(
+                '(prefers-reduced-motion: reduce)',
+            )?.matches;
+            const scrollBehavior = behavior === 'smooth' && !reduceMotion
+                ? 'smooth'
+                : 'auto';
+            const shouldScroll = Math.abs(nextScrollTop - currentScrollTop) > 0.5;
+            if (shouldScroll) {
+                if (typeof viewport.scrollTo === 'function') {
+                    if (scrollBehavior === 'smooth') this.startOnboardingAutoScroll();
+                    viewport.scrollTo({
+                        top: nextScrollTop,
+                        left: 0,
+                        behavior: scrollBehavior,
+                    });
+                } else {
+                    viewport.scrollTop = nextScrollTop;
+                    viewport.scrollLeft = 0;
+                }
             }
         }
         if (targetInContent) viewport.scrollLeft = 0;
@@ -6723,6 +6707,28 @@ export class DevToolsWindow {
             focusTarget?.focus?.({ preventScroll: true });
         }
         return true;
+    }
+
+    startOnboardingAutoScroll() {
+        if (!this.onboardingGuide) return;
+        this.onboardingGuide.classList.add('is-auto-scrolling');
+        if (this.onboardingAutoScrollTimer != null) {
+            clearTimeout(this.onboardingAutoScrollTimer);
+        }
+        this.onboardingAutoScrollTimer = setTimeout(() => {
+            this.finishOnboardingAutoScroll();
+        }, 480);
+    }
+
+    finishOnboardingAutoScroll({ reposition = true } = {}) {
+        if (this.onboardingAutoScrollTimer != null) {
+            clearTimeout(this.onboardingAutoScrollTimer);
+            this.onboardingAutoScrollTimer = null;
+        }
+        this.onboardingGuide?.classList.remove('is-auto-scrolling');
+        if (reposition && this.tutorialIsActive()) {
+            this.scheduleOnboardingGuidePosition();
+        }
     }
 
     scheduleOnboardingGuidePosition({ refocus = false } = {}) {

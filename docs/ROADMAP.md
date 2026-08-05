@@ -1,18 +1,22 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.16.4 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.16.5 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.16.4는 기본·고급 코치마크의 단계 전환을 좌표 유지형 교차 페이드로 바꾸고 좁은 화면의 캡처 CTA를 세로 배치합니다. 기능 설명서 19개는 별도 유사 UI가 아니라 튜토리얼 fixture를 실제 제품 renderer로 렌더한 읽기 전용 clone을 사용합니다.
+v0.16.5는 튜토리얼 동작 완료 뒤 현재 스크롤과 강조 위치를 유지하고, 새 단계의 target이 실제 화면 밖에 있을 때만 최소 스크롤합니다. 토글은 펼친 본문으로 점프하지 않고 클릭한 `summary`를 유지하며 불필요한 페이지·문구·button 모션을 제거했습니다. 고급 기능 가이드와 기능 설명서는 더 조밀한 목록·본문·전후 배치를 사용하고, 기능 설명서 19개는 튜토리얼 fixture를 실제 제품 renderer로 렌더한 읽기 전용 `inert` clone을 계속 사용합니다.
 
-## v0.16.4 — 코치마크 모션·실제 제품 renderer 설명서 · 완료
+## v0.16.5 — 위치 안정화·고밀도 도움말·실제 renderer excerpt · 완료
 
-- 패널·spotlight의 직전 좌표를 보존한 채 설명·체험·추가 설명 사이를 교차 페이드하고 본문·상세 펼침·button 상태에 짧은 모션 추가
+- 상호작용 완료 뒤 현재 scroll offset과 완료한 target 강조를 유지해 결과 설명이 다른 위치로 튀지 않도록 보정
+- disclosure 완료 target을 새 본문이 아닌 사용자가 누른 직접 `summary`로 고정
+- 다음 단계 target이 콘텐츠 viewport 밖에 있을 때만 가장 가까운 가시 경계까지 최소 스크롤하고, 이미 보이는 target에는 스크롤하지 않음
+- 페이지·설명 문구·button 상태의 광범위한 animation을 제거하고 맥락 이해에 필요한 spotlight·disclosure 변화만 유지
 - 좁은 패널에서 캡처 실습 CTA를 설명 아래 full-width로 배치해 문장이 한쪽으로 눌리지 않도록 보정
+- 고급 기능 가이드의 목록·설정 field·note·result와 기능 설명서의 category·문서 row·본문 section·전후 excerpt 간격을 압축해 정보 밀도 향상
 - 기능 설명서 19개를 튜토리얼 fixture 기반 실제 제품 renderer의 분리 DOM 출력으로 교체하고 `inert` clone만 문서에 삽입
 - clone의 event·focus·식별자 참조를 제거하고 실제 저장소·provider·네트워크를 호출하지 않는 결정적 샌드박스 경계 유지
-- 다음 후보: 실제 모바일 사용자 검토에서 전환 속도·spotlight 이동 거리·설명서 excerpt의 정보 밀도를 조정
+- 다음 후보: 실제 모바일 사용자 검토에서 최소 스크롤 경계, 고밀도 본문의 읽기 편의와 excerpt별 대표 상태 수를 조정
 
 ## v0.16.3 — 도움말 여백·제품형 화면 예시·기본 교체 실습 · 완료
 
@@ -82,9 +86,9 @@ v0.16.4는 기본·고급 코치마크의 단계 전환을 좌표 유지형 교�
 - briefing을 기능 의미와 사용 시점 또는 확인 행동의 두 문장 구조로 보강
 - 캡처 실행 control을 이름이 보이는 가로 버튼과 진행 중 상태로 변경하고 320px에서 세로 배치
 - 이미 충족된 checked·open·value 상태를 practice 진입 때 동기화해 반복 조작 제거
-- disclosure 완료 뒤 펼쳐진 본문 영역을 result spotlight 대상으로 전환
+- disclosure 완료 뒤 클릭한 직접 `summary`와 현재 scroll 위치를 result 상태에서도 유지
 - interactive debrief와 최종 단계에 성공 문구·단계 맥락·관찰 결과를 분리
-- copy·dock·spotlight·성공 ring을 one-shot animation으로 연결하고 reduced-motion 정적 대체 적용
+- target ring과 필요한 spotlight 상태에 reduced-motion 정적 대체 적용
 
 ## v0.15.5 — 레퍼런스형 코치마크 단순화 · 완료
 
