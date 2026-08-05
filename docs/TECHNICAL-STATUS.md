@@ -1,4 +1,13 @@
-# v0.16.6 기술 구현 현황
+# v0.16.7 기술 구현 현황
+
+## v0.16.7 coachmark 안전 영역·단일 자동 스크롤
+
+- `onboardingSafeViewportBounds()`는 실제 content viewport에서 target과 가로로 겹치는 상단 callout, 하단 `.st-devtools-app-nav`, debrief 진행 action을 제외해 target이 보여야 할 안전 영역의 `top`·`bottom`을 계산합니다. 현재 callout과 진행 action 사이의 공간이 target 전체 또는 긴 target의 유효 본문을 담지 못하면 callout을 viewport 가장자리에 둔 이론적 영역으로 다시 계산하며, 겹치지 않는 안내 UI는 불필요하게 가시 영역을 줄이지 않습니다.
+- `focusOnboardingTarget()`은 이 안전 영역을 기준으로 fully visible·oversized 상태를 판정합니다. 화면보다 긴 target은 안전 영역 상단에 읽기 시작점을 맞추고, 이미 충분히 보이는 target은 움직이지 않습니다.
+- 단계·stage·조작 완료 전환은 즉시 여러 scroll을 실행하지 않습니다. `scheduleOnboardingGuidePosition({ refocus: true })`의 한 animation frame 안에서 `position → nearest smooth focus → position` 순서로 처리해 callout geometry를 먼저 확정하고 실제 scroll은 한 번만 호출합니다.
+- `scheduleOnboardingRevealSettle()`은 disclosure의 펼침과 `ResizeObserver` 갱신이 이어질 때 안정화 deadline을 뒤로 합칩니다. 안정 뒤 `onboardingRevealVisibilityTarget()`이 `summary`를 제외한 열린 본문 결합 범위를 넘기고 같은 단일 refocus 경로를 사용합니다.
+- `prefers-reduced-motion: reduce`에서는 scroll behavior를 `auto`로 낮추되 동일한 안전 영역 계산과 최종 geometry 보정을 유지합니다.
+- 동작 계약은 offscreen practice target, debrief `resultTarget`, 보이는 summary 아래의 열린 details 본문, 모바일 하단 navigation과 callout 회피 좌표를 수치로 검증합니다.
 
 ## v0.16.6 disclosure spotlight·항목별 실제 UI 기능 설명서
 

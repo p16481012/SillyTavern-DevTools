@@ -631,22 +631,19 @@ test('an intentional navigation action highlights its declared result target', (
 test('an expanded action target gets a debounced smooth reveal after layout settles', async () => {
     const target = {};
     const reveal = {};
-    const focusCalls = [];
-    let positionCalls = 0;
+    const positionCalls = [];
     const state = {
         onboardingTarget: target,
         onboardingRevealSettleTimer: null,
+        onboardingRevealSettleDeadline: null,
         onboardingStepStage: 'debrief',
         tutorialIsActive: () => true,
         onboardingRevealVisibilityTarget(candidate) {
             assert.equal(candidate, target);
             return reveal;
         },
-        focusOnboardingTarget(options) {
-            focusCalls.push(options);
-        },
-        scheduleOnboardingGuidePosition() {
-            positionCalls += 1;
+        scheduleOnboardingGuidePosition(options) {
+            positionCalls.push(options);
         },
     };
 
@@ -655,14 +652,197 @@ test('an expanded action target gets a debounced smooth reveal after layout sett
         true,
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(focusCalls, [{
-        nearestOnly: true,
-        focus: false,
-        behavior: 'smooth',
+    assert.deepEqual(positionCalls, [{
+        refocus: true,
         visibilityTarget: reveal,
     }]);
-    assert.equal(positionCalls, 1);
     assert.equal(state.onboardingRevealSettleTimer, null);
+    assert.equal(state.onboardingRevealSettleDeadline, null);
+});
+
+test('transition refocus follows one position-focus-position path', async () => {
+    const calls = [];
+    const visibilityTarget = {};
+    const state = {
+        onboardingGuidePositionFrame: null,
+        onboardingRefocusAfterPosition: false,
+        onboardingRefocusVisibilityTarget: null,
+        tutorialIsActive: () => true,
+        positionOnboardingGuide() {
+            calls.push('position');
+        },
+        focusOnboardingTarget(options) {
+            calls.push(['focus', options]);
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.scheduleOnboardingGuidePosition.call(state, {
+            refocus: true,
+            visibilityTarget,
+        }),
+        true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(calls, [
+        'position',
+        ['focus', {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+            visibilityTarget,
+        }],
+        'position',
+    ]);
+});
+
+test('debrief pipeline rejects a thin adjacent lane and reveals the whole target', async () => {
+    const fakeStyle = () => ({
+        setProperty(name, value) {
+            this[name] = value;
+        },
+        removeProperty(name) {
+            delete this[name];
+        },
+    });
+    const calls = [];
+    const initialScrollTop = 76;
+    const targetHeight = 48.37;
+    const calloutHeight = 168.86;
+    const content = {
+        scrollTop: initialScrollTop,
+        scrollLeft: 0,
+        contains: (candidate) => candidate === target,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 80,
+            right: 390,
+            bottom: 680,
+            width: 390,
+            height: 600,
+        }),
+        scrollTo(options) {
+            this.scrollTop = options.top;
+            this.scrollLeft = options.left;
+        },
+    };
+    const target = {
+        getBoundingClientRect: () => {
+            const top = 603.02 - (content.scrollTop - initialScrollTop);
+            return {
+                left: 20,
+                top,
+                right: 370,
+                bottom: top + targetHeight,
+                width: 350,
+                height: targetHeight,
+            };
+        },
+    };
+    const guideClasses = new Set();
+    const guide = {
+        hidden: false,
+        dataset: {},
+        style: fakeStyle(),
+        classList: {
+            add: (...names) => names.forEach((name) => guideClasses.add(name)),
+            remove: (...names) => names.forEach((name) => guideClasses.delete(name)),
+            toggle(name, force) {
+                if (force) guideClasses.add(name);
+                else guideClasses.delete(name);
+            },
+        },
+    };
+    const callout = {
+        hidden: false,
+        style: fakeStyle(),
+        getBoundingClientRect() {
+            const top = Number.parseFloat(this.style.top ?? '403');
+            const left = Number.parseFloat(this.style.left ?? '20');
+            return {
+                left,
+                top,
+                right: left + 350,
+                bottom: top + calloutHeight,
+                width: 350,
+                height: calloutHeight,
+            };
+        },
+    };
+    const actions = {
+        hidden: false,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 624,
+            right: 390,
+            bottom: 680,
+            width: 390,
+            height: 56,
+        }),
+    };
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'debrief',
+        onboardingGuide: guide,
+        onboardingSpotlight: { hidden: true, style: fakeStyle() },
+        onboardingGuideBody: callout,
+        onboardingGuideActions: actions,
+        onboardingPracticeDock: null,
+        onboardingGuidePositionFrame: null,
+        onboardingRefocusAfterPosition: false,
+        onboardingRefocusVisibilityTarget: null,
+        tutorialIsActive: () => true,
+        content,
+        window: {
+            style: fakeStyle(),
+            getBoundingClientRect: () => ({
+                left: 0,
+                top: 0,
+                right: 390,
+                bottom: 760,
+                width: 390,
+                height: 760,
+            }),
+            querySelector(selector) {
+                if (selector !== '.st-devtools-app-nav') return null;
+                return {
+                    hidden: false,
+                    getBoundingClientRect: () => ({
+                        left: 0,
+                        top: 680,
+                        right: 390,
+                        bottom: 760,
+                        width: 390,
+                        height: 80,
+                    }),
+                };
+            },
+        },
+        startOnboardingAutoScroll() {},
+        positionOnboardingGuide() {
+            calls.push('position');
+            return DevToolsWindow.prototype.positionOnboardingGuide.call(this);
+        },
+        focusOnboardingTarget(options) {
+            calls.push('focus');
+            return DevToolsWindow.prototype.focusOnboardingTarget.call(this, options);
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.scheduleOnboardingGuidePosition.call(state, {
+            refocus: true,
+        }),
+        true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(calls, ['position', 'focus', 'position']);
+    const finalTargetRect = target.getBoundingClientRect();
+    const finalCalloutRect = callout.getBoundingClientRect();
+    assert.ok(finalTargetRect.top >= finalCalloutRect.bottom + 12);
+    assert.ok(finalTargetRect.bottom <= actions.getBoundingClientRect().top - 12);
+    assert.ok(content.scrollTop > initialScrollTop);
 });
 
 test('reveal scrolling measures the opened body instead of the disclosure summary', () => {
@@ -691,6 +871,453 @@ test('reveal scrolling measures the opened body instead of the disclosure summar
         ),
         body,
     );
+});
+
+test('practice entry makes one nearest smooth scroll for an offscreen target', () => {
+    const scrollCalls = [];
+    let autoScrollStarts = 0;
+    const target = {
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 760,
+            right: 380,
+            bottom: 820,
+            width: 360,
+            height: 60,
+        }),
+    };
+    const content = {
+        scrollTop: 140,
+        scrollLeft: 37,
+        contains: (candidate) => candidate === target,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 400,
+            bottom: 700,
+            width: 400,
+            height: 600,
+        }),
+        scrollTo(options) {
+            scrollCalls.push(options);
+            this.scrollTop = options.top;
+            this.scrollLeft = options.left;
+        },
+    };
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'practice',
+        content,
+        window: {},
+        onboardingGuideActions: {
+            getBoundingClientRect: () => ({ top: 500 }),
+        },
+        startOnboardingAutoScroll() {
+            autoScrollStarts += 1;
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+        }),
+        true,
+    );
+    assert.deepEqual(scrollCalls, [{
+        top: 272,
+        left: 0,
+        behavior: 'smooth',
+    }]);
+    assert.equal(autoScrollStarts, 1);
+    assert.equal(content.scrollLeft, 0);
+});
+
+test('practice scrolling keeps the target between the top callout and bottom navigation', () => {
+    const scrollCalls = [];
+    const target = {
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 620,
+            right: 380,
+            bottom: 820,
+            width: 360,
+            height: 200,
+        }),
+    };
+    const content = {
+        scrollTop: 100,
+        scrollLeft: 0,
+        contains: (candidate) => candidate === target,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 400,
+            bottom: 760,
+            width: 400,
+            height: 660,
+        }),
+        scrollTo(options) {
+            scrollCalls.push(options);
+        },
+    };
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'practice',
+        content,
+        window: {
+            querySelector(selector) {
+                if (selector !== '.st-devtools-app-nav') return null;
+                return {
+                    hidden: false,
+                    getBoundingClientRect: () => ({
+                        left: 0,
+                        top: 680,
+                        right: 400,
+                        bottom: 760,
+                    }),
+                };
+            },
+        },
+        onboardingGuide: { dataset: { placement: 'top' } },
+        onboardingPracticeDock: {
+            hidden: false,
+            getBoundingClientRect: () => ({
+                left: 10,
+                top: 110,
+                right: 390,
+                bottom: 260,
+            }),
+        },
+        startOnboardingAutoScroll() {},
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+        }),
+        true,
+    );
+    assert.deepEqual(scrollCalls, [{
+        top: 252,
+        left: 0,
+        behavior: 'smooth',
+    }]);
+});
+
+test('debrief scrolling moves a target out from under the top result callout', () => {
+    const scrollCalls = [];
+    const target = {
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 150,
+            right: 380,
+            bottom: 210,
+            width: 360,
+            height: 60,
+        }),
+    };
+    const content = {
+        scrollTop: 300,
+        scrollLeft: 0,
+        contains: (candidate) => candidate === target,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 400,
+            bottom: 760,
+            width: 400,
+            height: 660,
+        }),
+        scrollTo(options) {
+            scrollCalls.push(options);
+        },
+    };
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'debrief',
+        content,
+        window: {},
+        onboardingGuide: { dataset: { placement: 'top' } },
+        onboardingGuideBody: {
+            hidden: false,
+            getBoundingClientRect: () => ({
+                left: 10,
+                top: 110,
+                right: 390,
+                bottom: 280,
+            }),
+        },
+        onboardingGuideActions: {
+            hidden: false,
+            getBoundingClientRect: () => ({
+                left: 10,
+                top: 650,
+                right: 390,
+                bottom: 710,
+            }),
+        },
+        startOnboardingAutoScroll() {},
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+        }),
+        true,
+    );
+    assert.deepEqual(scrollCalls, [{
+        top: 158,
+        left: 0,
+        behavior: 'smooth',
+    }]);
+});
+
+test('debrief scroll follows its declared result target above the bottom controls', () => {
+    const step = onboardingStep('rules-related-sources');
+    const action = {};
+    const result = {
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 650,
+            right: 380,
+            bottom: 710,
+            width: 360,
+            height: 60,
+        }),
+    };
+    const scrollCalls = [];
+    const content = {
+        scrollTop: 200,
+        scrollLeft: 0,
+        contains: (candidate) => candidate === result,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 400,
+            bottom: 800,
+            width: 400,
+            height: 700,
+        }),
+        scrollTo(options) {
+            scrollCalls.push(options);
+        },
+    };
+    const state = {
+        onboardingStepStage: 'debrief',
+        currentOnboardingStep: () => step,
+        window: {
+            querySelector(selector) {
+                if (selector === step.target) return action;
+                if (selector === step.resultTarget) return result;
+                return null;
+            },
+        },
+        content,
+        onboardingGuideActions: {
+            getBoundingClientRect: () => ({ top: 620 }),
+        },
+        startOnboardingAutoScroll() {},
+    };
+    state.onboardingTarget = DevToolsWindow.prototype.onboardingVisualTarget.call(
+        state,
+        step,
+    );
+
+    assert.equal(state.onboardingTarget, result);
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+        }),
+        true,
+    );
+    assert.deepEqual(scrollCalls, [{
+        top: 302,
+        left: 0,
+        behavior: 'smooth',
+    }]);
+});
+
+test('opened disclosure scrolling uses revealed body geometry below a visible summary', () => {
+    const summary = {
+        tagName: 'SUMMARY',
+        hidden: false,
+    };
+    const body = {
+        tagName: 'DIV',
+        hidden: false,
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 740,
+            right: 380,
+            bottom: 1040,
+            width: 360,
+            height: 300,
+        }),
+    };
+    const disclosure = {
+        children: [summary, body],
+        matches: (selector) => selector === 'details[open]',
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 150,
+            right: 380,
+            bottom: 210,
+            width: 360,
+            height: 60,
+        }),
+    };
+    const scrollCalls = [];
+    const content = {
+        scrollTop: 320,
+        scrollLeft: 0,
+        contains: (candidate) => candidate === disclosure,
+        getBoundingClientRect: () => ({
+            left: 0,
+            top: 100,
+            right: 400,
+            bottom: 760,
+            width: 400,
+            height: 660,
+        }),
+        scrollTo(options) {
+            scrollCalls.push(options);
+        },
+    };
+    const state = {
+        onboardingTarget: disclosure,
+        onboardingStepStage: 'debrief',
+        content,
+        window: {},
+        onboardingGuideActions: {
+            getBoundingClientRect: () => ({ top: 650 }),
+        },
+        startOnboardingAutoScroll() {},
+    };
+    const visibilityTarget = DevToolsWindow.prototype.onboardingRevealVisibilityTarget.call(
+        state,
+        disclosure,
+    );
+
+    assert.equal(visibilityTarget, body);
+    assert.equal(
+        DevToolsWindow.prototype.focusOnboardingTarget.call(state, {
+            nearestOnly: true,
+            focus: false,
+            behavior: 'smooth',
+            visibilityTarget,
+        }),
+        true,
+    );
+    assert.deepEqual(scrollCalls, [{
+        top: 722,
+        left: 0,
+        behavior: 'smooth',
+    }]);
+});
+
+test('coachmark placement keeps its callout clear of the bottom app navigation', () => {
+    const fakeStyle = () => ({
+        setProperty(name, value) {
+            this[name] = value;
+        },
+        removeProperty(name) {
+            delete this[name];
+        },
+    });
+    const classes = new Set();
+    const guide = {
+        hidden: false,
+        dataset: {},
+        style: fakeStyle(),
+        classList: {
+            add: (...names) => names.forEach((name) => classes.add(name)),
+            remove: (...names) => names.forEach((name) => classes.delete(name)),
+            toggle(name, force) {
+                if (force) classes.add(name);
+                else classes.delete(name);
+            },
+        },
+    };
+    const target = {
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 610,
+            right: 370,
+            bottom: 690,
+            width: 350,
+            height: 80,
+        }),
+    };
+    const spotlight = {
+        hidden: true,
+        style: fakeStyle(),
+    };
+    const callout = {
+        style: fakeStyle(),
+        getBoundingClientRect: () => ({ width: 330, height: 180 }),
+    };
+    const navigationRect = {
+        left: 0,
+        top: 764,
+        right: 390,
+        bottom: 844,
+        width: 390,
+        height: 80,
+    };
+    const state = {
+        onboardingTarget: target,
+        onboardingStepStage: 'debrief',
+        onboardingGuide: guide,
+        onboardingSpotlight: spotlight,
+        onboardingGuideBody: callout,
+        onboardingPracticeDock: null,
+        tutorialIsActive: () => true,
+        window: {
+            style: fakeStyle(),
+            getBoundingClientRect: () => ({
+                left: 0,
+                top: 0,
+                right: 390,
+                bottom: 844,
+                width: 390,
+                height: 844,
+            }),
+            querySelector: (selector) => (
+                selector === '.st-devtools-app-nav' ? { getBoundingClientRect: () => navigationRect } : null
+            ),
+        },
+        content: {
+            contains: (candidate) => candidate === target,
+            getBoundingClientRect: () => ({
+                left: 0,
+                top: 90,
+                right: 390,
+                bottom: 764,
+                width: 390,
+                height: 674,
+            }),
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.positionOnboardingGuide.call(state),
+        true,
+    );
+    assert.equal(guide.dataset.placement, 'top');
+    assert.equal(guide.style['--st-devtools-onboarding-nav-clearance'], '92px');
+    assert.equal(callout.style.left, '30px');
+    assert.equal(callout.style.top, '391px');
+    assert.equal(spotlight.style.top, '603px');
+    assert.ok(Number.parseInt(callout.style.top, 10) + 180 < Number.parseInt(spotlight.style.top, 10));
+    assert.ok(Number.parseInt(callout.style.top, 10) + 180 < navigationRect.top);
 });
 
 test('interactive steps enter practice directly and keep one result acknowledgement', async () => {
@@ -1368,11 +1995,14 @@ test('viewport resizing measures clearance before refocusing and repositioning',
         '\n    scheduleOnboardingGuidePosition(',
         '\n    positionOnboardingGuide()',
     );
-    assert.match(schedule, /\{ refocus = false \} = \{\}/u);
-    assert.match(schedule, /if \(refocus\) this\.onboardingRefocusAfterPosition = true/u);
+    assert.match(schedule, /refocus = false,[\s\S]*?visibilityTarget = null/u);
     assert.match(
         schedule,
-        /this\.positionOnboardingGuide\(\);[\s\S]*?if \(shouldRefocus\)[\s\S]*?focusOnboardingTarget\(\{ nearestOnly: true, focus: false \}\)[\s\S]*?this\.positionOnboardingGuide\(\)/u,
+        /if \(refocus\) \{[\s\S]*?this\.onboardingRefocusAfterPosition = true;[\s\S]*?this\.onboardingRefocusVisibilityTarget = visibilityTarget/u,
+    );
+    assert.match(
+        schedule,
+        /this\.positionOnboardingGuide\(\);[\s\S]*?if \(shouldRefocus\)[\s\S]*?focusOnboardingTarget\(\{[\s\S]*?nearestOnly: true,[\s\S]*?focus: false,[\s\S]*?behavior: 'smooth',[\s\S]*?visibilityTarget: refocusVisibilityTarget,[\s\S]*?\}\)[\s\S]*?this\.positionOnboardingGuide\(\)/u,
     );
 });
 

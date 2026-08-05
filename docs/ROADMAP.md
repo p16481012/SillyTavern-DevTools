@@ -1,10 +1,19 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.16.6 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.16.7 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.16.6은 disclosure를 펼친 뒤 spotlight를 열린 본문 전체로 확장하고 레이아웃 안정 뒤 해당 본문이 보이는 위치로 한 번만 부드럽게 스크롤합니다. 기능 설명서 19개는 각 설명 section과 대응하는 실제 제품 renderer fragment를 1:1로 배치하며, 읽기 전용 clone 안의 작동하지 않는 툴팁 control을 제거했습니다.
+v0.16.7은 단계 진입·완료 target을 상단 코치마크와 하단 앱 메뉴·진행 control 사이의 안전 영역으로 자동 이동합니다. 안내 geometry를 먼저 계산하고 가장 가까운 위치로 한 번만 부드럽게 스크롤하며, disclosure는 펼침 안정 뒤 열린 본문 범위로 같은 경로를 다시 계산합니다. v0.16.6의 항목별 실제 제품 renderer 기능 설명서와 읽기 전용 격리도 유지합니다.
+
+## v0.16.7 — coachmark 안전 영역·단일 자동 스크롤 · 완료
+
+- target과 가로로 겹치는 상단 callout·하단 app navigation·debrief 진행 control을 제외한 실제 가시 영역 계산
+- 단계 진입·완료 때 안내 배치 후 nearest smooth scroll 한 번과 최종 geometry 보정만 수행해 중간 jump·중복 scroll 제거
+- disclosure의 펼침 animation·지연 mount·ResizeObserver 갱신을 안정화 deadline으로 합친 뒤 열린 본문 범위를 기준으로 이동
+- 긴 target은 안전 영역 상단에서 읽기 시작점을 드러내고 이미 충분히 보이는 target에는 불필요한 이동 생략
+- offscreen practice·debrief 결과·열린 본문·모바일 하단 navigation/callout 좌표 계약을 자동 검증
+- 다음 후보: 실제 모바일 사용자 검토에서 긴 본문의 유효 노출 비율과 매우 큰 callout의 fallback 위치 조정
 
 ## v0.16.6 — 열린 본문 spotlight·항목별 실제 UI 설명서 · 완료
 

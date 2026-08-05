@@ -1092,8 +1092,10 @@ export class DevToolsWindow {
         this.onboardingLocateTimer = null;
         this.onboardingAutoScrollTimer = null;
         this.onboardingRevealSettleTimer = null;
+        this.onboardingRevealSettleDeadline = null;
         this.onboardingGuidePositionFrame = null;
         this.onboardingRefocusAfterPosition = false;
+        this.onboardingRefocusVisibilityTarget = null;
         this.onboardingTargetResizeObserver = null;
         this.onboardingGuideRepositionHandler = () => {
             this.scheduleOnboardingGuidePosition();
@@ -5703,6 +5705,7 @@ export class DevToolsWindow {
             clearTimeout(this.onboardingRevealSettleTimer);
             this.onboardingRevealSettleTimer = null;
         }
+        this.onboardingRevealSettleDeadline = null;
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
             cancelFrame(this.onboardingGuidePositionFrame);
@@ -5710,6 +5713,7 @@ export class DevToolsWindow {
         }
         this.finishOnboardingAutoScroll({ reposition: false });
         this.onboardingRefocusAfterPosition = false;
+        this.onboardingRefocusVisibilityTarget = null;
         this.window?.removeEventListener('click', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('change', this.onboardingInteractionHandler, true);
         this.window?.removeEventListener('input', this.onboardingInteractionHandler, true);
@@ -6080,6 +6084,10 @@ export class DevToolsWindow {
         if (!this.onboardingIsOpen()) return;
         let preserveGuideGeometry = false;
         let guidePanelHadFocus = false;
+        let step = null;
+        let stepChanged = false;
+        let stageChanged = false;
+        let actionCompleted = false;
         if (this.onboardingPhase === 'invitation') {
             this.clearOnboardingTarget();
             this.onboardingGuide.hidden = true;
@@ -6090,13 +6098,13 @@ export class DevToolsWindow {
             return;
         } else {
             const steps = DevToolsWindow.prototype.activeOnboardingSteps.call(this);
-            const step = steps[this.onboardingStepIndex] ?? steps[0];
+            step = steps[this.onboardingStepIndex] ?? steps[0];
             const group = ONBOARDING_GROUPS.find(({ id }) => id === step.group)
                 ?? ONBOARDING_GROUPS[0];
-            const stepChanged = this.onboardingGuide.dataset.step !== step.id;
-            const stageChanged = this.onboardingGuide.dataset.stage
+            stepChanged = this.onboardingGuide.dataset.step !== step.id;
+            stageChanged = this.onboardingGuide.dataset.stage
                 !== this.onboardingStepStage;
-            const actionCompleted = Boolean(
+            actionCompleted = Boolean(
                 !stepChanged
                 && stageChanged
                 && this.onboardingStepStage === 'debrief'
@@ -6215,23 +6223,19 @@ export class DevToolsWindow {
                 && step.interaction?.event === 'toggle'
                 && step.interaction.state === 'open',
             );
-            const targetAvailable = settlingReveal
-                ? Boolean(this.onboardingTarget)
-                : this.focusOnboardingTarget({
-                    nearestOnly: true,
-                    focus: false,
-                    behavior: actionCompleted || stepChanged ? 'smooth' : 'auto',
-                });
+            const targetAvailable = Boolean(this.onboardingTarget);
             if (settlingReveal) {
-                this.scheduleOnboardingRevealSettle();
+                this.scheduleOnboardingRevealSettle(300);
+            } else {
+                this.scheduleOnboardingGuidePosition({
+                    refocus: actionCompleted || stepChanged || stageChanged,
+                });
             }
             if (this.onboardingStepStage === 'practice') {
                 if (!targetAvailable || guidePanelHadFocus) {
                     this.onboardingPracticeDock?.focus({ preventScroll: true });
                 }
-                this.scheduleOnboardingGuidePosition();
             } else {
-                this.scheduleOnboardingGuidePosition();
                 this.onboardingGuidePanel?.focus({ preventScroll: true });
             }
         });
@@ -6910,6 +6914,115 @@ export class DevToolsWindow {
         };
     }
 
+    onboardingSafeViewportBounds(viewportRect, targetRect, inset = 12) {
+        const baseTop = viewportRect.top + inset;
+        const baseBottom = viewportRect.bottom - inset;
+        let top = baseTop;
+        let bottom = baseBottom;
+        const horizontallyOverlapsTarget = (rect) => {
+            if (!rect) return false;
+            if (![rect.left, rect.right, targetRect.left, targetRect.right]
+                .every(Number.isFinite)) return true;
+            return Math.min(rect.right, targetRect.right)
+                > Math.max(rect.left, targetRect.left);
+        };
+        const reserveBottom = (element) => {
+            if (!element || element.hidden === true) return;
+            const rect = element.getBoundingClientRect?.();
+            if (
+                !Number.isFinite(rect?.top)
+                || rect.top <= viewportRect.top
+                || rect.top >= viewportRect.bottom
+                || !horizontallyOverlapsTarget(rect)
+            ) return;
+            bottom = Math.min(bottom, rect.top - inset);
+        };
+
+        reserveBottom(this.window?.querySelector?.('.st-devtools-app-nav'));
+        if (this.onboardingStepStage !== 'practice') {
+            reserveBottom(this.onboardingGuideActions);
+        }
+        const controlsBottom = bottom;
+
+        const callout = this.onboardingStepStage === 'practice'
+            ? this.onboardingPracticeDock
+            : this.onboardingGuideBody;
+        const calloutRect = callout?.hidden === true
+            ? null
+            : callout?.getBoundingClientRect?.();
+        if (
+            Number.isFinite(calloutRect?.top)
+            && Number.isFinite(calloutRect?.bottom)
+            && calloutRect.bottom > viewportRect.top
+            && calloutRect.top < viewportRect.bottom
+            && horizontallyOverlapsTarget(calloutRect)
+        ) {
+            const inferredPlacement = (
+                (calloutRect.top + calloutRect.bottom) / 2
+                <= (targetRect.top + targetRect.bottom) / 2
+            ) ? 'top' : 'bottom';
+            const placement = this.onboardingGuide?.dataset?.placement
+                ?? inferredPlacement;
+            if (placement === 'top') {
+                top = Math.max(top, calloutRect.bottom + inset);
+            } else if (placement === 'bottom') {
+                bottom = Math.min(bottom, calloutRect.top - inset);
+            }
+
+            // A callout that currently follows the target can leave only a thin
+            // strip between itself and the fixed controls. Scrolling against that
+            // strip cannot converge because the callout moves with the target.
+            // Measure the lane that would exist with the callout resting on the
+            // corresponding viewport edge and use it when the current lane cannot
+            // hold the whole target (or a useful portion of an oversized target).
+            const calloutHeight = Math.max(
+                0,
+                Number(calloutRect.height)
+                    || calloutRect.bottom - calloutRect.top,
+            );
+            const theoreticalBounds = placement === 'top'
+                ? {
+                    top: baseTop + calloutHeight + inset,
+                    bottom: controlsBottom,
+                }
+                : {
+                    top: baseTop,
+                    bottom: controlsBottom - calloutHeight - inset,
+                };
+            const currentLaneHeight = Math.max(0, bottom - top);
+            const theoreticalLaneHeight = Math.max(
+                0,
+                theoreticalBounds.bottom - theoreticalBounds.top,
+            );
+            const targetHeight = Math.max(
+                0,
+                Number(targetRect.height)
+                    || targetRect.bottom - targetRect.top,
+            );
+            const requiredRevealHeight = targetHeight > theoreticalLaneHeight
+                ? Math.min(
+                    targetHeight,
+                    theoreticalLaneHeight,
+                    Math.max(120, theoreticalLaneHeight * 0.6),
+                )
+                : targetHeight;
+            if (
+                currentLaneHeight < requiredRevealHeight
+                && theoreticalLaneHeight > currentLaneHeight
+            ) {
+                ({ top, bottom } = theoreticalBounds);
+            }
+        }
+
+        if (bottom <= top) {
+            return {
+                top: baseTop,
+                bottom: controlsBottom > baseTop ? controlsBottom : baseBottom,
+            };
+        }
+        return { top, bottom };
+    }
+
     focusOnboardingTarget({
         nearestOnly = false,
         focus = false,
@@ -6923,15 +7036,19 @@ export class DevToolsWindow {
         const targetRect = (visibilityTarget ?? target)?.getBoundingClientRect?.();
         if (!target || !viewportRect || !targetRect) return false;
         const inset = 12;
-        const modalActionsRect = targetInContent
-            && this.onboardingStepStage !== 'practice'
-            ? this.onboardingGuideActions?.getBoundingClientRect?.()
-            : null;
-        const occlusionTop = modalActionsRect?.top;
-        const visibleBottom = occlusionTop
-            ? Math.min(viewportRect.bottom - inset, occlusionTop - inset)
-            : viewportRect.bottom - inset;
-        const visibleTop = viewportRect.top + inset;
+        const safeBounds = targetInContent
+            ? DevToolsWindow.prototype.onboardingSafeViewportBounds.call(
+                this,
+                viewportRect,
+                targetRect,
+                inset,
+            )
+            : {
+                top: viewportRect.top + inset,
+                bottom: viewportRect.bottom - inset,
+            };
+        const visibleTop = safeBounds.top;
+        const visibleBottom = safeBounds.bottom;
         const availableHeight = Math.max(0, visibleBottom - visibleTop);
         const fullyVisible = (
             targetRect.top >= visibleTop
@@ -6946,8 +7063,9 @@ export class DevToolsWindow {
         );
         const oversized = targetRect.height > availableHeight;
         const minimumUsefulReveal = Math.min(
-            160,
-            Math.max(80, availableHeight * 0.35),
+            targetRect.height,
+            availableHeight,
+            Math.max(120, availableHeight * 0.6),
         );
         const sufficientlyVisible = fullyVisible || (
             oversized && visibleHeight >= minimumUsefulReveal
@@ -6959,7 +7077,7 @@ export class DevToolsWindow {
                     desiredTop = visibleTop;
                 } else if (targetRect.bottom > visibleBottom) {
                     desiredTop = oversized
-                        ? visibleBottom - minimumUsefulReveal
+                        ? visibleTop
                         : visibleBottom - targetRect.height;
                 } else {
                     desiredTop = targetRect.top;
@@ -7019,27 +7137,31 @@ export class DevToolsWindow {
         return true;
     }
 
-    scheduleOnboardingRevealSettle(delay = 90) {
+    scheduleOnboardingRevealSettle(delay = 120) {
         const target = this.onboardingTarget;
         if (!target || !this.tutorialIsActive()) return false;
+        const now = Date.now();
+        const deadline = Math.max(
+            Number(this.onboardingRevealSettleDeadline) || 0,
+            now + Math.max(0, delay),
+        );
+        this.onboardingRevealSettleDeadline = deadline;
         if (this.onboardingRevealSettleTimer != null) {
             clearTimeout(this.onboardingRevealSettleTimer);
         }
         this.onboardingRevealSettleTimer = setTimeout(() => {
             this.onboardingRevealSettleTimer = null;
+            this.onboardingRevealSettleDeadline = null;
             if (
                 !this.tutorialIsActive()
                 || this.onboardingStepStage !== 'debrief'
                 || this.onboardingTarget !== target
             ) return;
-            this.focusOnboardingTarget({
-                nearestOnly: true,
-                focus: false,
-                behavior: 'smooth',
+            this.scheduleOnboardingGuidePosition({
+                refocus: true,
                 visibilityTarget: this.onboardingRevealVisibilityTarget(target),
             });
-            this.scheduleOnboardingGuidePosition();
-        }, delay);
+        }, Math.max(0, deadline - Date.now()));
         return true;
     }
 
@@ -7065,9 +7187,15 @@ export class DevToolsWindow {
         }
     }
 
-    scheduleOnboardingGuidePosition({ refocus = false } = {}) {
+    scheduleOnboardingGuidePosition({
+        refocus = false,
+        visibilityTarget = null,
+    } = {}) {
         if (!this.tutorialIsActive()) return false;
-        if (refocus) this.onboardingRefocusAfterPosition = true;
+        if (refocus) {
+            this.onboardingRefocusAfterPosition = true;
+            this.onboardingRefocusVisibilityTarget = visibilityTarget;
+        }
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
             cancelFrame(this.onboardingGuidePositionFrame);
@@ -7078,12 +7206,18 @@ export class DevToolsWindow {
             this.onboardingGuidePositionFrame = null;
             const shouldRefocus = Boolean(
                 this.onboardingRefocusAfterPosition
-                && this.onboardingStepStage === 'practice'
             );
+            const refocusVisibilityTarget = this.onboardingRefocusVisibilityTarget;
             this.onboardingRefocusAfterPosition = false;
+            this.onboardingRefocusVisibilityTarget = null;
             this.positionOnboardingGuide();
             if (shouldRefocus) {
-                this.focusOnboardingTarget({ nearestOnly: true, focus: false });
+                this.focusOnboardingTarget({
+                    nearestOnly: true,
+                    focus: false,
+                    behavior: 'smooth',
+                    visibilityTarget: refocusVisibilityTarget,
+                });
                 this.positionOnboardingGuide();
             }
         });

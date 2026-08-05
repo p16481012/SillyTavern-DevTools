@@ -658,15 +658,19 @@ test('coachmark stages switch immediately, isolate inactive surfaces, and only a
     assert.match(update, /const settlingReveal = Boolean/u);
     assert.match(
         update,
-        /const targetAvailable = settlingReveal[\s\S]*?\? Boolean\(this\.onboardingTarget\)[\s\S]*?: this\.focusOnboardingTarget/u,
+        /const targetAvailable = Boolean\(this\.onboardingTarget\)/u,
     );
-    assert.match(update, /const actionCompleted = Boolean\([\s\S]*?!stepChanged[\s\S]*?stageChanged/u);
-    assert.match(update, /behavior: actionCompleted \|\| stepChanged \? 'smooth' : 'auto'/u);
+    assert.match(update, /let actionCompleted = false/u);
+    assert.match(update, /actionCompleted = Boolean\([\s\S]*?!stepChanged[\s\S]*?stageChanged/u);
     assert.match(
         update,
-        /if \(settlingReveal\)[\s\S]*?scheduleOnboardingRevealSettle\(\)/u,
+        /scheduleOnboardingGuidePosition\(\{[\s\S]*?refocus: actionCompleted \|\| stepChanged \|\| stageChanged/u,
     );
-    assert.doesNotMatch(update, /scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u);
+    assert.match(
+        update,
+        /if \(settlingReveal\)[\s\S]*?scheduleOnboardingRevealSettle\(300\)/u,
+    );
+    assert.doesNotMatch(update, /const targetAvailable[\s\S]*?focusOnboardingTarget/u);
     assert.match(surface, /surface\.hidden = false/u);
     assert.match(surface, /classList\.toggle\('is-active', active\)/u);
     assert.match(surface, /toggleAttribute\('inert', !active\)/u);
@@ -698,6 +702,101 @@ test('coachmark stages switch immediately, isolate inactive surfaces, and only a
         style,
         /\.st-devtools-onboarding-practice-dock\.has-panel-action[\s\S]*?> \.st-devtools-onboarding-practice-action \{[\s\S]*?width: 100% !important/u,
     );
+});
+
+test('completed onboarding actions remain available to the deferred positioning pass', () => {
+    const step = ONBOARDING_STEPS.find(({ id }) => id === 'explorer-included-filter');
+    assert.ok(step);
+
+    const scheduledPositions = [];
+    const state = {
+        onboardingPhase: 'steps',
+        onboardingSteps: [step],
+        onboardingStepIndex: 0,
+        onboardingStepStage: 'debrief',
+        onboardingKind: 'basic',
+        onboardingGuide: {
+            hidden: true,
+            dataset: {
+                step: step.id,
+                stage: 'practice',
+            },
+        },
+        onboardingSession: {
+            tabId: step.tabId,
+            completedActions: new Set([step.id]),
+            skippedActions: new Set(),
+        },
+        onboardingInvitationOverlay: { hidden: false },
+        onboardingProgress: { textContent: '' },
+        onboardingAnnouncement: { textContent: '' },
+        onboardingGuidePanel: {
+            contains: () => false,
+            focus() {},
+        },
+        onboardingPracticeDock: {},
+        onboardingPracticeBackButton: {},
+        onboardingPracticeExitButton: {},
+        onboardingBlocker: {
+            hidden: true,
+            classList: { toggle() {} },
+        },
+        onboardingBackButton: {},
+        onboardingNextButton: {
+            setAttribute() {},
+        },
+        onboardingBody: {
+            firstElementChild: {},
+            scrollTop: 0,
+        },
+        onboardingPracticeActions: {
+            replaceChildren() {},
+        },
+        window: {
+            dataset: {},
+            classList: { remove() {} },
+        },
+        onboardingIsOpen: () => true,
+        onboardingGroupLabel: () => '프롬프트',
+        onboardingStepCopy: () => '테스트 단계',
+        currentOnboardingStep: () => step,
+        syncOnboardingModalState() {},
+        setOnboardingSurfaceActive() {},
+        replaceOnboardingGuideBody() {},
+        renderOnboardingStep: () => ({}),
+        refreshOnboardingTarget() {
+            this.onboardingTarget = {};
+        },
+        scheduleOnboardingRevealSettle() {
+            assert.fail('a click action must not use the toggle reveal-settle path');
+        },
+        scheduleOnboardingGuidePosition(options) {
+            scheduledPositions.push(options);
+        },
+    };
+
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    const originalQueueMicrotask = globalThis.queueMicrotask;
+    Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        writable: true,
+        value: { activeElement: null },
+    });
+    globalThis.queueMicrotask = (callback) => callback();
+    try {
+        assert.doesNotThrow(() => {
+            DevToolsWindow.prototype.updateOnboardingView.call(state);
+        });
+    } finally {
+        globalThis.queueMicrotask = originalQueueMicrotask;
+        if (documentDescriptor) {
+            Object.defineProperty(globalThis, 'document', documentDescriptor);
+        } else {
+            delete globalThis.document;
+        }
+    }
+
+    assert.deepEqual(scheduledPositions, [{ refocus: true }]);
 });
 
 test('advanced guide previews and results stay hidden until their step reveals them', async () => {

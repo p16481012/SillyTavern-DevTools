@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.6의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 열린 disclosure 전체를 따라가는 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.7의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 상단 설명·하단 메뉴 사이의 안전 영역과 열린 disclosure 전체를 따라가는 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -28,9 +28,11 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.16.6의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+v0.16.7의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
 
-상호작용을 완료해 `debrief`로 들어갈 때 일반 button·input·select는 현재 target geometry를 유지합니다. 열림 disclosure는 `onboardingVisualTarget()`이 `details[open]` 전체를 결과 target으로 선택하고 `ResizeObserver`가 공개된 본문의 최종 크기를 따라 spotlight를 확장합니다. `scheduleOnboardingRevealSettle()`은 짧은 안정화 뒤 `onboardingRevealVisibilityTarget()`이 계산한 열린 본문 결합 범위를 기준으로 nearest smooth scroll을 한 번만 실행합니다. 이미 충분히 보이는 범위에는 이동하지 않고 oversized 본문도 최소 유효 높이만 드러냅니다. 페이지 전체·설명 문구·button 상태에 광범위한 animation을 적용하지 않으며 `prefers-reduced-motion`에서는 즉시 이동합니다. 캡처처럼 패널 action이 있는 단계는 넓은 화면에서 본문 폭을 확보하고 520px 이하 container에서는 action을 설명 아래 full-width로 배치합니다.
+상호작용을 완료해 `debrief`로 들어가거나 새 단계의 `practice`를 시작하면 `onboardingSafeViewportBounds()`가 target과 가로로 겹치는 상단 callout, 하단 `.st-devtools-app-nav`, debrief 진행 action을 content viewport에서 제외합니다. `scheduleOnboardingGuidePosition({ refocus: true })`는 한 animation frame에서 callout을 먼저 배치하고, target을 이 안전 영역의 가장 가까운 위치로 한 번만 smooth scroll한 뒤 최종 spotlight·callout geometry를 다시 맞춥니다. 이미 충분히 보이는 target에는 scroll을 만들지 않으며 oversized target은 안전 영역 상단부터 읽을 수 있도록 배치합니다.
+
+열림 disclosure는 `onboardingVisualTarget()`이 `details[open]` 전체를 결과 target으로 선택하고 `ResizeObserver`가 공개된 본문의 최종 크기를 따라 spotlight를 확장합니다. `scheduleOnboardingRevealSettle()`은 펼침 animation·지연 mount·연속 resize의 안정화 deadline을 합친 뒤 `onboardingRevealVisibilityTarget()`이 계산한 `summary` 제외 본문 결합 범위를 위의 단일 refocus 경로에 넘깁니다. 이로써 펼침 직후의 임시 geometry와 안정 뒤 geometry가 각각 scroll을 일으키지 않습니다. 페이지 전체·설명 문구·button 상태에 광범위한 animation을 적용하지 않으며 `prefers-reduced-motion`에서는 같은 좌표로 즉시 이동합니다. 캡처처럼 패널 action이 있는 단계는 넓은 화면에서 본문 폭을 확보하고 520px 이하 container에서는 action을 설명 아래 full-width로 배치합니다.
 
 전체 안내만 첫 실행 상태의 `completed`·`skipped`를 기록합니다. 기능별 부분 투어와 고급 가이드는 독립 route로 실행하며 완료·중단·건너뛰기가 전역 온보딩 상태를 쓰거나 덮어쓰지 않습니다. 각 부분 투어는 필요한 snapshot 수·선택 항목·캡처 상태가 준비된 checkpoint에서 session을 만들기 때문에 중간 기능부터 시작해도 이전 장의 조작을 요구하지 않습니다.
 
@@ -40,11 +42,11 @@ v0.16.6의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용�
 
 첫 초대와 읽기 전용 briefing·debrief는 modal phase입니다. 제품 영역을 `inert`·`aria-hidden` 처리하고 focus를 안내 surface 안에 가둔 상태에서 화면을 dim 처리하며 실제 target의 spotlight 영역만 드러냅니다. briefing은 target ring·점선 화살표·제목과 기능 의미·사용 시점 또는 확인 행동을 두 개의 짧은 문장으로 표시합니다. debrief는 녹색 result ring과 별도 불투명 고대비 surface에서 `잘했어요!`, 단계 이름과 관찰 결과를 분리합니다. 완료 surface는 target보다 위 stacking context에 놓이고 아래 target copy가 비치지 않도록 배경·텍스트 token을 직접 지정합니다. modal footer에는 진행 숫자와 `다음`만 두고 종료 control은 패널 우측 상단에 둡니다. phase가 끝나면 `inert`와 focus trap을 함께 해제합니다.
 
-상호작용 단계는 처음부터 practice로 진입해 dim·modal·`inert` 없이 실제 제품 화면, target의 고대비 pulse ring과 기능 이름·의미·사용 맥락·할 일을 한 dock에 표시합니다. 캡처 데모는 이름이 보이는 가로 실행 버튼과 진행 중 상태를 제공하고 나머지 target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. value·checked·open 조건이 이미 충족된 경우 현재 DOM 상태를 즉시 완료 집합과 동기화해 control을 되돌렸다 다시 조작하게 하지 않습니다. 정확한 동작을 감지하면 debrief로 전환하며, disclosure는 열린 `details` 전체로 spotlight를 확장하고 안정화된 본문 범위를 한 번만 부드럽게 드러냅니다.
+상호작용 단계는 처음부터 practice로 진입해 dim·modal·`inert` 없이 실제 제품 화면, target의 고대비 pulse ring과 기능 이름·의미·사용 맥락·할 일을 한 dock에 표시합니다. 캡처 데모는 이름이 보이는 가로 실행 버튼과 진행 중 상태를 제공하고 나머지 target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. value·checked·open 조건이 이미 충족된 경우 현재 DOM 상태를 즉시 완료 집합과 동기화해 control을 되돌렸다 다시 조작하게 하지 않습니다. 정확한 동작을 감지하면 debrief로 전환하며, 일반 결과 target과 disclosure의 열린 `details` 본문 모두 상단 설명·하단 메뉴 사이의 동일한 안전 영역과 단일 scroll 경로를 사용합니다.
 
 튜토리얼 interaction listener는 실제 control보다 먼저 실행되는 capture phase에 있습니다. click 직후의 이전 `aria-checked`·`open` 값을 판정하지 않도록 다음 task까지 완료 검사를 미루고, 그 사이 튜토리얼이 닫히거나 다른 단계로 바뀐 경우를 막기 위해 같은 session 객체·step ID·`practice` phase인지 다시 확인합니다.
 
-320px·390px 화면에서도 고정 sheet나 내부 본문 스크롤을 사용하지 않습니다. target 강조 영역은 최소 52×44px이고 짧은 코치마크는 panel의 실제 가시 폭과 target 위·아래 중 가용 공간을 함께 계산하며 하단 safe area 내비게이션을 피합니다. 검색 snapshot select처럼 긴 control도 가시 viewport 안에서 폭과 수평 위치를 제한해 document를 왼쪽으로 밀거나 가로 scroll을 만들지 않습니다. 320px의 캡처 실습은 지시와 실행 버튼을 세로로 배치합니다. 페이지·copy·button의 장식 motion은 사용하지 않고 target ring 상태와 필요한 spotlight·disclosure 변화만 짧게 표시하며 `prefers-reduced-motion`에서는 정적 링과 색상 변화만 유지합니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태와 시작 전 focus를 다시 렌더링합니다. 저장하는 상태는 `st-devtools:onboarding:v5`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·phase·시각·연습 원문·실제 데이터는 저장하지 않습니다.
+320px·390px 화면에서도 고정 sheet나 내부 본문 스크롤을 사용하지 않습니다. target 강조 영역은 최소 52×44px이고 짧은 코치마크는 panel의 실제 가시 폭과 target 위·아래 중 가용 공간을 함께 계산합니다. 자동 이동은 target과 실제로 가로가 겹치는 callout·하단 safe area 내비게이션·진행 control만 제외하므로 강조 대상이 그 뒤에 숨지 않으면서 불필요한 여백도 만들지 않습니다. 검색 snapshot select처럼 긴 control도 가시 viewport 안에서 폭과 수평 위치를 제한해 document를 왼쪽으로 밀거나 가로 scroll을 만들지 않습니다. 320px의 캡처 실습은 지시와 실행 버튼을 세로로 배치합니다. 페이지·copy·button의 장식 motion은 사용하지 않고 target ring 상태와 필요한 spotlight·disclosure 변화만 짧게 표시하며 `prefers-reduced-motion`에서는 정적 링과 즉시 위치 보정만 유지합니다. 종료 시 target 표시와 session을 제거하고 기존 live 탭·선택·타임라인·캡처 상태와 시작 전 focus를 다시 렌더링합니다. 저장하는 상태는 `st-devtools:onboarding:v5`의 schema/tour version과 `skipped` 또는 `completed`뿐이며 진행 단계·phase·시각·연습 원문·실제 데이터는 저장하지 않습니다.
 
 ## 캡처 파이프라인
 
