@@ -1,16 +1,15 @@
-# v0.16.5 기술 구현 현황
+# v0.16.6 기술 구현 현황
 
-## v0.16.5 위치 안정화 코치마크·고밀도 도움말
+## v0.16.6 disclosure spotlight·항목별 실제 UI 기능 설명서
 
-- 상호작용 완료 후 `debrief`로 바뀔 때 현재 콘텐츠 scroll offset과 완료한 target geometry를 보존합니다. 사용자가 방금 조작한 위치를 떠나지 않은 채 결과 설명을 읽을 수 있습니다.
-- disclosure 단계는 펼친 본문을 새 target으로 바꾸지 않고 사용자가 클릭한 직접 `summary`를 완료·결과 target으로 유지합니다. 긴 본문 때문에 화면이 갑자기 재배치되지 않습니다.
-- 새 단계 target이 현재 콘텐츠 viewport 안에 있으면 scroll을 유지합니다. viewport 밖에 있을 때만 target의 필요한 부분이 보이도록 가장 가까운 경계까지 최소 scroll합니다.
-- 페이지 전체, 설명 문구와 button 상태에 일괄 animation을 적용하지 않습니다. spotlight 위치와 실제 disclosure처럼 맥락 이해에 필요한 짧은 변화만 남기며 `prefers-reduced-motion: reduce`에서는 이 transition도 제거합니다.
-- 캡처 단계의 action이 있는 coachmark는 넓은 화면에서 충분한 본문 폭을 확보하고, 520px 이하 container에서는 CTA가 설명 아래 full-width로 재배치됩니다.
-- 고급 기능 가이드 목록은 제목·설명·단계 수·예상 시간을 짧은 행으로 재배치하고, 연습 화면의 field·note·result 간격과 typography를 줄여 같은 viewport에서 더 많은 설정 맥락을 보여 줍니다.
-- 기능 설명서 index의 category·row 간격과 article의 제목·설명·section 배치를 압축하고, 전후 상태가 있는 실제 UI excerpt는 넓은 화면에서 병렬로 비교할 수 있게 배치합니다. 44px 상호작용 경계와 모바일 한 열 fallback은 유지합니다.
-- `renderHelpTopicVisual()`은 19개 topic마다 `createOnboardingSession()`의 결정적 fixture로 분리된 preview facade를 만들고 실제 explorer·timeline·diff·rules·search·settings renderer에서 필요한 fragment를 렌더합니다.
-- 문서에 삽입하는 노드는 렌더 결과의 `cloneNode(true)`이며 `inert`·`aria-hidden`·`pointer-events: none`을 적용하고 ID·label·ARIA 참조·tour 표식을 제거합니다. 실제 UI DOM과 event handler를 공유하지 않습니다.
+- `onboardingVisualTarget()`은 열림 조건의 disclosure 단계에서 직접 `summary`가 아니라 `details[open]` 전체를 결과 target으로 사용합니다. spotlight가 새로 공개된 본문까지 자연스럽게 확장됩니다.
+- `ResizeObserver`가 열린 target의 실제 크기를 추적해 본문 mount와 높이 변화 동안 spotlight geometry를 갱신합니다.
+- `scheduleOnboardingRevealSettle()`은 짧은 안정화 지연 뒤 한 번만 실행하고, `onboardingRevealVisibilityTarget()`이 `summary`를 제외한 열린 본문 자식의 결합 범위를 계산합니다.
+- 안정화 뒤 `focusOnboardingTarget({ nearestOnly: true, behavior: 'smooth' })`를 한 번 호출해 열린 내용이 충분히 보이는 가장 가까운 위치로 이동합니다. `prefers-reduced-motion: reduce`에서는 즉시 이동합니다.
+- 페이지·문구·button 전체에 장식 transition을 다시 추가하지 않고 disclosure 크기 변화, spotlight geometry와 의도된 단일 smooth scroll만 유지합니다.
+- `renderHelpTopicFragments()`는 19개 topic의 section 수만큼 실제 제품 renderer fragment를 만들고 `helpProductFragmentNodes()`의 topic별 route로 각 설명과 1:1 대응시킵니다.
+- 각 article section은 실제 UI fragment와 제목·설명을 같은 구획에 배치합니다. 모바일은 한 열, 넓은 도움말 panel은 fragment 0.9fr·설명 1.1fr의 병렬 배치를 사용하며 fragment 높이와 가로 overflow를 제한합니다.
+- 문서 preview는 `cloneNode(true)`·`inert`·`aria-hidden`·`pointer-events: none` 경계를 유지합니다. ID·label·ARIA 참조·tour 표식과 clone 내부의 작동하지 않는 `.st-devtools-help-tooltip`을 제거합니다.
 - preview facade는 실제 timeline store, 저장 정책, Connection Manager, Semantic Inspector provider, clipboard, export와 network를 호출하지 않습니다. AI·평가 화면은 고정 fixture와 no-op harness만 사용합니다.
 
 ## v0.16.3 도움말 간격·제품형 정적 preview·교체 fixture

@@ -569,7 +569,7 @@ test('practice recognizes value, open, and checked states that are already satis
     assert.equal(panel.calls.length, 0);
 });
 
-test('a disclosure keeps its clicked summary highlighted instead of jumping to revealed content', () => {
+test('a disclosure expands its debrief spotlight from the summary to the opened details', () => {
     const step = onboardingStep('explorer-configured-group');
     const summary = { tagName: 'SUMMARY' };
     const revealed = { tagName: 'DIV' };
@@ -591,18 +591,18 @@ test('a disclosure keeps its clicked summary highlighted instead of jumping to r
 
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
-        summary,
+        disclosure,
     );
     state.onboardingStepStage = 'practice';
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
-        summary,
+        disclosure,
     );
     state.onboardingStepStage = 'debrief';
     disclosure.open = false;
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
-        summary,
+        disclosure,
     );
 });
 
@@ -625,6 +625,71 @@ test('an intentional navigation action highlights its declared result target', (
     assert.equal(
         DevToolsWindow.prototype.onboardingVisualTarget.call(state, step),
         result,
+    );
+});
+
+test('an expanded action target gets a debounced smooth reveal after layout settles', async () => {
+    const target = {};
+    const reveal = {};
+    const focusCalls = [];
+    let positionCalls = 0;
+    const state = {
+        onboardingTarget: target,
+        onboardingRevealSettleTimer: null,
+        onboardingStepStage: 'debrief',
+        tutorialIsActive: () => true,
+        onboardingRevealVisibilityTarget(candidate) {
+            assert.equal(candidate, target);
+            return reveal;
+        },
+        focusOnboardingTarget(options) {
+            focusCalls.push(options);
+        },
+        scheduleOnboardingGuidePosition() {
+            positionCalls += 1;
+        },
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.scheduleOnboardingRevealSettle.call(state, 0),
+        true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(focusCalls, [{
+        nearestOnly: true,
+        focus: false,
+        behavior: 'smooth',
+        visibilityTarget: reveal,
+    }]);
+    assert.equal(positionCalls, 1);
+    assert.equal(state.onboardingRevealSettleTimer, null);
+});
+
+test('reveal scrolling measures the opened body instead of the disclosure summary', () => {
+    const summary = { tagName: 'SUMMARY', hidden: false };
+    const body = {
+        tagName: 'DIV',
+        hidden: false,
+        getBoundingClientRect: () => ({
+            left: 20,
+            top: 180,
+            right: 360,
+            bottom: 520,
+            width: 340,
+            height: 340,
+        }),
+    };
+    const disclosure = {
+        children: [summary, body],
+        matches: (selector) => selector === 'details[open]',
+    };
+
+    assert.equal(
+        DevToolsWindow.prototype.onboardingRevealVisibilityTarget.call(
+            { onboardingTarget: disclosure },
+            disclosure,
+        ),
+        body,
     );
 });
 

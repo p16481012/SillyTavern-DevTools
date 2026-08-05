@@ -1091,6 +1091,7 @@ export class DevToolsWindow {
         this.onboardingTargetAddedTabIndex = false;
         this.onboardingLocateTimer = null;
         this.onboardingAutoScrollTimer = null;
+        this.onboardingRevealSettleTimer = null;
         this.onboardingGuidePositionFrame = null;
         this.onboardingRefocusAfterPosition = false;
         this.onboardingTargetResizeObserver = null;
@@ -4088,39 +4089,48 @@ export class DevToolsWindow {
                 className: 'st-devtools-help-topic-summary',
             }),
         );
-        const content = element('div', {
-            className: 'st-devtools-help-topic-content',
-        });
         const visual = helpTopicVisualById(topic.id);
-        if (visual) content.appendChild(this.renderHelpTopicVisual(visual));
         const sections = element('div', {
             className: 'st-devtools-help-topic-sections',
         });
-        for (const [title, body] of topic.sections) {
+        const visualFragments = visual
+            ? this.renderHelpTopicFragments(visual, topic.sections.length)
+            : [];
+        for (const [index, [title, body]] of topic.sections.entries()) {
             const section = element('section', {
                 className: 'st-devtools-help-topic-section',
             });
-            section.append(
+            section.dataset.helpSection = String(index);
+            const copy = element('div', {
+                className: 'st-devtools-help-topic-section-copy',
+            });
+            copy.append(
                 element('h4', { text: title }),
                 proseElement('p', body),
             );
+            if (visualFragments[index]) {
+                section.append(visualFragments[index], copy);
+            } else {
+                section.appendChild(copy);
+            }
             sections.appendChild(section);
         }
-        content.appendChild(sections);
-        article.appendChild(content);
+        article.appendChild(sections);
         return article;
     }
 
-    renderHelpTopicVisual(visual) {
+    renderHelpTopicVisual(visual, productFragment, sectionIndex) {
         const figure = element('figure', {
-            className: `st-devtools-help-visual is-${visual.type}`,
+            className: `st-devtools-help-visual is-${visual.type} is-fragment`,
         });
         figure.setAttribute('role', 'img');
-        figure.setAttribute('aria-label', visual.ariaLabel);
+        figure.setAttribute(
+            'aria-label',
+            `${visual.ariaLabel} (${sectionIndex + 1})`,
+        );
         const caption = element('figcaption');
         caption.append(
-            element('strong', { text: '실제 화면으로 보기' }),
-            element('span', { text: visual.caption }),
+            element('strong', { text: '실제 화면의 해당 부분' }),
         );
         const preview = element('div', {
             className: 'st-devtools-help-visual-preview st-devtools-help-product-excerpt',
@@ -4128,9 +4138,36 @@ export class DevToolsWindow {
         preview.setAttribute('aria-hidden', 'true');
         preview.setAttribute('inert', '');
         preview.dataset.helpSource = 'product-renderer';
-        preview.appendChild(this.renderHelpProductExcerpt(visual.id));
+        preview.dataset.helpFragment = String(sectionIndex);
+        preview.appendChild(productFragment);
         figure.append(caption, preview);
         return figure;
+    }
+
+    renderHelpTopicFragments(visual, sectionCount) {
+        const productSurface = this.renderHelpProductExcerpt(visual.id);
+        const groups = this.helpProductFragmentNodes(productSurface, visual.id);
+        const fragments = [];
+        for (let index = 0; index < sectionCount; index += 1) {
+            const sourceNodes = groups[index] ?? groups.at(-1) ?? [];
+            const fragment = element('div', {
+                className: `st-devtools-help-product-surface is-${visual.id}`,
+            });
+            fragment.dataset.helpPart = String(index);
+            for (const sourceNode of sourceNodes) {
+                const clone = this.cloneHelpProductNode(sourceNode);
+                if (clone) fragment.appendChild(clone);
+            }
+            if (!fragment.childElementCount) {
+                fragment.appendChild(proseElement(
+                    'p',
+                    visual.caption,
+                    { className: 'st-devtools-help-product-fallback' },
+                ));
+            }
+            fragments.push(this.renderHelpTopicVisual(visual, fragment, index));
+        }
+        return fragments;
     }
 
     createHelpPreviewFacade({ includedOnly = false } = {}) {
@@ -4289,9 +4326,224 @@ export class DevToolsWindow {
         return preview;
     }
 
+    helpProductFragmentNodes(surface, visualId) {
+        const query = (selector, index = 0, root = surface) => (
+            root?.querySelectorAll?.(selector)?.[index] ?? null
+        );
+        const queryAll = (selector, root = surface) => (
+            [...(root?.querySelectorAll?.(selector) ?? [])]
+        );
+        const group = (...entries) => {
+            const flattened = entries.flat(Infinity).filter(Boolean);
+            return [...new Set(flattened)];
+        };
+        const repeated = (nodes, count) => Array.from(
+            { length: count },
+            (_, index) => group(nodes[index] ?? nodes.at(-1)),
+        );
+        const firstSource = () => query('.st-devtools-source');
+        const firstChange = (status) => (
+            query(`.st-devtools-source-change.status-${status}`)
+            ?? query('.st-devtools-source-change')
+        );
+
+        switch (visualId) {
+        case 'capture-status':
+            return [
+                group(query('.st-devtools-capture-status.is-waiting')),
+                group(query('.st-devtools-capture-status.is-processing')),
+                group(query('.st-devtools-capture-status.is-failed')),
+            ];
+        case 'prompt-overview': {
+            const summaries = [...surface.children].filter(
+                (child) => child.matches?.('summary'),
+            );
+            return [
+                group(
+                    query('.st-devtools-overview-card'),
+                    query('.st-devtools-explorer-filter'),
+                ),
+                group(firstSource() ?? summaries[0]),
+                group(summaries.slice(0, 3)),
+            ];
+        }
+        case 'prompt-included-filter': {
+            const filters = queryAll('.st-devtools-explorer-filter');
+            const configured = queryAll(
+                '.st-devtools-source-group[data-group="configured"]',
+            );
+            return [
+                group(filters[1] ?? filters[0], configured[1] ?? configured[0]),
+                group(filters[0], configured[0]),
+                group(
+                    query('.st-devtools-source.is-uncertain', 0, configured[0])
+                    ?? query('.st-devtools-source', 0, configured[0])
+                    ?? configured[0],
+                ),
+            ];
+        }
+        case 'prompt-final-position': {
+            const sources = queryAll('.st-devtools-source');
+            return [
+                group(sources[0]),
+                group(sources[1] ?? sources[0]),
+                group(
+                    query('.st-devtools-copyable-content', 0, sources[0])
+                    ?? query('.st-devtools-source-content', 0, sources[0])
+                    ?? sources[0],
+                ),
+            ];
+        }
+        case 'rules-overview': {
+            const card = query('.st-devtools-rule-card');
+            return [
+                group(query('.st-devtools-rule-summary')),
+                group(
+                    query('.st-devtools-rule-evidence', 0, card)
+                    ?? card,
+                ),
+                group(query('.st-devtools-rule-determination-summary') ?? card),
+            ];
+        }
+        case 'comparison-policy': {
+            const groups = query(
+                '.st-devtools-policy-section[data-policy-section="groups"]',
+            );
+            const rules = query(
+                '.st-devtools-policy-section[data-policy-section="rules"]',
+            );
+            return [
+                group(groups),
+                group(groups),
+                group(rules),
+                group(rules),
+            ];
+        }
+        case 'semantic-ai': {
+            const preview = query('.st-devtools-semantic-preview');
+            const result = query('.st-devtools-semantic-results');
+            return [
+                group(
+                    query('.st-devtools-semantic-preview-sources', 0, preview)
+                    ?? preview,
+                ),
+                group(preview),
+                group(result),
+                group(result),
+            ];
+        }
+        case 'timeline-overview': {
+            const entries = queryAll('.st-devtools-timeline-entry');
+            return [
+                group(entries[0]),
+                group(entries.slice(0, 2)),
+                group(query('.st-devtools-timeline-snapshots')),
+            ];
+        }
+        case 'timeline-growth':
+            return repeated([query('.st-devtools-growth')], 3);
+        case 'diff-overview': {
+            const selectors = query('.st-devtools-diff-selectors');
+            return [
+                group(query('label', 0, selectors) ?? selectors),
+                group(query('label', 1, selectors) ?? selectors),
+                group(query('.st-devtools-full-diff')),
+            ];
+        }
+        case 'diff-statuses':
+            return [
+                group(firstChange('added')),
+                group(firstChange('removed')),
+                group(firstChange('changed')),
+                group(firstChange('replaced')),
+                group(query('.st-devtools-source-change-list')),
+            ];
+        case 'search-overview': {
+            const controls = query('.st-devtools-search-controls');
+            const options = queryAll(
+                '.st-devtools-search-options-body label',
+                controls,
+            );
+            return [
+                group(query('input[type="search"]', 0, controls) ?? controls),
+                group(options[0] ?? query('.st-devtools-search-options', 0, controls)),
+                group(options[1] ?? query('.st-devtools-search-options', 0, controls)),
+                group(query('.st-devtools-search-result')),
+            ];
+        }
+        case 'settings-storage': {
+            const fields = queryAll('.st-devtools-settings-field');
+            return [
+                group(fields[0]),
+                group(fields[1] ?? fields[0]),
+                group(fields),
+            ];
+        }
+        case 'settings-privacy': {
+            const field = query('.st-devtools-settings-field');
+            return repeated([field], 3).map((nodes, index) => {
+                const variant = this.cloneHelpProductNode(nodes[0]);
+                const select = variant?.querySelector('select');
+                if (select) select.value = ['full', 'redacted', 'metadata'][index];
+                return group(variant ?? nodes[0]);
+            });
+        }
+        case 'request-details': {
+            const details = queryAll('.st-devtools-context-details');
+            return [
+                group(details[0]),
+                group(details[1] ?? details[0]),
+                group(details),
+            ];
+        }
+        case 'rule-v3-structure': {
+            const atoms = query('.st-devtools-instruction-atoms')
+                ?? query('.st-devtools-instruction-section', 1);
+            const overview = query('.st-devtools-instruction-overview');
+            return [
+                group(atoms),
+                group(overview),
+                group(overview, atoms),
+            ];
+        }
+        case 'semantic-provider-evaluation': {
+            const body = query('.st-devtools-semantic-evaluation-body');
+            const warning = query('.st-devtools-semantic-evaluation-warning');
+            const metrics = query('.st-devtools-semantic-evaluation-metrics');
+            return [
+                group(body),
+                group(warning ?? body),
+                group(metrics ?? body),
+            ];
+        }
+        case 'storage-data-tools': {
+            const tools = queryAll('.st-devtools-settings-tool');
+            return [
+                group(tools.slice(0, 2)),
+                group(tools[2] ?? tools.at(-1)),
+                group(tools[3] ?? tools.at(-1)),
+            ];
+        }
+        case 'faq-common':
+            return [
+                group(query('.st-devtools-capture-status')),
+                group(query('.st-devtools-overview-card')),
+                group(query('.st-devtools-empty')),
+            ];
+        default:
+            return repeated([surface.firstElementChild], 1);
+        }
+    }
+
     cloneHelpProductNode(node) {
         if (!node) return null;
         const clone = node.cloneNode(true);
+        if (clone.matches?.('.st-devtools-help-tooltip')) return null;
+        for (const tooltip of clone.querySelectorAll?.(
+            '.st-devtools-help-tooltip',
+        ) ?? []) {
+            tooltip.remove();
+        }
         const nodes = [clone, ...clone.querySelectorAll('*')];
         for (const entry of nodes) {
             for (const attribute of [
@@ -4370,9 +4622,14 @@ export class DevToolsWindow {
         }
         case 'prompt-overview': {
             const page = explorer();
+            const configured = page.querySelector(
+                '.st-devtools-source-group[data-group="configured"]',
+            );
+            openDetails(configured);
             append(
                 page.querySelector('.st-devtools-overview-card'),
                 page.querySelector('.st-devtools-explorer-filter'),
+                configured?.querySelector('.st-devtools-source'),
                 [...page.querySelectorAll('.st-devtools-source-group > summary')]
                     .slice(0, 3),
             );
@@ -5442,6 +5699,10 @@ export class DevToolsWindow {
         const latestLiveCaptureStatus = this.onboardingSession?.latestLiveCaptureStatus ?? null;
         this.cancelOnboardingCaptureWait();
         this.clearOnboardingTarget();
+        if (this.onboardingRevealSettleTimer != null) {
+            clearTimeout(this.onboardingRevealSettleTimer);
+            this.onboardingRevealSettleTimer = null;
+        }
         if (this.onboardingGuidePositionFrame != null) {
             const cancelFrame = globalThis.cancelAnimationFrame ?? clearTimeout;
             cancelFrame(this.onboardingGuidePositionFrame);
@@ -5949,13 +6210,21 @@ export class DevToolsWindow {
                 || this.onboardingStepStage !== expectedStage
             ) return;
             this.refreshOnboardingTarget({ preserveGuideGeometry });
-            const targetAvailable = actionCompleted
+            const settlingReveal = Boolean(
+                actionCompleted
+                && step.interaction?.event === 'toggle'
+                && step.interaction.state === 'open',
+            );
+            const targetAvailable = settlingReveal
                 ? Boolean(this.onboardingTarget)
                 : this.focusOnboardingTarget({
                     nearestOnly: true,
                     focus: false,
-                    behavior: stepChanged ? 'smooth' : 'auto',
+                    behavior: actionCompleted || stepChanged ? 'smooth' : 'auto',
                 });
+            if (settlingReveal) {
+                this.scheduleOnboardingRevealSettle();
+            }
             if (this.onboardingStepStage === 'practice') {
                 if (!targetAvailable || guidePanelHadFocus) {
                     this.onboardingPracticeDock?.focus({ preventScroll: true });
@@ -6542,6 +6811,11 @@ export class DevToolsWindow {
             ? this.window?.querySelector(step.resultTarget)
             : null;
         if (resultTarget) return resultTarget;
+        const disclosure = step?.interaction?.event === 'toggle'
+            && step.interaction.state === 'open'
+            ? this.window?.querySelector(step.interaction.selector)
+            : null;
+        if (disclosure) return disclosure;
         const fallback = step?.target
             ? this.window?.querySelector(step.target)
             : null;
@@ -6570,6 +6844,12 @@ export class DevToolsWindow {
             if (typeof ResizeObserver === 'function') {
                 this.onboardingTargetResizeObserver = new ResizeObserver(() => {
                     this.scheduleOnboardingGuidePosition();
+                    if (
+                        this.onboardingStepStage === 'debrief'
+                        && step?.interaction?.event === 'toggle'
+                    ) {
+                        this.scheduleOnboardingRevealSettle();
+                    }
                 });
                 this.onboardingTargetResizeObserver.observe(target);
             }
@@ -6601,16 +6881,46 @@ export class DevToolsWindow {
         return true;
     }
 
+    onboardingRevealVisibilityTarget(target = this.onboardingTarget) {
+        if (!target?.matches?.('details[open]')) return target;
+        const revealChildren = [...target.children].filter((child) => (
+            child.tagName !== 'SUMMARY'
+            && !child.hidden
+        ));
+        if (revealChildren.length <= 1) return revealChildren[0] ?? target;
+        return {
+            getBoundingClientRect() {
+                const rects = revealChildren
+                    .map((child) => child.getBoundingClientRect?.())
+                    .filter((rect) => rect && rect.width > 0 && rect.height > 0);
+                if (!rects.length) return target.getBoundingClientRect();
+                const left = Math.min(...rects.map((rect) => rect.left));
+                const top = Math.min(...rects.map((rect) => rect.top));
+                const right = Math.max(...rects.map((rect) => rect.right));
+                const bottom = Math.max(...rects.map((rect) => rect.bottom));
+                return {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    width: Math.max(0, right - left),
+                    height: Math.max(0, bottom - top),
+                };
+            },
+        };
+    }
+
     focusOnboardingTarget({
         nearestOnly = false,
         focus = false,
         behavior = 'auto',
+        visibilityTarget = null,
     } = {}) {
         const target = this.onboardingTarget;
         const targetInContent = Boolean(this.content?.contains(target));
         const viewport = targetInContent ? this.content : this.window;
         const viewportRect = viewport?.getBoundingClientRect?.();
-        const targetRect = target?.getBoundingClientRect?.();
+        const targetRect = (visibilityTarget ?? target)?.getBoundingClientRect?.();
         if (!target || !viewportRect || !targetRect) return false;
         const inset = 12;
         const modalActionsRect = targetInContent
@@ -6706,6 +7016,30 @@ export class DevToolsWindow {
             }
             focusTarget?.focus?.({ preventScroll: true });
         }
+        return true;
+    }
+
+    scheduleOnboardingRevealSettle(delay = 90) {
+        const target = this.onboardingTarget;
+        if (!target || !this.tutorialIsActive()) return false;
+        if (this.onboardingRevealSettleTimer != null) {
+            clearTimeout(this.onboardingRevealSettleTimer);
+        }
+        this.onboardingRevealSettleTimer = setTimeout(() => {
+            this.onboardingRevealSettleTimer = null;
+            if (
+                !this.tutorialIsActive()
+                || this.onboardingStepStage !== 'debrief'
+                || this.onboardingTarget !== target
+            ) return;
+            this.focusOnboardingTarget({
+                nearestOnly: true,
+                focus: false,
+                behavior: 'smooth',
+                visibilityTarget: this.onboardingRevealVisibilityTarget(target),
+            });
+            this.scheduleOnboardingGuidePosition();
+        }, delay);
         return true;
     }
 

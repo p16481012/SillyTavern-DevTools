@@ -68,10 +68,11 @@ export const ONBOARDING_STEPS = Object.freeze([
     defineStep(
         'explorer',
         'explorer-included-filter',
-        '.st-devtools-explorer-filter .st-devtools-switch-button',
+        '.st-devtools-explorer-filter',
         defineInteraction('click', '.st-devtools-explorer-filter .st-devtools-switch-button', {
             state: 'checked',
         }),
+        { target: '.st-devtools-source-group[data-group="configured"]' },
     ),
     defineStep(
         'explorer',

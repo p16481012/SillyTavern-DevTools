@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.5의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 스크롤·강조 위치를 보존하는 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.6의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 열린 disclosure 전체를 따라가는 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -14,9 +14,9 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 `src/help-center.js`는 화면별 상세 문서를 immutable registry로 제공하고 상단 책 control은 `기본 사용법`·`고급 기능 가이드`·`기능 설명서`만 보이는 하나의 modal dialog를 엽니다. 기본 사용법은 전체 hands-on 안내와 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계의 기능별 진입점을 제공하고, 기능 설명서는 검색 가능한 상세 문서와 FAQ를 제공합니다. 홈 카드 전체가 button이므로 별도 파란색 `… 보기` action copy는 만들지 않고 제목·설명·방향 표시만 사용합니다.
 
-`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 topic registry입니다. 각 topic은 어떤 실제 화면 fragment를 보여 줄지와 접근 가능한 설명·caption만 선택합니다. `renderHelpTopicVisual()`은 `createOnboardingSession()`의 결정적 fixture를 사용하는 분리 preview facade에서 실제 explorer·timeline·diff·rules·search·settings renderer를 호출하고 필요한 fragment를 `cloneNode(true)`로 복제합니다. 문서에 삽입하기 전에 ID·label·ARIA 참조·tour 표식을 제거하고 wrapper에 `inert`·`aria-hidden`·`pointer-events: none`을 적용하므로 live UI event와 focus 경계가 섞이지 않습니다. 실제 snapshot store·저장 정책·Connection Manager·provider·network는 호출하지 않으며 AI·provider 평가는 고정 fixture와 no-op harness로만 표현합니다.
+`HELP_TOPIC_VISUALS`는 19개 `HELP_TOPICS` ID와 정확히 대응하는 불변 topic registry입니다. `renderHelpTopicFragments()`는 `createOnboardingSession()`의 결정적 fixture를 사용하는 분리 preview facade에서 실제 explorer·timeline·diff·rules·search·settings renderer를 한 번 렌더하고, `helpProductFragmentNodes()`의 topic별 route로 각 설명 section에 대응하는 fragment를 1:1로 선택합니다. 선택한 노드는 다시 `cloneNode(true)`로 복제하며 ID·label·ARIA 참조·tour 표식과 clone 안에서 실행할 수 없는 `.st-devtools-help-tooltip`을 제거합니다. 각 fragment wrapper에는 `inert`·`aria-hidden`·`pointer-events: none`을 적용하므로 live UI event와 focus 경계가 섞이지 않습니다. 실제 snapshot store·저장 정책·Connection Manager·provider·network는 호출하지 않으며 AI·provider 평가는 고정 fixture와 no-op harness로만 표현합니다.
 
-기능 설명서 index는 category와 문서 row의 불필요한 세로 간격을 줄이고 넓은 도움말 panel에서는 여러 항목을 병렬 배치합니다. topic article은 제목·요약·실제 renderer excerpt·세부 설명의 위계를 유지하되 section 제목과 본문, 전후 상태 조각을 가능한 폭에서 나란히 놓습니다. 고급 기능 가이드도 제목·설명·단계 수·예상 시간을 짧은 목록 행에 모으고 실제 연습 화면의 field·note·result 간격을 압축합니다. 모바일은 한 열과 최소 44px control 경계를 유지하며, 정보 밀도 조정이 fixture 격리나 `inert` clone 경계를 바꾸지 않습니다.
+기능 설명서 index는 category와 문서 row의 불필요한 세로 간격을 줄이고 넓은 도움말 panel에서는 여러 항목을 병렬 배치합니다. topic article은 하나의 전체 excerpt 뒤에 모든 설명을 모으지 않고 `실제 renderer fragment → 해당 section 제목·설명`을 같은 구획에 반복합니다. 모바일은 한 열, 넓은 panel은 fragment 0.9fr·설명 1.1fr의 병렬 배치를 사용하고 fragment 높이와 가로 overflow를 제한합니다. 고급 기능 가이드도 제목·설명·단계 수·예상 시간을 짧은 목록 행에 모으고 실제 연습 화면의 field·note·result 간격을 압축합니다. 정보 밀도 조정은 fixture 격리나 `inert` clone 경계를 바꾸지 않습니다.
 
 짧은 `?` tooltip은 기능을 다시 떠올릴 한두 문장과 텍스트형 `자세히 보기`만 포함합니다. `자세히 보기`는 별도의 창이나 중간 목록을 거치지 않고 같은 도움말 dialog의 해당 topic ID로 deep link합니다. 도움말을 닫으면 deep link를 연 실제 control로 focus를 복원합니다.
 
@@ -28,9 +28,9 @@ v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에
 
 ### hands-on 온보딩과 부분 투어의 view-session 격리 경계
 
-v0.16.5의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
+v0.16.6의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용법의 기능별 부분 투어를 함께 정의합니다. 도움말에 표시하는 부분 투어는 캡처 3단계와 전송 프롬프트 10단계를 합친 프롬프트 13·기록 6·비교 8·검사 7·검색 5단계입니다. 전체 안내도 같은 39단계로 ‘예상과 다른 답변에 어떤 지시가 영향을 줬는지 찾기’를 캡처 → 실제 전송 내용 → 충돌 근거 → 변경 시점 → 두 요청 비교 → 원본 검색 순서로 추적합니다. 직접 조작할 것이 없는 읽기 단계는 `briefing` 한 번에서 `다음`으로 이동하고, 상호작용 단계는 별도 진입 확인 없이 `practice → debrief`로 진행합니다. `이전`은 phase가 아니라 선택한 투어 안의 논리 단계 단위로 이동합니다.
 
-상호작용을 완료해 `debrief`로 들어갈 때는 현재 콘텐츠 scroll offset과 완료한 target geometry를 보존합니다. disclosure는 새로 펼쳐진 본문으로 강조를 옮기지 않고 사용자가 클릭한 직접 `summary`를 결과 target으로 유지합니다. 다음 논리 단계의 target이 현재 콘텐츠 viewport 안에 있으면 scroll을 그대로 두고, 실제 화면 밖에 있을 때만 target의 필요한 부분이 보이도록 가장 가까운 경계까지 최소 scroll합니다. 페이지 전체·설명 문구·button 상태에 광범위한 animation을 적용하지 않고 spotlight 위치와 실제 disclosure처럼 맥락 이해에 필요한 짧은 변화만 사용하며, `prefers-reduced-motion`에서는 이 transition도 제거합니다. 캡처처럼 패널 action이 있는 단계는 넓은 화면에서 본문 폭을 확보하고 520px 이하 container에서는 action을 설명 아래 full-width로 배치합니다.
+상호작용을 완료해 `debrief`로 들어갈 때 일반 button·input·select는 현재 target geometry를 유지합니다. 열림 disclosure는 `onboardingVisualTarget()`이 `details[open]` 전체를 결과 target으로 선택하고 `ResizeObserver`가 공개된 본문의 최종 크기를 따라 spotlight를 확장합니다. `scheduleOnboardingRevealSettle()`은 짧은 안정화 뒤 `onboardingRevealVisibilityTarget()`이 계산한 열린 본문 결합 범위를 기준으로 nearest smooth scroll을 한 번만 실행합니다. 이미 충분히 보이는 범위에는 이동하지 않고 oversized 본문도 최소 유효 높이만 드러냅니다. 페이지 전체·설명 문구·button 상태에 광범위한 animation을 적용하지 않으며 `prefers-reduced-motion`에서는 즉시 이동합니다. 캡처처럼 패널 action이 있는 단계는 넓은 화면에서 본문 폭을 확보하고 520px 이하 container에서는 action을 설명 아래 full-width로 배치합니다.
 
 전체 안내만 첫 실행 상태의 `completed`·`skipped`를 기록합니다. 기능별 부분 투어와 고급 가이드는 독립 route로 실행하며 완료·중단·건너뛰기가 전역 온보딩 상태를 쓰거나 덮어쓰지 않습니다. 각 부분 투어는 필요한 snapshot 수·선택 항목·캡처 상태가 준비된 checkpoint에서 session을 만들기 때문에 중간 기능부터 시작해도 이전 장의 조작을 요구하지 않습니다.
 
@@ -40,7 +40,7 @@ v0.16.5의 온보딩은 `src/onboarding.js`에 전체 39단계와 기본 사용�
 
 첫 초대와 읽기 전용 briefing·debrief는 modal phase입니다. 제품 영역을 `inert`·`aria-hidden` 처리하고 focus를 안내 surface 안에 가둔 상태에서 화면을 dim 처리하며 실제 target의 spotlight 영역만 드러냅니다. briefing은 target ring·점선 화살표·제목과 기능 의미·사용 시점 또는 확인 행동을 두 개의 짧은 문장으로 표시합니다. debrief는 녹색 result ring과 별도 불투명 고대비 surface에서 `잘했어요!`, 단계 이름과 관찰 결과를 분리합니다. 완료 surface는 target보다 위 stacking context에 놓이고 아래 target copy가 비치지 않도록 배경·텍스트 token을 직접 지정합니다. modal footer에는 진행 숫자와 `다음`만 두고 종료 control은 패널 우측 상단에 둡니다. phase가 끝나면 `inert`와 focus trap을 함께 해제합니다.
 
-상호작용 단계는 처음부터 practice로 진입해 dim·modal·`inert` 없이 실제 제품 화면, target의 고대비 pulse ring과 기능 이름·의미·사용 맥락·할 일을 한 dock에 표시합니다. 캡처 데모는 이름이 보이는 가로 실행 버튼과 진행 중 상태를 제공하고 나머지 target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. value·checked·open 조건이 이미 충족된 경우 현재 DOM 상태를 즉시 완료 집합과 동기화해 control을 되돌렸다 다시 조작하게 하지 않습니다. 정확한 동작을 감지하면 현재 scroll과 target을 유지한 채 debrief로 전환하고, disclosure도 사용자가 클릭한 `summary`를 결과 target으로 계속 사용합니다.
+상호작용 단계는 처음부터 practice로 진입해 dim·modal·`inert` 없이 실제 제품 화면, target의 고대비 pulse ring과 기능 이름·의미·사용 맥락·할 일을 한 dock에 표시합니다. 캡처 데모는 이름이 보이는 가로 실행 버튼과 진행 중 상태를 제공하고 나머지 target은 실제 button·input·select 또는 disclosure의 직접 `summary`입니다. value·checked·open 조건이 이미 충족된 경우 현재 DOM 상태를 즉시 완료 집합과 동기화해 control을 되돌렸다 다시 조작하게 하지 않습니다. 정확한 동작을 감지하면 debrief로 전환하며, disclosure는 열린 `details` 전체로 spotlight를 확장하고 안정화된 본문 범위를 한 번만 부드럽게 드러냅니다.
 
 튜토리얼 interaction listener는 실제 control보다 먼저 실행되는 capture phase에 있습니다. click 직후의 이전 `aria-checked`·`open` 값을 판정하지 않도록 다음 task까지 완료 검사를 미루고, 그 사이 튜토리얼이 닫히거나 다른 단계로 바뀐 경우를 막기 위해 같은 session 객체·step ID·`practice` phase인지 다시 확인합니다.
 

@@ -1,10 +1,20 @@
 # ST DevTools 구현 로드맵
 
-이 문서는 v0.16.5 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
+이 문서는 v0.16.6 코드 기준으로 완료 범위와 다음 방향을 나눈 예상 계획입니다. 버전 번호는 기능 의존 관계를 나타내며 일정 약속은 아닙니다.
 
 ## 현재 기준선
 
-v0.16.5는 튜토리얼 동작 완료 뒤 현재 스크롤과 강조 위치를 유지하고, 새 단계의 target이 실제 화면 밖에 있을 때만 최소 스크롤합니다. 토글은 펼친 본문으로 점프하지 않고 클릭한 `summary`를 유지하며 불필요한 페이지·문구·button 모션을 제거했습니다. 고급 기능 가이드와 기능 설명서는 더 조밀한 목록·본문·전후 배치를 사용하고, 기능 설명서 19개는 튜토리얼 fixture를 실제 제품 renderer로 렌더한 읽기 전용 `inert` clone을 계속 사용합니다.
+v0.16.6은 disclosure를 펼친 뒤 spotlight를 열린 본문 전체로 확장하고 레이아웃 안정 뒤 해당 본문이 보이는 위치로 한 번만 부드럽게 스크롤합니다. 기능 설명서 19개는 각 설명 section과 대응하는 실제 제품 renderer fragment를 1:1로 배치하며, 읽기 전용 clone 안의 작동하지 않는 툴팁 control을 제거했습니다.
+
+## v0.16.6 — 열린 본문 spotlight·항목별 실제 UI 설명서 · 완료
+
+- disclosure 완료 target을 열린 `details` 전체로 확장하고 `ResizeObserver`로 공개된 본문의 최종 geometry를 추적
+- 레이아웃 안정 뒤 열린 본문 결합 범위를 기준으로 단 한 번의 nearest smooth scroll을 실행해 강조와 화면 이동의 순서를 일치
+- 동작 줄이기 설정에서는 즉시 이동하며 페이지·문구·button의 불필요한 장식 motion은 다시 추가하지 않음
+- 기능 설명서 19개의 각 section에 topic별 실제 제품 renderer fragment를 1:1로 배치
+- fragment clone의 `inert`·fixture·저장소/provider 비접근 경계를 유지하고 오해를 부르는 비활성 `?` 툴팁 control 제거
+- 390px 모바일과 넓은 화면에서 section·fragment 개수, 가로 overflow와 fragment/설명 병렬 배치를 샌드박스 검증
+- 다음 후보: 실제 사용자 검토에서 긴 disclosure의 이동 거리, oversized 본문의 최소 가시 범위와 section별 대표 fragment 선택을 조정
 
 ## v0.16.5 — 위치 안정화·고밀도 도움말·실제 renderer excerpt · 완료
 

@@ -155,17 +155,22 @@ test('detailed help articles reuse inert product renderers with onboarding fixtu
     );
 
     assert.match(article, /helpTopicVisualById\(topic\.id\)/u);
-    assert.match(article, /if \(visual\) content\.appendChild\(this\.renderHelpTopicVisual\(visual\)\)/u);
-    assert.match(article, /content\.appendChild\(sections\)/u);
-    assert.match(article, /article\.appendChild\(content\)/u);
-    assert.match(visual, /className: `st-devtools-help-visual is-\$\{visual\.type\}`/u);
+    assert.match(article, /this\.renderHelpTopicFragments\(visual, topic\.sections\.length\)/u);
+    assert.match(article, /for \(const \[index, \[title, body\]\] of topic\.sections\.entries\(\)\)/u);
+    assert.match(article, /section\.append\(visualFragments\[index\], copy\)/u);
+    assert.match(article, /section\.dataset\.helpSection = String\(index\)/u);
+    assert.match(article, /article\.appendChild\(sections\)/u);
+    assert.match(visual, /className: `st-devtools-help-visual is-\$\{visual\.type\}/u);
     assert.match(visual, /figure\.setAttribute\('role', 'img'\)/u);
-    assert.match(visual, /figure\.setAttribute\('aria-label', visual\.ariaLabel\)/u);
+    assert.match(visual, /visual\.ariaLabel/u);
     assert.match(visual, /st-devtools-help-visual-preview/u);
     assert.match(visual, /preview\.setAttribute\('aria-hidden', 'true'\)/u);
     assert.match(visual, /preview\.setAttribute\('inert', ''\)/u);
     assert.match(visual, /preview\.dataset\.helpSource = 'product-renderer'/u);
+    assert.match(visual, /preview\.dataset\.helpFragment = String\(sectionIndex\)/u);
     assert.match(visual, /this\.renderHelpProductExcerpt\(visual\.id\)/u);
+    assert.match(visual, /this\.helpProductFragmentNodes\(productSurface, visual\.id\)/u);
+    assert.match(visual, /groups\[index\] \?\? groups\.at\(-1\)/u);
     assert.match(visual, /Object\.create\(DevToolsWindow\.prototype\)/u);
     assert.doesNotMatch(visual, /Object\.create\(this\)/u);
     assert.match(visual, /preview\.importedDiagnostics = null/u);
@@ -183,7 +188,22 @@ test('detailed help articles reuse inert product renderers with onboarding fixtu
     assert.match(visual, /ONBOARDING_FIXTURE_SNAPSHOTS\.slice\(1\)/u);
     assert.match(visual, /includedSources/u);
     assert.match(visual, /input\.value = query/u);
+    assert.match(visual, /clone\.matches\?\.\('\.st-devtools-help-tooltip'\)/u);
+    assert.match(visual, /clone\.querySelectorAll\?\.\([\s\S]*?\.st-devtools-help-tooltip/u);
     assert.doesNotMatch(visual, /localStorage|fetch\(/u);
+
+    const fragmentRouter = sourceBlock(
+        visual,
+        '\n    helpProductFragmentNodes(',
+        '\n    cloneHelpProductNode(',
+    );
+    for (const topic of HELP_TOPICS) {
+        assert.match(
+            fragmentRouter,
+            new RegExp(`case '${topic.id}'`, 'u'),
+            `missing product fragment route: ${topic.id}`,
+        );
+    }
 });
 
 test('empty state and help indexes keep compact, mobile-safe vertical rhythm', async () => {
@@ -221,7 +241,11 @@ test('empty state and help indexes keep compact, mobile-safe vertical rhythm', a
     );
     assert.match(
         style,
-        /\.st-devtools-help-topic-content \{[\s\S]*?grid-template-columns: minmax\(0, 1\.3fr\) minmax\(15rem, 0\.7fr\);/u,
+        /\.st-devtools-help-topic-section \{[\s\S]*?grid-template-columns: minmax\(14rem, 0\.9fr\) minmax\(0, 1\.1fr\);/u,
+    );
+    assert.match(
+        style,
+        /\.st-devtools-help-product-surface\[data-help-part\] \{[\s\S]*?max-height: 13rem;/u,
     );
 });
 
@@ -260,6 +284,18 @@ test('navigation actions keep their product destination as the debrief target', 
         assert.equal(step.resultTabId, tabId);
         assert.equal(step.resultTarget, target);
     }
+});
+
+test('the included-only action highlights the filtered source result, not only its switch', () => {
+    const step = ONBOARDING_STEPS.find((candidate) => (
+        candidate.id === 'explorer-included-filter'
+    ));
+    assert.ok(step);
+    assert.equal(step.target, '.st-devtools-explorer-filter');
+    assert.equal(
+        step.resultTarget,
+        '.st-devtools-source-group[data-group="configured"]',
+    );
 });
 
 test('advanced entries are coachmark step collections with no provider action', async () => {
@@ -619,12 +655,17 @@ test('coachmark stages switch immediately, isolate inactive surfaces, and only a
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingGuidePanel, modalStage\)/u);
     assert.match(update, /setOnboardingSurfaceActive\(this\.onboardingPracticeDock, !modalStage\)/u);
     assert.match(update, /refreshOnboardingTarget\(\{ preserveGuideGeometry \}\)/u);
+    assert.match(update, /const settlingReveal = Boolean/u);
     assert.match(
         update,
-        /const targetAvailable = actionCompleted[\s\S]*?\? Boolean\(this\.onboardingTarget\)[\s\S]*?: this\.focusOnboardingTarget/u,
+        /const targetAvailable = settlingReveal[\s\S]*?\? Boolean\(this\.onboardingTarget\)[\s\S]*?: this\.focusOnboardingTarget/u,
     );
     assert.match(update, /const actionCompleted = Boolean\([\s\S]*?!stepChanged[\s\S]*?stageChanged/u);
-    assert.match(update, /behavior: stepChanged \? 'smooth' : 'auto'/u);
+    assert.match(update, /behavior: actionCompleted \|\| stepChanged \? 'smooth' : 'auto'/u);
+    assert.match(
+        update,
+        /if \(settlingReveal\)[\s\S]*?scheduleOnboardingRevealSettle\(\)/u,
+    );
     assert.doesNotMatch(update, /scheduleOnboardingGuidePosition\(\{ refocus: true \}\)/u);
     assert.match(surface, /surface\.hidden = false/u);
     assert.match(surface, /classList\.toggle\('is-active', active\)/u);
