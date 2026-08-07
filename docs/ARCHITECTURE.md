@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.11의 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.17.0의 Rule Inspector 조건·예외 적용 범위 판정과 별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -199,21 +199,23 @@ v6 새 캡처는 최종 문자열 범위와 별도로 payload 안의 실제 구�
 
 검사는 평탄화된 전체 텍스트를 한꺼번에 비교하지 않고 검사 가능한 소스별로 수행합니다. `instruction-atoms.js`는 먼저 소스를 지시·참고·대화 산출물·tool 데이터·멀티모달 표시·최종 집계로 분류합니다. 비활성 설정 프롬프트와 실제 요청 미포함 소스는 원자 추출에서 제외하고, 대화 산출물·tool 데이터·멀티모달 표시·최종 집계는 지시 비교에서 분리합니다. 참고 데이터는 원자를 표시할 수 있지만 일반 지시와 자동 비교하지 않습니다.
 
-각 지시 원자는 대상, 행동, 속성, 값, 긍정/금지, 범위, 조건, 예외와 우선순위 외에 source ID·label·type·role·position·depth, 원문 문자 범위, 최종 프롬프트 범위, 추출 방식과 0~1 신뢰도를 보존합니다. 예시 접두사·인용 예문·fenced code block의 문구는 원자에서 제외합니다. 같은 속성의 비호환 값 또는 반대 극성 원자를 실제 쌍으로 연결하고, 원자를 공유하는 관계는 클러스터로 묶습니다.
+각 지시 원자는 대상, 행동, 속성, 값, 긍정/금지, 범위, 조건, 예외와 우선순위 외에 source ID·label·type·role·position·depth, 원문 문자 범위, 최종 프롬프트 범위, 추출 방식과 0~1 신뢰도를 보존합니다. 조건·예외는 표시용 원문과 bounded predicate를 함께 가집니다. predicate는 짧은 단순 equality, exact clause 또는 compound로만 분류하며 자연어 전체를 논리식으로 해석하지 않습니다. 예시 접두사·인용 예문·fenced code block의 문구는 원자에서 제외합니다. 같은 속성의 비호환 값 또는 반대 극성 원자를 실제 쌍으로 연결합니다.
 
-무조건 명시된 언어·형식·긍정/금지 충돌은 `confirmed`, 조건이나 예외가 섞이면 `candidate`, 역할처럼 정적 패턴만으로 양립 여부를 확정하기 어려우면 `insufficient-evidence`로 판정합니다. 원자 500개·관계 200개·우선순위 경고 100개 상한을 두며, 상한에 닿으면 결과에 생략 상태를 기록합니다. 명시적인 패턴과 정확히 정규화된 문장 비교를 사용하며 의미를 추론하는 모델 호출은 사용하지 않습니다.
+충돌 가능한 atom pair마다 `compareApplicability()`가 `unconditional-overlap`, `same-predicate-overlap`, `subset-overlap`, `mutually-exclusive`, `exception-specialization`, `unknown-overlap` 중 하나와 `conflict`·`compatible` disposition을 만듭니다. 같은 단순 조건과 같은 예외의 충돌은 `confirmed`, 서로 배타적인 equality 조건과 직접 예외 특수화는 `confirmed compatible`입니다. 한쪽만 조건부이거나 복합·불명 조건이면 충돌을 제거하지 않고 `candidate`로 유지하며, 역할처럼 정적 패턴만으로 양립 여부를 확정하기 어려우면 `insufficient-evidence`입니다.
+
+`conflict` relation만 원자를 공유하는 cluster와 Rule Inspector finding으로 이어집니다. `compatible` relation은 별도 `compatibilityRelations`에 보존해 UI가 양립 사유와 조건·예외 원문을 설명하지만 경고 수를 늘리지 않습니다. 원자 500개·충돌 관계 200개·양립 관계 100개·우선순위 경고 100개 상한을 독립적으로 두며, 각 상한에 닿으면 결과에 생략 상태를 기록합니다. 명시적인 패턴과 정확히 정규화된 문장 비교를 사용하며 의미를 추론하는 모델 호출은 사용하지 않습니다.
 
 ### Rule Inspector V3 처리 흐름
 
 1. `instruction-atoms.js`가 실제 요청에 포함된 검사 가능 소스를 capability별로 나누고 지시 원자를 추출합니다.
 2. `comparison-policy.js`가 스냅샷의 범위 컨텍스트와 정책 V2 초안을 이용해 소스 복제본에 그룹 annotation을 붙입니다.
-3. `rules.js`가 원자 쌍·클러스터를 만들면서 같은 그룹과 검사 범주에 적용되는 비교만 제외하고, 제외 비교·그룹 요약·그룹 경고를 findings와 함께 반환합니다.
+3. `rules.js`가 충돌 원자 쌍만 클러스터와 findings로 만들면서 같은 그룹과 검사 범주에 적용되는 비교를 제외합니다. 조건상 양립 relation은 구조 모델의 별도 통계·상세에 남고 findings에는 들어가지 않습니다.
 4. `finding-review.js`가 결과의 의미 키와 현재 범위에 저장된 판정·무시를 대조합니다.
 5. UI가 구조 요약과 원자 상세를 기본 접힘 상태로 표시하고, finding에서 탐색기를 다시 렌더한 뒤 관련 소스 또는 정확한 최종 근거 범위를 강조합니다.
 
 현재 비교 범주 ID는 `language`, `format`, `role`, `directives`, `duplicates`입니다. 컨텍스트 사용률, 대형 소스, 명시적인 이전 지시 무시 문구처럼 한 소스 또는 스냅샷 전체를 검사하는 규칙은 그룹 내부 비교 제외와 별개입니다.
 
-V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecords`, 관련 `sourceIds`와 최종 텍스트의 `finalRanges`, `method`, 수치 `confidence`를 함께 반환합니다. 규칙 활성화와 수치 임계값은 버전이 지정된 브라우저 localStorage 키에 저장하며 스냅샷 스키마에는 포함하지 않습니다.
+V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecords`, 관련 `sourceIds`와 최종 텍스트의 `finalRanges`, `method`, 수치 `confidence`, `applicabilityKind`, `relationDisposition`을 함께 반환합니다. 규칙 활성화와 수치 임계값은 버전이 지정된 브라우저 localStorage 키에 저장하며 스냅샷 스키마에는 포함하지 않습니다.
 
 ### 선택적 AI Semantic Inspector 경계
 
@@ -224,7 +226,7 @@ v0.13.1의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 1. UI가 개인정보 모드가 `full`인 현재 스냅샷과 사용자가 직접 체크한 `finding:<id>` 또는 `cluster:<id>`만 `SemanticInspector.prepare()`에 전달합니다. redacted·metadata v7 스냅샷은 코어에서도 다시 거부합니다.
 2. `SemanticInspector`는 adapter의 선택된 Connection Manager 프로필 또는 현재 연결 identity를 동기적으로 읽습니다. 공개 프로필 서비스가 없거나 저장한 프로필 ID가 resolve되지 않으면 요청 시작 전에 현재 연결을 사용합니다. provider를 확인할 수 없는 `unavailable`은 지원하지 않는 상태로 실패하고, provider만 확인되는 `partial`은 model과 비용을 추측하지 않은 채 그대로 유지합니다.
    Text Completion 프로필에는 consent에서 검토한 semantic prompt를 문자열로 그대로 전달하고 `includeInstruct: false`로 별도 instruct template 재구성을 막습니다. `includePreset: true`는 sampler·stop 설정에만 사용하며 prompt·model·응답 상한은 명시적 요청값을 유지합니다.
-3. `semantic-inspector.js`가 target을 실제 로컬 finding/cluster에 연결하고 source·atom·relation closure를 계산합니다. 활성 상태·실제 요청 포함·대안 제외·분석 capability·금지된 final/chat-history 유형을 검사하며, closure 밖 소스는 정확한 label과 제외 이유만 미리보기에 남깁니다.
+3. `semantic-inspector.js`가 target을 실제 로컬 finding/cluster에 연결하고 source·atom·relation closure를 계산합니다. relation clone은 `applicabilityKind`·`disposition`·`conditions`·`exceptions`를 canonical AI 입력에 보존하고 허용되지 않은 enum은 실패로 닫습니다. 활성 상태·실제 요청 포함·대안 제외·분석 capability·금지된 final/chat-history 유형을 검사하며, closure 밖 소스는 정확한 label과 제외 이유만 미리보기에 남깁니다.
 4. closure에 필요한 source는 일부를 조용히 생략하거나 자르지 않습니다. source별·선택 전체·요청 전체 상한을 넘거나 필수 source에서 민감 토큰을 발견하면 준비 전체를 `SEMANTIC_INVALID_INPUT`으로 실패시켜 quote offset을 바꾸는 부분 정제를 금지합니다.
 5. 준비 결과는 실제 요청과 같은 전체 `content`, source 이름·type·byte·range·정책 annotation, 제외 목록, 현재 provider/model identity, 예상 입력 토큰, 응답 토큰 상한, 고정 지시·추가 지시·프리필을 담습니다. UI는 이 값으로 전용 모달을 만들고 동의 체크를 매번 선택 해제합니다. 사용자가 이번 1회 전송에 동의하기 전에는 `inspect()`를 호출하지 않습니다.
 6. 전송 직전에 adapter identity를 다시 읽어 provider·model·현재 연결/프로필 경로·opaque profile ID 중 하나라도 준비 시점과 달라졌으면 실패로 닫습니다. 준비 identity는 `generate()`의 expected route binding으로 전달되고 adapter가 실제 경로를 한 번 resolve해 호출 함수와 함께 고정합니다. 이 사이에 선택 profile이 사라지거나 current route가 profile로 바뀌면 capture gate를 열기 전에 실패하므로 current 연결로 잘못 전송하지 않습니다. identity 전체가 요청 digest에 포함되므로 같은 provider/model을 쓰는 다른 프로필의 cache도 재사용하지 않습니다. 유효한 메모리 cache가 없을 때만 provider adapter의 `generate()`를 호출하며, 선택한 프로필의 `sendRequest()`가 시작된 뒤 실패하면 현재 연결 `generateRaw()`로 자동 재시도하지 않습니다.
@@ -325,7 +327,7 @@ localStorage는 여러 키를 묶는 트랜잭션을 제공하지 않습니다. 
 - 프로필은 64개, 프로필별 그룹 정의·matcher는 각각 100개, 프로필별 수동 지정은 500개로 제한합니다. 전체 그룹·matcher는 각각 500개, 전체 수동 지정은 2,000개, 가져오는 판정은 2,000개가 상한입니다.
 - 알 수 없는 필드, `__proto__`·`constructor`·`prototype` 키, 지원하지 않는 버전, 중복 ID, 끊어진 그룹 참조, 허용되지 않은 범위·동작·검사 범주를 거부합니다.
 - 정규식 이름 matcher는 검색과 같은 길이·복잡도 정적 검사를 통과해야 합니다. 이 검사는 알려진 고위험 구조를 줄이는 경계이며 임의 정규식의 실행 시간을 수학적으로 보장하지는 않습니다.
-- 미리보기와 정적 Rule Inspector는 자연어 의미 전체, 조건 논리, 실제 우선순위 승자를 판정하지 않습니다. 분석 상한 이후의 원자·관계는 생략될 수 있습니다.
+- 미리보기와 정적 Rule Inspector는 자연어 의미 전체, 복합 조건의 일반 논리, 실제 우선순위 승자를 판정하지 않습니다. 단순 equality·exact clause·직접 예외 특수화만 1차 판정하며 분석 상한 이후의 원자·관계는 생략될 수 있습니다.
 - 로컬 감사 기록은 최대 200건·256 KiB이며 설정 전체 대신 digest와 제한된 요약을 저장합니다. 같은 브라우저 사용자가 수정·삭제할 수 있으므로 보안 로그나 부인 방지 기록이 아닙니다.
 - 정책 가져오기는 Rule Inspector 설정 초안 교체입니다. IndexedDB 스냅샷 백업·복원, 타임라인 병합, 현재 정책과의 자동 merge 기능은 아닙니다.
 

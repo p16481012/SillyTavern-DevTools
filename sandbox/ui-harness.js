@@ -1,4 +1,4 @@
-import { DevToolsWindow } from '../src/ui.js?v=0.16.11';
+import { DevToolsWindow } from '../src/ui.js?v=0.17.0';
 import { CaptureController } from '../src/capture.js';
 import { SnapshotStore } from '../src/storage.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
@@ -71,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.16.11',
+        extensionVersion: '0.17.0',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1450,7 +1450,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.16.11',
+    version: '0.17.0',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1661,7 +1661,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.16.11',
+        extensionVersion: '0.17.0',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1708,7 +1708,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.16.11',
+        version: '0.17.0',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });

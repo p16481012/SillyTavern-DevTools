@@ -273,7 +273,7 @@ function sourceRecord(caseId, definition, cursor) {
 }
 
 const OFFICIAL_MANIFEST_SHA256 = (
-    '902ac3947f9587e5d765a7932e5bd98b381ab554654faec79a1db600ec73fb66'
+    '94fd431f2d2bb67ab2f2b6a7e28c741e8ad99f45dbfbe1f5392b04eb91f83fca'
 );
 
 function corpusInvariant(condition, reason) {

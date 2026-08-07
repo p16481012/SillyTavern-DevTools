@@ -47,14 +47,77 @@ function sorted(values) {
     return [...values].sort();
 }
 
+function assertPatterns(actual, expected, fixtureId, field) {
+    const patterns = [
+        ...(expected[field] ?? []),
+        ...(expected[field.slice(0, -1)] ? [expected[field.slice(0, -1)]] : []),
+    ];
+    for (const pattern of patterns) {
+        assert.equal(
+            actual.some((value) => pattern.test(value)),
+            true,
+            `${fixtureId}: ${field.slice(0, -1)} was not preserved on the relation`,
+        );
+    }
+}
+
+function assertRelationContract(relation, expected, fixtureId) {
+    assert.equal(relation.category, expected.category);
+    assert.equal(relation.kind, expected.kind);
+    assert.equal(relation.applicabilityKind, expected.applicabilityKind);
+    assert.equal(relation.disposition, expected.disposition);
+    assert.equal(relation.status, expected.status);
+    assert.equal(relation.atomIds.length, 2);
+    assert.equal(relation.sourceIds.length, 2);
+    assertPatterns(relation.conditions, expected, fixtureId, 'conditions');
+    assertPatterns(relation.exceptions, expected, fixtureId, 'exceptions');
+}
+
 for (const fixture of STRUCTURED_SEMANTIC_PRODUCT_CASES) {
     test(`structured semantic product path: ${fixture.id}`, async () => {
         const snapshot = structuredSemanticSnapshot(fixture.sources, fixture.id);
         const analysis = analyzeSnapshotDetailed(snapshot, RULE_SETTINGS);
         const relations = analysis.instructions.relations;
+        const compatibilityRelations = analysis.instructions.compatibilityRelations;
+
+        if (fixture.expectedCompatibleRelation) {
+            assert.equal(
+                relations.length,
+                0,
+                `${fixture.id}: compatible applicability escaped into warning relations`,
+            );
+            assert.equal(
+                compatibilityRelations.length,
+                1,
+                `${fixture.id}: expected one compatible product relation`,
+            );
+            const relation = compatibilityRelations[0];
+            assertRelationContract(relation, fixture.expectedCompatibleRelation, fixture.id);
+            assert.equal(relation.clusterId, null);
+            assert.equal(
+                analysis.instructions.clusters.some(
+                    ({ relationIds }) => relationIds.includes(relation.id),
+                ),
+                false,
+                `${fixture.id}: compatible relation must not create a warning cluster`,
+            );
+            assert.equal(
+                analysis.findings.some(({ relationId }) => relationId === relation.id),
+                false,
+                `${fixture.id}: compatible relation must not create a warning finding`,
+            );
+            assert.equal(analysis.instructions.stats.conflictRelations, 0);
+            assert.equal(analysis.instructions.stats.compatibleRelations, 1);
+            return;
+        }
 
         if (fixture.expectedRelation == null) {
             assert.equal(relations.length, 0, `${fixture.id}: unexpected relation`);
+            assert.equal(
+                compatibilityRelations.length,
+                0,
+                `${fixture.id}: unexpected compatible relation`,
+            );
             if (fixture.expectedAtoms) {
                 const atoms = fixture.expectedAtoms.category
                     ? analysis.instructions.atoms.filter(
@@ -76,31 +139,19 @@ for (const fixture of STRUCTURED_SEMANTIC_PRODUCT_CASES) {
         }
 
         assert.equal(relations.length, 1, `${fixture.id}: expected one product relation`);
+        assert.equal(
+            compatibilityRelations.length,
+            0,
+            `${fixture.id}: conflict also appeared as a compatible relation`,
+        );
         const relation = relations[0];
-        assert.equal(relation.category, fixture.expectedRelation.category);
-        assert.equal(relation.kind, fixture.expectedRelation.kind);
-        assert.equal(relation.status, fixture.expectedRelation.status);
-        assert.equal(relation.atomIds.length, 2);
-        assert.equal(relation.sourceIds.length, 2);
-
-        if (fixture.expectedRelation.condition) {
-            assert.equal(
-                relation.conditions.some((value) => fixture.expectedRelation.condition.test(value)),
-                true,
-                `${fixture.id}: condition was not preserved on the relation`,
-            );
-        }
-        if (fixture.expectedRelation.exception) {
-            assert.equal(
-                relation.exceptions.some((value) => fixture.expectedRelation.exception.test(value)),
-                true,
-                `${fixture.id}: exception was not preserved on the relation`,
-            );
-        }
+        assertRelationContract(relation, fixture.expectedRelation, fixture.id);
 
         const finding = matchingFinding(analysis, relation);
         assert.ok(finding, `${fixture.id}: relation-backed finding missing`);
         assert.equal(finding.clusterId, relation.clusterId);
+        assert.equal(finding.applicabilityKind, relation.applicabilityKind);
+        assert.equal(finding.relationDisposition, relation.disposition);
         assert.deepEqual(sorted(finding.atomIds), sorted(relation.atomIds));
         assert.deepEqual(sorted(finding.sourceIds), sorted(relation.sourceIds));
 
@@ -143,6 +194,8 @@ for (const fixture of STRUCTURED_SEMANTIC_PRODUCT_CASES) {
         const preparedRelation = prepared.request.relations[0];
         assert.deepEqual(sorted(preparedRelation.atomIds), sorted(relation.atomIds));
         assert.deepEqual(sorted(preparedRelation.sourceIds), sorted(relation.sourceIds));
+        assert.equal(preparedRelation.applicabilityKind, relation.applicabilityKind);
+        assert.equal(preparedRelation.disposition, relation.disposition);
         assert.deepEqual(preparedRelation.conditions, relation.conditions);
         assert.deepEqual(preparedRelation.exceptions, relation.exceptions);
 
@@ -186,4 +239,3 @@ for (const fixture of STRUCTURED_SEMANTIC_PRODUCT_CASES) {
         );
     });
 }
-

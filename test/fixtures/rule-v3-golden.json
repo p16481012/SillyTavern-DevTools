@@ -13,7 +13,8 @@
       { "id": "ja", "type": "system", "content": "사용자가 일본인인 경우 일본어로 답변하세요." },
       { "id": "en", "type": "system", "content": "사용자가 미국인인 경우 영어로 답변하세요." }
     ],
-    "expectedRelations": ["language:candidate"]
+    "expectedRelations": [],
+    "expectedCompatibleRelations": ["language:mutually-exclusive:confirmed"]
   },
   {
     "id": "quoted-example-is-not-an-instruction",
@@ -118,5 +119,30 @@
       { "id": "negative", "type": "extension", "content": "한국어를 사용하지 마세요." }
     ],
     "expectedRelations": ["language:confirmed"]
+  },
+  {
+    "id": "same-condition-language-conflict",
+    "sources": [
+      { "id": "english", "type": "system", "content": "If mode is concise respond in English." },
+      { "id": "japanese", "type": "extension", "content": "If mode is concise respond in Japanese." }
+    ],
+    "expectedRelations": ["language:confirmed"]
+  },
+  {
+    "id": "exception-specialization-is-compatible",
+    "sources": [
+      { "id": "default", "type": "system", "content": "Unless locale is en-US respond in English." },
+      { "id": "exception", "type": "extension", "content": "If locale is en-US respond in Japanese." }
+    ],
+    "expectedRelations": [],
+    "expectedCompatibleRelations": ["language:exception-specialization:confirmed"]
+  },
+  {
+    "id": "compound-conditions-need-review",
+    "sources": [
+      { "id": "english", "type": "system", "content": "If locale is en-US and mode is concise respond in English." },
+      { "id": "japanese", "type": "extension", "content": "If locale is ja-JP and mode is verbose respond in Japanese." }
+    ],
+    "expectedRelations": ["language:candidate"]
   }
 ]

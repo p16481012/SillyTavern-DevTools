@@ -1,4 +1,15 @@
-# v0.16.11 기술 구현 현황
+# v0.17.0 기술 구현 현황
+
+## v0.17.0 조건·예외 relation 적용 범위
+
+- `extractInstructionApplicability()`는 조건·예외 표시 원문과 함께 최대 96자의 정규화 predicate를 만듭니다. 단순 영어 `is`·`equals`·`=`·`==`와 한국어 조사형은 equality로, `and`·`or`·`그리고`·`또는` 등이 섞인 절은 compound로, 나머지는 exact clause signature로 보존합니다.
+- `compareApplicability()`는 충돌 가능한 atom pair의 적용 범위를 `unconditional-overlap`, `same-predicate-overlap`, `subset-overlap`, `mutually-exclusive`, `exception-specialization`, `unknown-overlap`으로 분류하고 `conflict` 또는 `compatible` disposition을 함께 반환합니다.
+- 같은 equality 또는 exact clause 조건이며 예외도 같으면 `same-predicate-overlap` 확정 충돌이 될 수 있습니다. 같은 equality key의 값이 다르면 `mutually-exclusive`, 무조건 규칙의 예외 predicate와 다른 규칙의 condition predicate가 같으면 `exception-specialization` 확정 양립입니다.
+- 한쪽만 조건부이거나 서로 다른 복합·불명 조건이면 충돌을 조용히 제거하지 않고 `subset-overlap` 또는 `unknown-overlap` 후보로 유지합니다. 일반 자연어 함의, 복합 논리의 포함·배타, 실제 우선순위 승자는 판정하지 않습니다.
+- 양립 관계는 `compatibilityRelations`에 따로 모이며 충돌 relation·cluster·Rule Inspector finding으로 변환되지 않습니다. 충돌 관계 200개와 별도로 양립 관계 100개 상한 및 `compatibilityRelationsTruncated`를 사용합니다.
+- 구조 분석 요약과 상세에는 `조건상 양립` 수, 양립 사유, 두 source label, 조건·예외 원문을 표시합니다. 분석 상한 안내는 양립 관계 상한도 함께 반영합니다.
+- Rule Inspector finding은 `applicabilityKind`와 `relationDisposition`을 보존합니다. 선택적 AI 의미 검사의 relation clone과 canonical 입력은 여기에 `conditions`·`exceptions`까지 포함하며 허용되지 않은 적용 범위·disposition enum은 provider 호출 전에 실패로 닫습니다.
+- 단위·golden·규칙·AI 준비 테스트가 같은 조건 충돌, 배타 조건 양립, 예외 특수화 양립, 복합·불명 조건 후보와 compatible relation의 finding 제외 계약을 검증합니다.
 
 ## v0.16.11 탭별 빈 상태·스크롤 폭 안정화
 
@@ -476,7 +487,7 @@
 - `MESSAGE_RECEIVED`의 `extra.token_count`는 provider 보고 usage가 아니라 로컬 출력 추정치이며 하나의 활성 generation을 안전하게 고를 수 없으면 미연결 또는 산정 불가로 남습니다.
 - provider 서버가 변환한 최종 HTTP body와 내부 upstream provider는 공개 프런트엔드 이벤트만으로 확정할 수 없습니다.
 - 정적 Rule Inspector는 명시적 언어·형식·역할·포함/금지·이전 지시 무시 표현을 중심으로 하며 자연어 의미 전체를 이해하지 않습니다.
-- 조건·예외의 논리 관계, 말투·정체성·안전·메모리 의미 충돌과 실제 우선순위 승자는 아직 판정하지 않습니다.
+- 조건·예외는 짧은 equality와 exact clause의 동치·배타 및 직접 예외 특수화만 1차 판정합니다. 복합 조건의 일반 논리 관계, 말투·정체성·안전·메모리 의미 충돌과 실제 우선순위 승자는 아직 판정하지 않습니다.
 - v0.9.1 이전 스냅샷에는 프리셋·캐릭터·채팅 범위 지문이 없고 v0.9.2 이전 스냅샷에는 구조 provenance가 없습니다.
 
 ### AI Semantic Inspector
@@ -497,7 +508,7 @@
 
 ### v0.17.x 이후 방향
 
-- 조건 동치·포함·배타와 일반 규칙·예외 관계를 오탐 없이 판정하는 relation 설계
+- 복합 조건의 포함·배타와 중첩 예외를 오탐 없이 확장하는 relation 설계
 - 말투·정체성·안전·메모리 의미의 정적 atom·relation 양성/음성 경계를 축별로 추가하는 분류 설계
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
 - 실제 초보자 검토에서 확인되는 briefing 길이·practice task dock·debrief 결과 설명과 모바일 sheet 밀도 보정
@@ -506,8 +517,8 @@
 
 ## 다음 구현 우선순위
 
-1. 조건·예외 relation은 같은 조건의 충돌, 배타 조건의 비충돌, 일반 규칙을 좁히는 예외를 양성/음성 corpus와 오탐 budget으로 먼저 고정합니다.
-2. 말투·정체성·안전·메모리 atom은 참가자·대상 scope와 축별 release gate를 정한 뒤 제품 경로에 연결합니다.
-3. 검사 결과는 근거 위치·비교·사용자 판정·제안 복사까지 이어지게 하되 원본 자동 수정은 추가하지 않습니다.
+1. 말투·정체성·안전·메모리 atom은 참가자·대상 scope와 축별 release gate를 정한 뒤 제품 경로에 연결합니다.
+2. 검사 결과는 근거 위치·비교·사용자 판정·제안 복사까지 이어지게 하되 원본 자동 수정은 추가하지 않습니다.
+3. 복합 조건 relation은 단순 equality와 분리된 양성/음성 corpus·오탐 budget을 먼저 고정한 뒤 확장합니다.
 4. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 필요 시 호환 패치를 만듭니다.
 5. 온보딩은 실제 초보자 검토 뒤 briefing·practice·debrief 카피를 보정하되 view-session 격리와 종료 시 live view 복구 경계를 유지합니다.

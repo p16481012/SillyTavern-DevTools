@@ -120,7 +120,7 @@ test('official suite publishes a stable versioned SHA-256 manifest', () => {
         caseCount: 16,
         caseIds: suite.cases.map(({ id }) => id),
         digestAlgorithm: 'SHA-256',
-        digest: '902ac3947f9587e5d765a7932e5bd98b381ab554654faec79a1db600ec73fb66',
+        digest: '94fd431f2d2bb67ab2f2b6a7e28c741e8ad99f45dbfbe1f5392b04eb91f83fca',
     });
     assert.equal(
         createHash('sha256').update(suite.canonicalManifest).digest('hex'),
@@ -180,9 +180,13 @@ test('runtime provider corpus keeps canonical case, source, and issue boundaries
         ({ id }) => id === 'exception-narrows-default-compatible',
     );
     assert.deepEqual(language.preparation.targetIds, ['finding:language-conflict']);
-    assert.match(exception.preparation.targetIds[0], /^cluster:cluster:language:/u);
+    assert.deepEqual(
+        exception.preparation.targetIds,
+        ['cluster:eval-exception-compatible'],
+    );
     assert.equal(language.structuralGate.targetOrigin, 'product-analysis');
-    assert.equal(exception.structuralGate.targetOrigin, 'product-analysis');
+    assert.equal(exception.structuralGate.targetOrigin, 'evaluation-bridge');
+    assert.equal(exception.pathKind, 'structured-atom-bridge');
 });
 
 test('official suite structural gates exactly match the prepared product closure', async () => {

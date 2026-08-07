@@ -8,20 +8,57 @@ export const STRUCTURED_SEMANTIC_PRODUCT_CASES = Object.freeze([
         expectedRelation: {
             category: 'language',
             kind: 'alternative-values',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
             status: 'confirmed',
         },
     },
     {
         id: 'conditional-language-branches',
         sources: [
-            ['english', 'system', 'If the user requests translation, respond in English.'],
+            ['english', 'system', 'If the user requests translation respond in English.'],
             ['japanese', 'extension', 'Always respond in Japanese.'],
         ],
         expectedRelation: {
             category: 'language',
             kind: 'alternative-values',
+            applicabilityKind: 'subset-overlap',
+            disposition: 'conflict',
             status: 'candidate',
             condition: /if the user requests translation/iu,
+        },
+    },
+    {
+        id: 'same-condition-format-conflict',
+        sources: [
+            ['json', 'system', 'When MODE is code return JSON only.'],
+            ['xml', 'extension', 'When MODE is code return XML only.'],
+        ],
+        expectedRelation: {
+            category: 'format',
+            kind: 'alternative-values',
+            applicabilityKind: 'same-predicate-overlap',
+            disposition: 'conflict',
+            status: 'confirmed',
+            condition: /when mode is code/iu,
+        },
+    },
+    {
+        id: 'mutually-exclusive-format-branches-compatible',
+        sources: [
+            ['json', 'system', 'When MODE is code return JSON only.'],
+            ['xml', 'extension', 'When MODE is prose return XML only.'],
+        ],
+        expectedCompatibleRelation: {
+            category: 'format',
+            kind: 'alternative-values',
+            applicabilityKind: 'mutually-exclusive',
+            disposition: 'compatible',
+            status: 'confirmed',
+            conditions: [
+                /when mode is code/iu,
+                /when mode is prose/iu,
+            ],
         },
     },
     {
@@ -33,8 +70,26 @@ export const STRUCTURED_SEMANTIC_PRODUCT_CASES = Object.freeze([
         expectedRelation: {
             category: 'language',
             kind: 'alternative-values',
+            applicabilityKind: 'unknown-overlap',
+            disposition: 'conflict',
             status: 'candidate',
             exception: /unless the user requests translation/iu,
+        },
+    },
+    {
+        id: 'exception-specialization-compatible',
+        sources: [
+            ['korean-default', 'system', 'Respond in Korean unless locale is en-US.'],
+            ['english-exception', 'extension', 'If locale is en-US respond in English.'],
+        ],
+        expectedCompatibleRelation: {
+            category: 'language',
+            kind: 'alternative-values',
+            applicabilityKind: 'exception-specialization',
+            disposition: 'compatible',
+            status: 'confirmed',
+            condition: /if locale is en-us/iu,
+            exception: /unless locale is en-us/iu,
         },
     },
     {
@@ -46,6 +101,8 @@ export const STRUCTURED_SEMANTIC_PRODUCT_CASES = Object.freeze([
         expectedRelation: {
             category: 'role',
             kind: 'role-overlap',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
             status: 'insufficient-evidence',
         },
     },
@@ -58,6 +115,8 @@ export const STRUCTURED_SEMANTIC_PRODUCT_CASES = Object.freeze([
         expectedRelation: {
             category: 'directives',
             kind: 'opposite-polarity',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
             status: 'confirmed',
         },
     },
@@ -70,6 +129,8 @@ export const STRUCTURED_SEMANTIC_PRODUCT_CASES = Object.freeze([
         expectedRelation: {
             category: 'format',
             kind: 'alternative-values',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
             status: 'confirmed',
         },
     },

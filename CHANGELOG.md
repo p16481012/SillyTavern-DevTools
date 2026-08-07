@@ -1,5 +1,20 @@
 # 변경 기록
 
+## 0.17.0 - 2026-08-08
+
+### Rule Inspector 조건·예외 적용 범위 판정
+
+- 지시 원자의 조건·예외를 bounded predicate로 정규화하고 관계마다 `applicabilityKind`와 `disposition`을 기록
+- 같은 단순 조건에서 겹치는 반대 지시는 확정 충돌로 유지하고, 한쪽만 조건부이거나 복합·불명 조건이면 충돌 후보로 보수적으로 유지
+- 같은 키의 서로 다른 단순 조건은 `서로 배타적인 조건`, 일반 규칙의 예외와 같은 조건을 담당하는 특수 규칙은 `예외 범위를 특수 규칙이 담당` 관계로 판정
+- 양립 관계를 충돌 finding·cluster에서 제외하고 별도 `compatibilityRelations`·100개 상한·생략 상태·`조건상 양립` UI 통계와 상세 근거로 제공
+- 로컬 finding과 AI 의미 검사 closure에 적용 범위 종류·충돌/양립 disposition·조건·예외 메타데이터를 보존하고 알 수 없는 enum은 실패로 닫음
+
+### 검증
+
+- 같은 조건 충돌, 배타 조건 양립, 예외 특수화 양립, 복합·불명 조건 후보, 양립 관계의 finding 제외를 단위·golden·규칙·AI 입력 회귀로 고정
+- manifest·package·runtime import query·onboarding fixture·sandbox harness의 버전을 `0.17.0`으로 통일
+
 ## 0.16.11 - 2026-08-07
 
 ### 탭별 빈 상태와 스크롤 폭 안정화

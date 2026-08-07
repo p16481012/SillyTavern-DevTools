@@ -106,6 +106,19 @@ test('anonymized Korean golden corpus keeps expected precision and recall', () =
             .sort();
         const expected = [...fixture.expectedRelations].sort();
         assert.deepEqual(actual, expected, fixture.id);
+        const actualCompatible = model.compatibilityRelations
+            .map(({ category, applicabilityKind, status }) => (
+                `${category}:${applicabilityKind}:${status}`
+            ))
+            .sort();
+        const expectedCompatible = [
+            ...(fixture.expectedCompatibleRelations ?? []),
+        ].sort();
+        assert.deepEqual(
+            actualCompatible,
+            expectedCompatible,
+            `${fixture.id}: compatible relations`,
+        );
         assert.equal(
             model.exclusions.length >= (fixture.minimumExclusions ?? 0),
             true,
@@ -131,6 +144,102 @@ test('anonymized Korean golden corpus keeps expected precision and recall', () =
     assert.equal(recall >= 0.95, true);
 });
 
+test('same simple condition promotes an overlapping conflict to confirmed', () => {
+    const model = buildInstructionModel(mappedSources([
+        {
+            id: 'english',
+            type: 'system',
+            content: 'If mode is concise respond in English.',
+        },
+        {
+            id: 'japanese',
+            type: 'extension',
+            content: 'If mode is concise respond in Japanese.',
+        },
+    ]));
+
+    assert.equal(model.relations.length, 1);
+    assert.equal(model.compatibilityRelations.length, 0);
+    assert.equal(model.relations[0].kind, 'alternative-values');
+    assert.equal(model.relations[0].applicabilityKind, 'same-predicate-overlap');
+    assert.equal(model.relations[0].disposition, 'conflict');
+    assert.equal(model.relations[0].status, 'confirmed');
+    assert.equal(model.clusters.length, 1);
+});
+
+test('mutually exclusive simple conditions remain inspectable without a conflict cluster', () => {
+    const model = buildInstructionModel(mappedSources([
+        {
+            id: 'english',
+            type: 'system',
+            content: 'If locale is en-US respond in English.',
+        },
+        {
+            id: 'japanese',
+            type: 'extension',
+            content: 'If locale is ja-JP respond in Japanese.',
+        },
+    ]));
+
+    assert.equal(model.relations.length, 0);
+    assert.equal(model.compatibilityRelations.length, 1);
+    assert.equal(
+        model.compatibilityRelations[0].applicabilityKind,
+        'mutually-exclusive',
+    );
+    assert.equal(model.compatibilityRelations[0].disposition, 'compatible');
+    assert.equal(model.compatibilityRelations[0].status, 'confirmed');
+    assert.equal(model.compatibilityRelations[0].clusterId, null);
+    assert.equal(model.clusters.length, 0);
+});
+
+test('an explicit exception and its matching branch are compatible specialization', () => {
+    const model = buildInstructionModel(mappedSources([
+        {
+            id: 'default',
+            type: 'system',
+            content: 'Unless locale is en-US respond in English.',
+        },
+        {
+            id: 'exception-branch',
+            type: 'extension',
+            content: 'If locale is en-US respond in Japanese.',
+        },
+    ]));
+
+    assert.equal(model.relations.length, 0);
+    assert.equal(model.compatibilityRelations.length, 1);
+    assert.equal(
+        model.compatibilityRelations[0].applicabilityKind,
+        'exception-specialization',
+    );
+    assert.equal(model.compatibilityRelations[0].disposition, 'compatible');
+    assert.equal(model.compatibilityRelations[0].status, 'confirmed');
+    assert.equal(model.clusters.length, 0);
+});
+
+test('compound or otherwise unresolved conditions stay candidate conflicts', () => {
+    const model = buildInstructionModel(mappedSources([
+        {
+            id: 'english',
+            type: 'system',
+            content: 'If locale is en-US and mode is concise respond in English.',
+        },
+        {
+            id: 'japanese',
+            type: 'extension',
+            content: 'If locale is ja-JP and mode is verbose respond in Japanese.',
+        },
+    ]));
+
+    assert.equal(model.relations.length, 1);
+    assert.equal(model.compatibilityRelations.length, 0);
+    assert.equal(model.relations[0].applicabilityKind, 'unknown-overlap');
+    assert.equal(model.relations[0].disposition, 'conflict');
+    assert.equal(model.relations[0].status, 'candidate');
+    assert.equal(model.clusters.length, 1);
+});
+
 test('every V3 relation exposes inspectable pair and cluster evidence', () => {
     const model = buildInstructionModel(mappedSources([
         { id: 'ko', type: 'system', content: '반드시 한국어로 답변하세요.' },
@@ -147,6 +256,8 @@ test('every V3 relation exposes inspectable pair and cluster evidence', () => {
         assert.equal(relation.finalRanges.length, 2);
         assert.equal(relation.method, 'instruction-atom-pair');
         assert.equal(typeof relation.confidence, 'number');
+        assert.equal(relation.applicabilityKind, 'unconditional-overlap');
+        assert.equal(relation.disposition, 'conflict');
         assert.equal(relation.status, 'confirmed');
         assert.equal(relation.clusterId, model.clusters[0].id);
     }
@@ -170,6 +281,11 @@ test('V3 bounds analysis work for large prompt sets', () => {
 
     assert.equal(model.atoms.length <= INSTRUCTION_MODEL_LIMITS.atoms, true);
     assert.equal(model.relations.length <= INSTRUCTION_MODEL_LIMITS.relations, true);
+    assert.equal(
+        model.compatibilityRelations.length
+            <= INSTRUCTION_MODEL_LIMITS.compatibleRelations,
+        true,
+    );
     assert.equal(model.stats.relationsTruncated, true);
     assert.equal(elapsed < 500, true, `analysis took ${elapsed.toFixed(1)}ms`);
 });

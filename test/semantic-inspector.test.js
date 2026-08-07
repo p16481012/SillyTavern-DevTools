@@ -104,6 +104,8 @@ function fixture() {
         id: 'relation:language:one',
         category: 'language',
         kind: 'alternative-values',
+        applicabilityKind: 'unconditional-overlap',
+        disposition: 'conflict',
         status: 'confirmed',
         atomIds: [atomEnglish.id, atomKorean.id],
         sourceIds: [english.id, korean.id],
@@ -297,11 +299,43 @@ test('prepare sends only selected active closure and exposes an exact consent pr
         ))?.reason,
         'not-required',
     );
+    assert.deepEqual(
+        prepared.request.relations.map(({ applicabilityKind, disposition }) => ({
+            applicabilityKind,
+            disposition,
+        })),
+        [{
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
+        }],
+    );
     assert.doesNotMatch(prepared.prompt, /must-never-leave|sk-proj-/u);
     assert.equal('chatId' in prepared.request, false);
     assert.equal('request' in prepared.request, false);
     assert.equal('payload' in prepared.request, false);
     assert.equal(Object.isFrozen(prepared), true);
+});
+
+test('prepare rejects unknown relation applicability taxonomy values', async () => {
+    for (const [field, value] of [
+        ['applicabilityKind', 'semantic-guess'],
+        ['disposition', 'ignored'],
+    ]) {
+        const data = fixture();
+        data.analysis.instructions.relations[0][field] = value;
+        await assert.rejects(
+            prepareSemanticInspection({
+                snapshot: data.snapshot,
+                analysis: data.analysis,
+                targetIds: [data.ids.finding],
+                provider: 'openrouter',
+                model: 'example/model',
+            }),
+            (error) => error instanceof SemanticInspectorError
+                && error.code === 'SEMANTIC_INVALID_INPUT'
+                && error.reason === 'invalid-relation-applicability',
+        );
+    }
 });
 
 test('prepare distinguishes character and persona profiles without forwarding metadata', async () => {

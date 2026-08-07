@@ -22,6 +22,30 @@ function snapshot(overrides = {}) {
     };
 }
 
+function instructionSnapshot(contents) {
+    let cursor = 0;
+    const sources = contents.map((content, index) => {
+        const start = cursor;
+        const end = start + content.length;
+        cursor = end + 1;
+        return {
+            id: `instruction-${index}`,
+            type: index === 0 ? 'system' : 'extension',
+            label: `Instruction ${index + 1}`,
+            content,
+            tokenCount: Math.max(1, Math.ceil(content.length / 4)),
+            attribution: 'exact',
+            included: true,
+            configuredEnabled: true,
+            ranges: [{ start, end }],
+        };
+    });
+    return snapshot({
+        finalText: contents.join('\n'),
+        sources,
+    });
+}
+
 test('legacy source labels are displayed in Korean', () => {
     assert.equal(sourceDisplayLabel({ label: 'Character Description' }), '캐릭터 설명');
     assert.equal(sourceDisplayLabel({ label: 'Lorebook entry 7' }), '로어북 항목 7');
@@ -145,6 +169,54 @@ test('rule inspector detects duplicate sentences across sources', () => {
     const duplicate = findings.find((item) => item.id.startsWith('duplicate:'));
     assert.equal(duplicate?.severity, 'warning');
     assert.deepEqual(duplicate?.sourceIds, ['a', 'b']);
+});
+
+test('condition compatibility relations stay out of rule findings', () => {
+    const mutuallyExclusive = analyzeSnapshotDetailed(instructionSnapshot([
+        'If locale is en-US respond in English.',
+        'If locale is ja-JP respond in Japanese.',
+    ]));
+    assert.equal(mutuallyExclusive.instructions.relations.length, 0);
+    assert.equal(mutuallyExclusive.instructions.compatibilityRelations.length, 1);
+    assert.equal(
+        mutuallyExclusive.instructions.compatibilityRelations[0].applicabilityKind,
+        'mutually-exclusive',
+    );
+    assert.equal(
+        mutuallyExclusive.findings.some(({ relationId }) => Boolean(relationId)),
+        false,
+    );
+
+    const exceptionSpecialization = analyzeSnapshotDetailed(instructionSnapshot([
+        'Unless locale is en-US respond in English.',
+        'If locale is en-US respond in Japanese.',
+    ]));
+    assert.equal(exceptionSpecialization.instructions.relations.length, 0);
+    assert.equal(
+        exceptionSpecialization.instructions.compatibilityRelations[0]
+            .applicabilityKind,
+        'exception-specialization',
+    );
+    assert.equal(
+        exceptionSpecialization.findings.some(({ relationId }) => Boolean(relationId)),
+        false,
+    );
+});
+
+test('same-condition conflicts remain actionable findings with relation metadata', () => {
+    const analysis = analyzeSnapshotDetailed(instructionSnapshot([
+        'If mode is concise respond in English.',
+        'If mode is concise respond in Japanese.',
+    ]));
+
+    assert.equal(analysis.instructions.relations.length, 1);
+    assert.equal(analysis.instructions.compatibilityRelations.length, 0);
+    const relation = analysis.instructions.relations[0];
+    const finding = analysis.findings.find(({ relationId }) => relationId === relation.id);
+    assert.ok(finding);
+    assert.equal(finding.applicabilityKind, 'same-predicate-overlap');
+    assert.equal(finding.relationDisposition, 'conflict');
+    assert.equal(finding.determination, 'confirmed');
 });
 
 test('character description and personality do not duplicate the persona profile structure', () => {

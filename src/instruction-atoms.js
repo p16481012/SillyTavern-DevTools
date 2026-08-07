@@ -27,6 +27,7 @@ const TOOL_SOURCE_TYPES = new Set([
 export const INSTRUCTION_MODEL_LIMITS = Object.freeze({
     atoms: 500,
     relations: 200,
+    compatibleRelations: 100,
     alerts: 100,
 });
 
@@ -94,8 +95,11 @@ const OVERRIDE_PATTERN = /(?:이전|앞선|위의|기존)[^\n.!?。！？]{0,20}
 
 const EXAMPLE_PREFIX = /^(?:>|예(?:시)?\s*:|ex(?:ample)?\.?\s*:|e\.g\.\s*)/iu;
 const EXAMPLE_CUE = /(?:예(?:시)?|인용|문구|example|quote)\s*[:：]?/iu;
-const CONDITION_PATTERN = /(?:만약|경우에는?|경우|때에는?|때|조건에서|if|when|only when|provided that)\s*[^,.;。！？]{0,80}/iu;
-const EXCEPTION_PATTERN = /(?:예외|제외|아니면|unless|except(?: when| for)?)[^,.;。！？]{0,80}/iu;
+const ENGLISH_CONDITION_PREFIX = /(?:^|[,;]\s*)(?:(?:only|even)\s+)?(?:if|when|provided\s+that|for)\s+([^,;.!?。！？]{1,80})\s*$/iu;
+const KOREAN_CONDITION_SUFFIX = /(?:^|[,;]\s*)([^,;.!?。！？]{1,80}?)(?:인\s*경우(?:에는?)?|일\s*때(?:에는?)?|이면|라면|할\s*때)\s*$/iu;
+const ENGLISH_EXCEPTION_PREFIX = /(?:unless|except(?:\s+when|\s+for)?)\s+([^,;.!?。！？]{1,80})/iu;
+const KOREAN_EXCEPTION_PREFIX = /예외적으로\s+([^,;.!?。！？]{1,80}?)(?:이면|라면|인\s*경우|일\s*때)/iu;
+const KOREAN_EXCEPTION_SUFFIX = /([^,;.!?。！？]{1,80}?)(?:인\s*경우(?:에는?)?|일\s*때(?:에는?)?)(?:는|은)?\s*(?:제외|예외)/iu;
 const ABSOLUTE_PRIORITY_PATTERN = /(?:절대|무조건|never|under no circumstances)/iu;
 const HIGH_PRIORITY_PATTERN = /(?:반드시|항상|최우선|우선|must|always|only)/iu;
 
@@ -205,12 +209,102 @@ function isQuotedExample(text, start, end, segment) {
     ));
 }
 
-function extractCondition(segment) {
-    return normalizedText(segment?.text.match(CONDITION_PATTERN)?.[0]) || null;
+function normalizedApplicabilityText(value) {
+    return normalizedText(value)
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/^[,;:\s]+|[,;:\s]+$/gu, '')
+        .replace(/\s+/gu, ' ');
 }
 
-function extractException(segment) {
-    return normalizedText(segment?.text.match(EXCEPTION_PATTERN)?.[0]) || null;
+function applicabilityPredicate(value) {
+    const normalized = normalizedApplicabilityText(value);
+    if (!normalized || normalized.length > 96) return null;
+    if (/(?:\band\b|\bor\b|&&|\|\||그리고|또는|거나)/iu.test(normalized)) {
+        return Object.freeze({
+            kind: 'compound',
+            key: normalized,
+            value: null,
+            signature: `compound:${normalized}`,
+        });
+    }
+    const englishEquality = normalized.match(
+        /^(.{1,64}?)\s+(?:is|equals?|=|==)\s+([^\s,;]{1,32})$/iu,
+    );
+    if (englishEquality) {
+        const key = normalizedApplicabilityText(englishEquality[1]);
+        const equalityValue = normalizedApplicabilityText(englishEquality[2]);
+        return Object.freeze({
+            kind: 'equality',
+            key,
+            value: equalityValue,
+            signature: `eq:${key}:${equalityValue}`,
+        });
+    }
+    const koreanEquality = normalized.match(
+        /^(.{1,64}?)(?:이|가|은|는)\s+([^\s,;]{1,32})$/u,
+    );
+    if (koreanEquality) {
+        const key = normalizedApplicabilityText(koreanEquality[1]);
+        const equalityValue = normalizedApplicabilityText(koreanEquality[2]);
+        return Object.freeze({
+            kind: 'equality',
+            key,
+            value: equalityValue,
+            signature: `eq:${key}:${equalityValue}`,
+        });
+    }
+    return Object.freeze({
+        kind: 'clause',
+        key: normalized,
+        value: null,
+        signature: `clause:${normalized}`,
+    });
+}
+
+function contextMatch(pattern, value) {
+    const match = String(value ?? '').match(pattern);
+    if (!match) return null;
+    const text = normalizedText(match[0]);
+    const clause = normalizedText(match[1]);
+    if (!text || !clause) return null;
+    return {
+        text,
+        predicate: applicabilityPredicate(clause),
+    };
+}
+
+function extractInstructionApplicability(segment, atomStart, atomEnd) {
+    if (!segment) {
+        return {
+            condition: null,
+            conditionPredicate: null,
+            exception: null,
+            exceptionPredicate: null,
+        };
+    }
+    const localStart = Math.max(0, atomStart - segment.start);
+    const localEnd = Math.max(localStart, atomEnd - segment.start);
+    const before = segment.text.slice(0, localStart);
+    const after = segment.text.slice(localEnd);
+    const applicabilityPrefix = before.replace(
+        /(?:반드시|항상|절대|무조건|only|always|must|never)\s*$/iu,
+        '',
+    );
+    const conditionMatch = contextMatch(
+        ENGLISH_CONDITION_PREFIX,
+        applicabilityPrefix,
+    ) ?? contextMatch(KOREAN_CONDITION_SUFFIX, applicabilityPrefix);
+    const exceptionMatch = contextMatch(ENGLISH_EXCEPTION_PREFIX, applicabilityPrefix)
+        ?? contextMatch(KOREAN_EXCEPTION_PREFIX, applicabilityPrefix)
+        ?? contextMatch(ENGLISH_EXCEPTION_PREFIX, after)
+        ?? contextMatch(KOREAN_EXCEPTION_SUFFIX, after);
+    return {
+        condition: conditionMatch?.text ?? null,
+        conditionPredicate: conditionMatch?.predicate ?? null,
+        exception: exceptionMatch?.text ?? null,
+        exceptionPredicate: exceptionMatch?.predicate ?? null,
+    };
 }
 
 function instructionPriority(text) {
@@ -322,8 +416,17 @@ function atomId(source, category, property, value, start, end, polarity) {
 
 function createAtom(source, capability, descriptor, match, segments) {
     const segment = segmentAt(segments, match.start);
-    const condition = extractCondition(segment);
-    const exception = extractException(segment);
+    const applicability = extractInstructionApplicability(
+        segment,
+        match.start,
+        match.end,
+    );
+    const {
+        condition,
+        conditionPredicate,
+        exception,
+        exceptionPredicate,
+    } = applicability;
     let status = capability.atomStatus;
     if (status === 'confirmed' && (condition || exception || descriptor.category === 'role')) {
         status = 'candidate';
@@ -354,7 +457,9 @@ function createAtom(source, capability, descriptor, match, segments) {
         polarity: descriptor.polarity,
         scope: descriptor.scope,
         condition,
+        conditionPredicate,
         exception,
+        exceptionPredicate,
         priority: instructionPriority(segment?.text ?? match.text),
         status,
         sourceId: source.id,
@@ -660,7 +765,83 @@ function hashString(value) {
     return (hash >>> 0).toString(36);
 }
 
-function relationStatus(left, right) {
+function predicatesEqual(left, right) {
+    return Boolean(
+        left?.signature
+        && right?.signature
+        && left.signature === right.signature
+    );
+}
+
+function predicatesMutuallyExclusive(left, right) {
+    return Boolean(
+        left?.kind === 'equality'
+        && right?.kind === 'equality'
+        && left.key === right.key
+        && left.value !== right.value
+    );
+}
+
+function compareApplicability(left, right) {
+    const leftCondition = left.conditionPredicate;
+    const rightCondition = right.conditionPredicate;
+    const leftException = left.exceptionPredicate;
+    const rightException = right.exceptionPredicate;
+
+    if (
+        (predicatesEqual(leftException, rightCondition) && !leftCondition)
+        || (predicatesEqual(rightException, leftCondition) && !rightCondition)
+    ) {
+        return {
+            applicabilityKind: 'exception-specialization',
+            disposition: 'compatible',
+        };
+    }
+    if (leftCondition && rightCondition) {
+        if (predicatesEqual(leftCondition, rightCondition)) {
+            const sameExceptions = (
+                (!leftException && !rightException)
+                || predicatesEqual(leftException, rightException)
+            );
+            return {
+                applicabilityKind: sameExceptions
+                    ? 'same-predicate-overlap'
+                    : 'unknown-overlap',
+                disposition: 'conflict',
+            };
+        }
+        if (predicatesMutuallyExclusive(leftCondition, rightCondition)) {
+            return {
+                applicabilityKind: 'mutually-exclusive',
+                disposition: 'compatible',
+            };
+        }
+        return {
+            applicabilityKind: 'unknown-overlap',
+            disposition: 'conflict',
+        };
+    }
+    if (leftCondition || rightCondition) {
+        return {
+            applicabilityKind: 'subset-overlap',
+            disposition: 'conflict',
+        };
+    }
+    if (leftException || rightException) {
+        return {
+            applicabilityKind: predicatesEqual(leftException, rightException)
+                ? 'same-predicate-overlap'
+                : 'unknown-overlap',
+            disposition: 'conflict',
+        };
+    }
+    return {
+        applicabilityKind: 'unconditional-overlap',
+        disposition: 'conflict',
+    };
+}
+
+function relationStatus(left, right, applicability) {
     if (left.category === 'role' || right.category === 'role') {
         return 'insufficient-evidence';
     }
@@ -669,6 +850,20 @@ function relationStatus(left, right) {
         || right.status === 'insufficient-evidence'
     ) {
         return 'insufficient-evidence';
+    }
+    if (applicability.disposition === 'compatible') {
+        return ['mutually-exclusive', 'exception-specialization'].includes(
+            applicability.applicabilityKind,
+        )
+            ? 'confirmed'
+            : 'candidate';
+    }
+    if (
+        applicability.applicabilityKind === 'same-predicate-overlap'
+        && left.capability === 'instruction'
+        && right.capability === 'instruction'
+    ) {
+        return 'confirmed';
     }
     if (
         left.status === 'candidate'
@@ -701,7 +896,9 @@ function createRelations(atoms, capabilities, compareSources, categoryEnabled) {
         atom.exception ?? '',
     ].join('|'), atom])).values()];
     const relations = [];
-    let truncated = false;
+    const compatibilityRelations = [];
+    let relationsTruncated = false;
+    let compatibilityRelationsTruncated = false;
     relationPairs:
     for (let leftIndex = 0; leftIndex < semanticAtoms.length; leftIndex += 1) {
         for (
@@ -725,12 +922,29 @@ function createRelations(atoms, capabilities, compareSources, categoryEnabled) {
                 continue;
             }
             const atomIds = [left.id, right.id].sort();
-            const status = relationStatus(left, right);
-            const relationKey = `${left.category}:${kind}:${atomIds.join('|')}`;
-            relations.push({
+            const applicability = compareApplicability(left, right);
+            const status = relationStatus(left, right, applicability);
+            const applicabilitySignatures = [left, right]
+                .map((atom) => [
+                    atom.id,
+                    atom.conditionPredicate?.signature ?? '',
+                    atom.exceptionPredicate?.signature ?? '',
+                ].join('|'))
+                .sort();
+            const relationKey = [
+                left.category,
+                kind,
+                applicability.applicabilityKind,
+                applicability.disposition,
+                atomIds.join('|'),
+                applicabilitySignatures.join('|'),
+            ].join(':');
+            const relation = {
                 id: `relation:${left.category}:${hashString(relationKey)}`,
                 category: left.category,
                 kind,
+                applicabilityKind: applicability.applicabilityKind,
+                disposition: applicability.disposition,
                 status,
                 atomIds,
                 sourceIds: uniqueStrings([left.sourceId, right.sourceId]),
@@ -756,14 +970,35 @@ function createRelations(atoms, capabilities, compareSources, categoryEnabled) {
                 method: 'instruction-atom-pair',
                 confidence: Number(Math.min(left.confidence, right.confidence).toFixed(2)),
                 clusterId: null,
-            });
-            if (relations.length >= INSTRUCTION_MODEL_LIMITS.relations) {
-                truncated = true;
+            };
+            if (applicability.disposition === 'compatible') {
+                if (
+                    compatibilityRelations.length
+                    < INSTRUCTION_MODEL_LIMITS.compatibleRelations
+                ) {
+                    compatibilityRelations.push(relation);
+                } else {
+                    compatibilityRelationsTruncated = true;
+                }
+            } else if (relations.length < INSTRUCTION_MODEL_LIMITS.relations) {
+                relations.push(relation);
+            } else {
+                relationsTruncated = true;
+            }
+            if (
+                relationsTruncated
+                && compatibilityRelationsTruncated
+            ) {
                 break relationPairs;
             }
         }
     }
-    return { relations, truncated };
+    return {
+        relations,
+        compatibilityRelations,
+        relationsTruncated,
+        compatibilityRelationsTruncated,
+    };
 }
 
 function buildClusters(relations) {
@@ -876,7 +1111,7 @@ export function buildInstructionModel(
         compareSources,
         categoryEnabled,
     );
-    const { relations } = relationResult;
+    const { relations, compatibilityRelations } = relationResult;
     const clusters = buildClusters(relations);
     const allPriorityAlerts = atoms
         .filter((atom) => atom.category === 'priority' && atom.action === 'override')
@@ -912,6 +1147,7 @@ export function buildInstructionModel(
         capabilities: capabilities.map(({ source, ...capability }) => capability),
         atoms,
         relations,
+        compatibilityRelations,
         clusters,
         alerts: priorityAlerts,
         exclusions,
@@ -933,6 +1169,8 @@ export function buildInstructionModel(
             insufficientAtoms: atoms.filter(
                 ({ status }) => status === 'insufficient-evidence',
             ).length,
+            conflictRelations: relations.length,
+            compatibleRelations: compatibilityRelations.length,
             confirmedRelations: relations.filter(
                 ({ status }) => status === 'confirmed',
             ).length,
@@ -943,7 +1181,10 @@ export function buildInstructionModel(
                 ({ status }) => status === 'insufficient-evidence',
             ).length,
             atomsTruncated,
-            relationsTruncated: relationResult.truncated,
+            relationsTruncated: relationResult.relationsTruncated,
+            compatibilityRelationsTruncated: (
+                relationResult.compatibilityRelationsTruncated
+            ),
             alertsTruncated: allPriorityAlerts.length > priorityAlerts.length,
         },
     };

@@ -58,6 +58,15 @@ export const SEMANTIC_INSPECTOR_LIMITS = Object.freeze({
 const TARGET_KINDS = new Set(['finding', 'cluster']);
 const CATEGORIES = new Set(['conflict', 'ambiguity', 'interaction', 'priority', 'other']);
 const SEVERITIES = new Set(['info', 'warning', 'critical']);
+const RELATION_DISPOSITIONS = new Set(['conflict', 'compatible']);
+const APPLICABILITY_KINDS = new Set([
+    'unconditional-overlap',
+    'same-predicate-overlap',
+    'subset-overlap',
+    'mutually-exclusive',
+    'exception-specialization',
+    'unknown-overlap',
+]);
 const ID_MAX_LENGTH = 256;
 const TEXT_ENCODER = new TextEncoder();
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -893,6 +902,18 @@ function cloneAtom(atom, sourceIndex) {
 }
 
 function cloneRelation(relation) {
+    const disposition = optionalValue(relation, 'disposition', 'conflict');
+    const applicabilityKind = optionalValue(
+        relation,
+        'applicabilityKind',
+        'unknown-overlap',
+    );
+    if (
+        !RELATION_DISPOSITIONS.has(disposition)
+        || !APPLICABILITY_KINDS.has(applicabilityKind)
+    ) {
+        fail('SEMANTIC_INVALID_INPUT', 'invalid-relation-applicability');
+    }
     return {
         id: safeId(optionalValue(relation, 'id'), 'invalid-relation-id'),
         category: safeDisplayText(
@@ -901,6 +922,8 @@ function cloneRelation(relation) {
             'invalid-relation',
         ),
         kind: safeDisplayText(optionalValue(relation, 'kind', ''), 64, 'invalid-relation'),
+        applicabilityKind,
+        disposition,
         status: safeDisplayText(optionalValue(relation, 'status', ''), 32, 'invalid-relation'),
         atomIds: idList(
             relation,

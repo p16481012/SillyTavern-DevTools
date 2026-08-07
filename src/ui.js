@@ -13826,10 +13826,18 @@ export class DevToolsWindow {
             element('span', {
                 className: 'st-devtools-instruction-count',
                 text: t('rules.v3.relationCount', {
-                    count: model?.relations?.length ?? 0,
+                    count: stats.conflictRelations ?? model?.relations?.length ?? 0,
                 }),
             }),
         );
+        if ((stats.compatibleRelations ?? 0) > 0) {
+            summary.appendChild(element('span', {
+                className: 'st-devtools-instruction-count is-compatible',
+                text: t('rules.v3.compatibleRelationCount', {
+                    count: stats.compatibleRelations,
+                }),
+            }));
+        }
         if ((model?.alerts?.length ?? 0) > 0) {
             summary.appendChild(element('span', {
                 className: 'st-devtools-instruction-count',
@@ -13876,10 +13884,19 @@ export class DevToolsWindow {
                 }`,
             }),
         );
+        if ((stats.compatibleRelations ?? 0) > 0) {
+            overview.appendChild(element('span', {
+                className: 'st-devtools-compatible-count',
+                text: t('rules.v3.compatibleRelationCount', {
+                    count: stats.compatibleRelations,
+                }),
+            }));
+        }
         content.appendChild(overview);
         if (
             stats.atomsTruncated
             || stats.relationsTruncated
+            || stats.compatibilityRelationsTruncated
             || stats.alertsTruncated
         ) {
             content.appendChild(proseElement(
@@ -13930,6 +13947,60 @@ export class DevToolsWindow {
         }
         capabilities.appendChild(capabilityList);
         content.appendChild(capabilities);
+
+        if ((model?.compatibilityRelations?.length ?? 0) > 0) {
+            const compatible = element('details', {
+                className: 'st-devtools-instruction-section',
+            });
+            const compatibleSummary = element('summary');
+            compatibleSummary.appendChild(explainedTitle(
+                `${t('rules.v3.compatibilityTitle')} · ${
+                    model.compatibilityRelations.length
+                }`,
+                t('rules.v3.compatibilityDescription'),
+                {
+                    titleTag: 'span',
+                    helpTopicId: 'rule-v3-structure',
+                },
+            ));
+            compatible.appendChild(compatibleSummary);
+            const compatibleList = element('div', {
+                className: 'st-devtools-instruction-compatibilities',
+            });
+            for (const relation of model.compatibilityRelations) {
+                const card = element('article', {
+                    className: 'st-devtools-instruction-compatibility',
+                });
+                const labels = relation.localEvidence
+                    ?.map(({ sourceLabel, sourceId }) => sourceLabel ?? sourceId)
+                    .filter(Boolean)
+                    ?? [];
+                card.append(
+                    element('strong', {
+                        text: t(
+                            `rules.v3.applicability.${relation.applicabilityKind}`,
+                        ),
+                    }),
+                    proseElement('p', t('rules.v3.compatibilitySources', {
+                        left: labels[0] ?? t('common.unknown'),
+                        right: labels[1] ?? t('common.unknown'),
+                    })),
+                );
+                if (relation.conditions?.length > 0) {
+                    card.appendChild(proseElement('p', t('rules.v3.condition', {
+                        value: relation.conditions.join(' · '),
+                    })));
+                }
+                if (relation.exceptions?.length > 0) {
+                    card.appendChild(proseElement('p', t('rules.v3.exception', {
+                        value: relation.exceptions.join(' · '),
+                    })));
+                }
+                compatibleList.appendChild(card);
+            }
+            compatible.appendChild(compatibleList);
+            content.appendChild(compatible);
+        }
 
         const atoms = element('details', {
             className: 'st-devtools-instruction-section',

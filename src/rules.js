@@ -104,6 +104,8 @@ function finding(ruleId, id, severity, titleKey, messageKey, variables = {}, det
         clusterId: details.clusterId ?? null,
         evidenceRecords: details.evidenceRecords ?? [],
         relationKind: details.relationKind ?? null,
+        applicabilityKind: details.applicabilityKind ?? null,
+        relationDisposition: details.relationDisposition ?? null,
         semanticRecords: details.semanticRecords ?? [],
         suppressionSignature: details.suppressionSignature ?? null,
     };
@@ -418,6 +420,8 @@ function findingsFromInstructionModel(model) {
                 clusterId: relation.clusterId,
                 evidenceRecords: relation.localEvidence,
                 relationKind: relation.kind,
+                applicabilityKind: relation.applicabilityKind,
+                relationDisposition: relation.disposition,
                 semanticRecords: atoms.map((atom) => ({
                     category: atom.category,
                     target: atom.target,

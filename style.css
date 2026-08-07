@@ -3552,6 +3552,21 @@
     font-weight: 700;
 }
 
+.st-devtools-instruction-count.is-compatible,
+.st-devtools-compatible-count {
+    border-color: color-mix(
+        in srgb,
+        var(--st-devtools-status-success) 52%,
+        var(--st-devtools-border)
+    );
+    background: color-mix(
+        in srgb,
+        var(--st-devtools-status-success) 9%,
+        var(--st-devtools-surface)
+    );
+    color: var(--st-devtools-status-success);
+}
+
 .st-devtools-instruction-content {
     display: flex;
     flex-direction: column;
@@ -3594,6 +3609,55 @@
 .st-devtools-instruction-atoms {
     padding: 0.65rem;
     border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-instruction-compatibilities {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem;
+    min-width: 0;
+    padding: 0.65rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-instruction-compatibility {
+    min-width: 0;
+    padding: 0.65rem;
+    border: 1px solid color-mix(
+        in srgb,
+        var(--st-devtools-status-success) 40%,
+        var(--st-devtools-border)
+    );
+    border-left: 4px solid var(--st-devtools-status-success);
+    border-radius: 5px;
+    background: color-mix(
+        in srgb,
+        var(--st-devtools-status-success) 7%,
+        var(--st-devtools-panel-bg)
+    );
+}
+
+.st-devtools-instruction-compatibility > strong {
+    display: block;
+    color: var(--st-devtools-status-success);
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-instruction-compatibility > p {
+    margin: 0.35rem 0 0;
+    color: var(--st-devtools-text);
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-instruction-compatibility > p:not(:first-of-type) {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.82rem;
+}
+
+@container (min-width: 620px) {
+    .st-devtools-instruction-compatibilities {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 .st-devtools-instruction-atoms {
