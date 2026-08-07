@@ -7,7 +7,7 @@ export const SEMANTIC_PROVIDER_EVALUATION_HARNESS_VERSION = 1;
 export const SEMANTIC_PROVIDER_EVALUATION_LIMITS = Object.freeze({
     repetitionsMin: 1,
     repetitionsMax: 3,
-    callsMax: 48,
+    callsMax: 54,
 });
 
 const ACTIVE_STATUSES = new Set([

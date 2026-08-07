@@ -13,6 +13,8 @@ test('Rule Inspector V3 UI stays collapsed and exposes evidence metadata', async
     assert.match(ui, /attachLazyDetailsContent\(atoms, \(\) => \{/);
     assert.match(ui, /visibleAtoms = \(model\?\.atoms \?\? \[\]\)\.slice\(0, 100\)/);
     assert.match(ui, /rules\.v3\.atomTargetAction/);
+    assert.match(ui, /rules\.v3\.atomParticipant/);
+    assert.match(ui, /rules\.participant\.\$\{atom\.participantScope\}/);
     assert.match(ui, /rules\.v3\.atomLocation/);
     assert.match(ui, /rules\.v3\.atomEvidence/);
     assert.match(ui, /clusterById = new Map/);
@@ -36,6 +38,41 @@ test('Rule Inspector V3 UI stays collapsed and exposes evidence metadata', async
     assert.match(i18n, /'rules\.v3\.compatibilityTitle':/);
     assert.match(i18n, /'rules\.v3\.applicability\.mutually-exclusive':/);
     assert.match(i18n, /'rules\.v3\.applicability\.exception-specialization':/);
+    for (const category of ['tone', 'identity', 'safety', 'memory']) {
+        assert.match(i18n, new RegExp(`'rules\\.setting\\.${category}':`, 'u'));
+        assert.match(i18n, new RegExp(`'rules\\.v3\\.${category}\\.message':`, 'u'));
+        assert.match(i18n, new RegExp(`'rules\\.${category}\\.title':`, 'u'));
+    }
+    for (const key of [
+        'rules.target.conversation-memory',
+        'rules.action.set-tone',
+        'rules.action.disclose',
+        'rules.action.refuse',
+        'rules.action.use',
+        'rules.action.ignore',
+        'rules.action.retain',
+        'rules.action.forget',
+        'rules.scope.style',
+        'rules.scope.safety',
+        'rules.scope.memory',
+        'rules.participant.assistant-response',
+        'rules.participant.character-profile',
+        'rules.participant.user-profile',
+        'rules.participant.shared-context',
+        'rules.participant.unknown',
+        'rules.property.response.tone.warmth',
+        'rules.property.response.tone.formality',
+        'rules.property.response.tone.respect',
+        'rules.property.assistant.identity.exclusive',
+        'rules.property.response.safety.secret-disclosure',
+        'rules.property.response.safety.harmful-detail',
+        'rules.property.memory.history-use',
+        'rules.property.memory.sensitive-retention',
+    ]) {
+        assert.equal(i18n.includes(`'${key}':`), true, `${key} translation missing`);
+    }
+    assert.match(i18n, /'rules\.v3\.atomParticipant':/);
+    assert.match(i18n, /'comparison\.categoriesHint':[\s\S]*tone[\s\S]*identity[\s\S]*safety[\s\S]*memory/);
 
     const comparisonStart = ui.indexOf('renderComparisonAnalysis(snapshot, comparison = {})');
     const comparisonEnd = ui.indexOf('\n    renderInstructionModel(model)', comparisonStart);

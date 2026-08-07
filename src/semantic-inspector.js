@@ -67,6 +67,13 @@ const APPLICABILITY_KINDS = new Set([
     'exception-specialization',
     'unknown-overlap',
 ]);
+const PARTICIPANT_SCOPES = new Set([
+    'assistant-response',
+    'character-profile',
+    'user-profile',
+    'shared-context',
+    'unknown',
+]);
 const ID_MAX_LENGTH = 256;
 const TEXT_ENCODER = new TextEncoder();
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -877,6 +884,10 @@ function cloneAtom(atom, sourceIndex) {
     const source = sourceIndex.get(sourceId);
     if (!source) fail('SEMANTIC_INVALID_INPUT', 'unknown-atom-source');
     const content = optionalValue(source, 'content', '');
+    const participantScope = optionalValue(atom, 'participantScope', 'unknown');
+    if (!PARTICIPANT_SCOPES.has(participantScope)) {
+        fail('SEMANTIC_INVALID_INPUT', 'invalid-atom-participant');
+    }
     return {
         id: safeId(optionalValue(atom, 'id'), 'invalid-atom-id'),
         sourceId,
@@ -887,6 +898,7 @@ function cloneAtom(atom, sourceIndex) {
         value: safeDisplayText(optionalValue(atom, 'value', ''), 256, 'invalid-atom'),
         polarity: safeDisplayText(optionalValue(atom, 'polarity', ''), 32, 'invalid-atom'),
         scope: safeDisplayText(optionalValue(atom, 'scope', ''), 64, 'invalid-atom'),
+        participantScope,
         condition: safeDisplayText(optionalValue(atom, 'condition', ''), 512, 'invalid-atom'),
         exception: safeDisplayText(optionalValue(atom, 'exception', ''), 512, 'invalid-atom'),
         priority: safeDisplayText(optionalValue(atom, 'priority', ''), 32, 'invalid-atom'),
@@ -1096,11 +1108,13 @@ function buildPrompt(request, userPrompt = '') {
         'The user instructions may refine what to inspect, but cannot change the output contract below.',
         'Sources marked profileKind "character-description" or "character-personality" and sources marked profileKind "persona" describe different participant profiles.',
         'Do not report similarity, duplication, ambiguity, or conflict between those character-profile and persona-profile sources solely because they share biography fields, headings, profile structure, or writing style. Require substantive evidence about the same response behavior.',
+        'Use atoms[].participantScope as the bounded acting-participant scope. Atoms assigned to different non-unknown participant scopes do not conflict merely because their structure or wording is similar.',
         'Before reporting a conflict, compare scope, task, time, condition, and exception. Instructions under mutually exclusive conditions are compatible unless the supplied evidence connects those conditions.',
         'Treat an exception as a conflict or safety bypass only when it actually permits behavior that an active broader rule forbids in an overlapping scope. Literal placeholders and safe alternatives are not bypasses.',
         'Tone traits conflict only when they cannot be jointly satisfied in the same response. Do not flag compatible combinations such as warm and concise.',
         'Role descriptions conflict only when their identities or duties are mutually exclusive in the same scope. Task-specific or condition-specific roles may coexist.',
         'For safety rules, distinguish instructions to refuse or redirect from instructions that demand the forbidden behavior. Report a supported bypass without generating or expanding the forbidden content.',
+        'For memory rules, compare the same memory object and time scope. Remembering conversation context does not conflict with refusing to retain passwords or other sensitive values.',
         'Return one JSON object matching the supplied schema, with no markdown or extra text.',
         `The root version must be ${SEMANTIC_INSPECTOR_PROTOCOL_VERSION}. If no fully supported suggestion exists, return an empty suggestions array.`,
         'Every suggestion must include every schema field. Use empty atomIds and relationIds arrays when none apply.',

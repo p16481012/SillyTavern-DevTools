@@ -14078,6 +14078,14 @@ export class DevToolsWindow {
                         }),
                     }),
                     element('span', {
+                        text: t('rules.v3.atomParticipant', {
+                            participant: translatedValue(
+                                `rules.participant.${atom.participantScope}`,
+                                atom.participantScope ?? 'unknown',
+                            ),
+                        }),
+                    }),
+                    element('span', {
                         text: t('rules.v3.atomContext', {
                             role: atom.sourceRole ?? t('common.unknown'),
                             position: atom.position ?? t('common.unknown'),

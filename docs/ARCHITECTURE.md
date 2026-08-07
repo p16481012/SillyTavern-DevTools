@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.17.0의 Rule Inspector 조건·예외 적용 범위 판정과 별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.17.1의 Rule Inspector 적용 주체·말투·정체성·안전·메모리 axis와 v0.17.0의 조건·예외 적용 범위 판정·별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -9,6 +9,16 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
+
+### Rule Inspector 적용 주체와 의미 axis
+
+`participantScopeForSource()`는 source origin을 그대로 참가자로 간주하지 않고 제품 source type이 나타내는 행동 주체를 제한된 enum으로 변환합니다. instruction·system·extension·utility와 aggregate fallback은 `assistant-response`, character·persona·lorebook reference는 각각 `character-profile`·`user-profile`·`shared-context`이며 나머지는 `unknown`입니다. relation 생성은 동일한 non-unknown participant에서만 진행됩니다.
+
+`tone`, `identity`, `safety`, `memory` extractor는 일반 자연어 의미 추론기가 아니라 명시 문구 전용 bounded pattern입니다. 각 atom은 participant·target·property·value·polarity를 함께 보존하며, 충돌 함수는 participant·target·property가 모두 같은 pair에서만 반대값 또는 반대 polarity를 관계로 만듭니다. reference capability의 atom은 구조 확인과 AI 입력에는 남을 수 있지만 정적 비교 대상은 아닙니다.
+
+이 participant 값은 atom·relation identity와 finding semantic record, 검토 suppression digest, 선택적 AI canonical request까지 전달됩니다. 따라서 캐릭터 프로필의 판단을 사용자 페르소나에 재사용하거나 서로 다른 참가자의 유사 문장을 하나의 충돌로 합칠 수 없습니다. 알 수 없는 enum은 AI 호출 전에 fail-closed합니다.
+
+공식 Provider 평가 suite는 purpose-written synthetic 18건과 condition·exception·tone·identity·safety·memory의 양성·음성 release gate를 사용합니다. 각 case는 가능한 경우 실제 `analyze → relation/finding → prepare` closure를 통과하며, 3회 반복의 최대 외부 호출은 54회입니다. provider 자기 confidence는 오답을 통과시키는 기준으로 사용하지 않습니다.
 
 ### 탭별 빈 상태와 scroll owner
 
@@ -199,7 +209,7 @@ v6 새 캡처는 최종 문자열 범위와 별도로 payload 안의 실제 구�
 
 검사는 평탄화된 전체 텍스트를 한꺼번에 비교하지 않고 검사 가능한 소스별로 수행합니다. `instruction-atoms.js`는 먼저 소스를 지시·참고·대화 산출물·tool 데이터·멀티모달 표시·최종 집계로 분류합니다. 비활성 설정 프롬프트와 실제 요청 미포함 소스는 원자 추출에서 제외하고, 대화 산출물·tool 데이터·멀티모달 표시·최종 집계는 지시 비교에서 분리합니다. 참고 데이터는 원자를 표시할 수 있지만 일반 지시와 자동 비교하지 않습니다.
 
-각 지시 원자는 대상, 행동, 속성, 값, 긍정/금지, 범위, 조건, 예외와 우선순위 외에 source ID·label·type·role·position·depth, 원문 문자 범위, 최종 프롬프트 범위, 추출 방식과 0~1 신뢰도를 보존합니다. 조건·예외는 표시용 원문과 bounded predicate를 함께 가집니다. predicate는 짧은 단순 equality, exact clause 또는 compound로만 분류하며 자연어 전체를 논리식으로 해석하지 않습니다. 예시 접두사·인용 예문·fenced code block의 문구는 원자에서 제외합니다. 같은 속성의 비호환 값 또는 반대 극성 원자를 실제 쌍으로 연결합니다.
+각 지시 원자는 대상, 행동, 속성, 값, 긍정/금지, 범위, 조건, 예외와 우선순위 외에 participantScope, source ID·label·type·role·position·depth, 원문 문자 범위, 최종 프롬프트 범위, 추출 방식과 0~1 신뢰도를 보존합니다. 조건·예외는 표시용 원문과 bounded predicate를 함께 가집니다. predicate는 짧은 단순 equality, exact clause 또는 compound로만 분류하며 자연어 전체를 논리식으로 해석하지 않습니다. 예시 접두사·인용 예문·fenced code block의 문구는 원자에서 제외합니다. 같은 non-unknown participant·대상·속성의 비호환 값 또는 반대 극성 원자를 실제 쌍으로 연결합니다.
 
 충돌 가능한 atom pair마다 `compareApplicability()`가 `unconditional-overlap`, `same-predicate-overlap`, `subset-overlap`, `mutually-exclusive`, `exception-specialization`, `unknown-overlap` 중 하나와 `conflict`·`compatible` disposition을 만듭니다. 같은 단순 조건과 같은 예외의 충돌은 `confirmed`, 서로 배타적인 equality 조건과 직접 예외 특수화는 `confirmed compatible`입니다. 한쪽만 조건부이거나 복합·불명 조건이면 충돌을 제거하지 않고 `candidate`로 유지하며, 역할처럼 정적 패턴만으로 양립 여부를 확정하기 어려우면 `insufficient-evidence`입니다.
 
@@ -213,7 +223,7 @@ v6 새 캡처는 최종 문자열 범위와 별도로 payload 안의 실제 구�
 4. `finding-review.js`가 결과의 의미 키와 현재 범위에 저장된 판정·무시를 대조합니다.
 5. UI가 구조 요약과 원자 상세를 기본 접힘 상태로 표시하고, finding에서 탐색기를 다시 렌더한 뒤 관련 소스 또는 정확한 최종 근거 범위를 강조합니다.
 
-현재 비교 범주 ID는 `language`, `format`, `role`, `directives`, `duplicates`입니다. 컨텍스트 사용률, 대형 소스, 명시적인 이전 지시 무시 문구처럼 한 소스 또는 스냅샷 전체를 검사하는 규칙은 그룹 내부 비교 제외와 별개입니다.
+현재 비교 범주 ID는 `language`, `format`, `tone`, `role`, `identity`, `safety`, `memory`, `directives`, `duplicates`입니다. 컨텍스트 사용률, 대형 소스처럼 한 소스 또는 스냅샷 전체를 검사하는 규칙은 그룹 내부 비교 제외와 별개입니다.
 
 V3 검사 결과는 `atomIds`, `relationId`, `clusterId`, 양쪽 `evidenceRecords`, 관련 `sourceIds`와 최종 텍스트의 `finalRanges`, `method`, 수치 `confidence`, `applicabilityKind`, `relationDisposition`을 함께 반환합니다. 규칙 활성화와 수치 임계값은 버전이 지정된 브라우저 localStorage 키에 저장하며 스냅샷 스키마에는 포함하지 않습니다.
 
@@ -242,7 +252,7 @@ v0.13.1의 AI 의미 검사는 Rule Inspector V3 뒤에 붙는 선택 계층입�
 | `semantic-connection-profiles.js` | 공개 `ConnectionManagerRequestService`의 지원 프로필 목록·해결, bounded ID·name·provider·model·completion type 정제 | API key·URL·비밀번호·proxy·private settings 읽기 또는 저장 |
 | `semantic-provider-adapter.js` | 선택한 공개 profile `sendRequest()` 또는 현재 `getContext().generateRaw()` 단일 경로 호출, prepared identity와 실제 route의 원자적 결속, underlying settlement lease, 알려진 provider envelope 정규화, response cap, timeout·AbortSignal의 논리적 취소와 안정된 오류 code·reason | 프로필 실패 뒤 현재 연결 재시도, 알 수 없는 envelope 추측, provider 오류 원문 전달, 내부/legacy generation 함수·credential transport 접근, 실행 중 provider 계산 강제 중단 |
 | `semantic-evaluation.js` | 합성 corpus의 제안 유용성·오탐률·같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 bounded·결정적으로 계산하고 원문 없는 집계 보고서 반환 | 실제 provider 호출, 모델 결과 생성, 사용자 스냅샷·프롬프트 원문 저장 |
-| `semantic-provider-evaluation-corpus.js` | 제품에 포함된 고정 합성 16건과 실제 로컬 분석 후 canonical target closure 구성, 구조 relation/atom/source-bridge 경로 표시 | 사용자 snapshot·파일·clipboard·사용자 prompt/prefill 입력 |
+| `semantic-provider-evaluation-corpus.js` | 제품에 포함된 고정 합성 18건과 실제 로컬 분석 후 canonical target closure 구성, 구조 relation/atom/source-bridge 경로 표시 | 사용자 snapshot·파일·clipboard·사용자 prompt/prefill 입력 |
 | `semantic-provider-evaluation-harness.js` | 동일 inspector를 사용한 사례별 prepare·구조 closure gate·동의·fresh inspect, identity/route/cache 고정, inspector 단위 mutex·settlement lease, 1회 smoke/3회 공식 판정과 원문 없는 집계 | 자동 일괄 호출·retry·별도 adapter/gate·raw prompt/response/quote 저장 |
 | `semantic-capture-gate.js` | 호출별 nonce identity ticket, prompt·prompt type exact match, 같은 semantic 호출의 exact duplicate 억제, TTL·용량·identity-exact 소비·해제 | 모든 생성의 전역 캡처 중단, 모호한 요청의 임의 연결 |
 | `capture.js` 연동 | AI request와 정확히 일치한 settings/data event 및 그 duplicate만 자기 캡처에서 제외 | 동시에 진행되는 일반 사용자 generation의 정상 캡처 |
@@ -252,11 +262,11 @@ Provider 응답 정규화는 배열 prototype·길이·own key·data descriptor�
 
 `SemanticInspectorMemoryCache`의 key는 protocol·provider identity·응답 상한·bounded prompt를 포함한 digest입니다. 값에는 전체 raw prompt·전체 raw provider response와 전용 `source.content`·`evidence.quote` 필드를 넣지 않고 검증된 ID·offset과 title·summary·rationale 같은 정규화 제안 텍스트를 제한된 LRU/TTL로 보관합니다. 모델이 제안 텍스트 안에 입력 원문의 표현을 반복할 가능성까지 제거하지는 않으므로 이 cache는 익명화 경계가 아닙니다. cache hit의 evidence quote는 현재 준비 source의 검증된 offset에서 다시 구성하며 새로고침하면 cache 전체가 사라집니다.
 
-v0.14.0 평가 corpus v2 16건은 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 기존 기반 사례에 조건·예외·말투·역할·안전의 충돌/비충돌 한·영 교차 대조군을 더했고, reference evidence가 source의 exact slice인지 검사합니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. category·target·source가 같은 복수 issue는 최대 issue 적중 수 안에서 근거 pair 적중이 최대가 되는 bounded 대응을 선택합니다.
+평가 corpus v2 18건은 목적에 맞게 새로 쓴 합성 사례만 포함하며 사용자 원문·credential·URL을 입력으로 사용하지 않습니다. 기존 기반 사례에 조건·예외·말투·정체성·안전·메모리의 충돌/비충돌 한·영 교차 대조군을 더했고, reference evidence가 source의 exact slice인지 검사합니다. 평가기는 검증된 제안 집합을 기대 issue와 정확한 target·source 집합으로 일대일 대응시켜 유용성·오탐률과 같은 source에서 IoU 0.5 이상인 근거 pair 적중률을 집계하고 누락 사례나 상한 초과 입력을 실패로 닫습니다. category·target·source가 같은 복수 issue는 최대 issue 적중 수 안에서 근거 pair 적중이 최대가 되는 bounded 대응을 선택합니다.
 
 corpus v2의 `releaseGates`는 전체 비율과 별도로 각 의미 축의 양성 exact issue match·모든 기대 근거 pair 적중·추가 근거 없음과 음성 제안 0건을 필수 조건으로 만듭니다. 구 평가기는 v2 fixture를 지원 버전으로 받아들이지 않으며, 현 평가기는 `releaseGates`가 없는 legacy v1만 종전 집계 방식으로 명시 지원합니다. v1에 gate를 붙이거나 v2에서 gate를 빼면 실패로 닫습니다.
 
-이 corpus의 `atoms`·`relations`가 비어 있는 사례는 source text 의미 판별 벤치이며 구조 atom 생성 자체를 보증하지 않습니다. v0.14.1 공식 suite의 16건은 실제 relation과 제품 target 2건, 실제 atom을 운반하는 평가 target bridge 1건, 구조가 없는 source bridge 13건으로 분리 표시합니다. 매 준비 요청의 target/source/atom/relation ID를 SHA-256으로 고정된 structural gate와 exact 비교하고, 구조 양성 provider 응답은 실제 atom/relation ID 귀속까지 요구합니다. 별도 10건 fixture도 source/atom/relation ID와 closure를 검증합니다. 말투·안전은 아직 정적 atom 분류가 없으므로 구조 경로 통과로 표기하지 않습니다. 현재 점수는 category·target/source 집합·evidence 범위를 평가하지만 severity·confidence와 title·summary·rationale의 의미 정확성까지 자동 채점하지 않습니다. 구체적인 실행·중단·기록 규칙은 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)에 따릅니다.
+이 corpus의 `atoms`·`relations`가 비어 있는 사례는 source text 의미 판별 벤치이며 구조 atom 생성 자체를 보증하지 않습니다. v0.17.1 공식 suite는 실제 relation target 5건, 실제 atom을 운반하는 target bridge 6건, 구조가 없는 source bridge 7건으로 분리 표시합니다. 매 준비 요청의 target/source/atom/relation ID를 SHA-256으로 고정된 structural gate와 exact 비교하고, 구조 양성 provider 응답은 실제 atom/relation ID 귀속까지 요구합니다. 별도 제품 fixture도 source/atom/relation ID·participantScope와 closure를 검증합니다. 현재 점수는 category·target/source 집합·evidence 범위를 평가하지만 severity·confidence와 title·summary·rationale의 의미 정확성까지 자동 채점하지 않습니다. 구체적인 실행·중단·기록 규칙은 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)에 따릅니다.
 
 따라서 이 결정적 회귀는 평가 도구와 고정 reference 예시의 일관성을 검증할 뿐, 네트워크에서 실행되는 특정 provider·model의 사실성·안전성·품질을 CI가 보증한다는 뜻은 아닙니다.
 

@@ -1,4 +1,5 @@
 const INSTRUCTION_SOURCE_TYPES = new Set([
+    'instruction',
     'system',
     'jailbreak',
     'extension',
@@ -30,6 +31,9 @@ export const INSTRUCTION_MODEL_LIMITS = Object.freeze({
     compatibleRelations: 100,
     alerts: 100,
 });
+
+const INSTRUCTION_MATCH_SCAN_MULTIPLIER = 8;
+const INSTRUCTION_MATCH_SCAN_MINIMUM = 128;
 
 const LANGUAGE_DESCRIPTORS = [
     ['한국어', 'ko', /(?:한국어|한글)(?:로|으로)\s*(?:만\s*)?(?:답변|응답|작성|출력)(?:하(?:세요|라|십시오)?|해)|(?:답변|응답|출력)(?:은|을|를)?[^\n.!?。！？]{0,18}(?:한국어|한글)(?:로|으로)|(?:respond|reply|answer|write)(?:\s+only)?\s+in\s+korean/giu],
@@ -85,6 +89,124 @@ const FEATURE_DESCRIPTORS = [
     },
 ];
 
+const TONE_DESCRIPTORS = [
+    {
+        label: '따뜻한 말투',
+        axis: 'warmth',
+        value: 'warm',
+        pattern: /(?:따뜻(?:하게|한\s+(?:말투|어조)로)\s*(?:답변|응답|대답|작성|말하)|따뜻하고\s+안심시키는\s+(?:말투|어조)로\s*(?:답변|응답|대답|작성|말하)|(?:답변|응답|대답|말투|어조)(?:은|는|을|를)?[^\n.!?。！？]{0,10}따뜻(?:하게|한))|\b(?:respond|reply|answer|write|speak)\s+(?:(?:in|with)\s+)?(?:a\s+)?warm(?:ly|\s+(?:tone|manner|style))?|\b(?:use|adopt|keep)\s+(?:a\s+)?warm(?:\s+and\s+(?:encouraging|reassuring))?\s+(?:tone|manner|style)/giu,
+    },
+    {
+        label: '적대적인 말투',
+        axis: 'warmth',
+        value: 'hostile',
+        pattern: /(?:적대적(?:으로|인\s+(?:말투|어조)로)|공격적(?:으로|인\s+(?:말투|어조)로))\s*(?:답변|응답|대답|작성|말하)|(?:답변|응답|대답|말투|어조)(?:은|는|을|를)?[^\n.!?。！？]{0,10}(?:적대적|공격적)(?:으로|인)|\b(?:respond|reply|answer|write|speak)\s+(?:(?:in|with)\s+)?(?:a\s+)?(?:hostile|aggressive)(?:ly|\s+(?:tone|manner|style))?|\b(?:use|adopt|keep)\s+(?:a\s+)?(?:hostile|aggressive)\s+(?:tone|manner|style)/giu,
+    },
+    {
+        label: '격식 있는 말투',
+        axis: 'formality',
+        value: 'formal',
+        pattern: /(?:격식\s*있게|공식적(?:으로|인\s+(?:말투|어조)로))\s*(?:답변|응답|대답|작성|말하)|(?:답변|응답|대답|말투|어조)(?:은|는|을|를)?[^\n.!?。！？]{0,10}(?:격식\s*있게|공식적(?:으로|인))|\b(?:respond|reply|answer|write|speak)\s+(?:(?:in|with)\s+)?(?:a\s+)?formal(?:ly|\s+(?:tone|manner|style))?|\b(?:use|adopt|keep)\s+(?:a\s+)?formal\s+(?:tone|manner|style)/giu,
+    },
+    {
+        label: '캐주얼한 말투',
+        axis: 'formality',
+        value: 'casual',
+        pattern: /(?:캐주얼(?:하게|한\s+(?:말투|어조)로)|비격식(?:으로|적인\s+(?:말투|어조)로)|편한\s+(?:말투|어조)로)\s*(?:답변|응답|대답|작성|말하)|(?:답변|응답|대답|말투|어조)(?:은|는|을|를)?[^\n.!?。！？]{0,10}(?:캐주얼|비격식|편한)(?:하게|으로|한)|\b(?:respond|reply|answer|write|speak)\s+(?:(?:in|with)\s+)?(?:a\s+)?casual(?:ly|\s+(?:tone|manner|style))?|\b(?:use|adopt|keep)\s+(?:a\s+)?casual\s+(?:tone|manner|style)/giu,
+    },
+    {
+        label: '공손한 말투',
+        axis: 'respect',
+        value: 'polite',
+        pattern: /(?:공손(?:하게|한\s+(?:말투|어조)로)|정중(?:하게|한\s+(?:말투|어조)로)|존댓말(?:로|을\s*사용해?))\s*(?:답변|응답|대답|작성|말하)|(?:답변|응답|대답|말투|어조)(?:은|는|을|를)?[^\n.!?。！？]{0,10}(?:공손|정중|존댓말)(?:하게|한|로)|\b(?:respond|reply|answer|write|speak)\s+(?:(?:in|with)\s+)?(?:a\s+)?(?:polite|respectful)(?:ly|\s+(?:tone|manner|style))?|\b(?:use|adopt|keep)\s+(?:a\s+)?(?:polite|respectful)\s+(?:tone|manner|style)/giu,
+    },
+    {
+        label: '무례한 말투',
+        axis: 'respect',
+        value: 'rude',
+        pattern: /(?:무례(?:하게|한\s+(?:말투|어조)로)|버릇없게|반말(?:로|을\s*사용해?))\s*(?:답변|응답|대답|작성|말하)|(?:답변|응답|대답|말투|어조)(?:은|는|을|를)?[^\n.!?。！？]{0,10}(?:무례|버릇없|반말)(?:하게|한|로)|\b(?:respond|reply|answer|write|speak)\s+(?:(?:in|with)\s+)?(?:a\s+)?(?:rude|impolite)(?:ly|\s+(?:tone|manner|style))?|\b(?:use|adopt|keep)\s+(?:a\s+)?(?:rude|impolite)\s+(?:tone|manner|style)/giu,
+    },
+];
+
+const EXCLUSIVE_IDENTITY_PATTERNS = [
+    /\byou\s+are\s+(?:only|solely)\s+((?:an?|the)\s+[^.\n!?]{2,64}?)(?=\s+(?:when|if|provided\s+that)\b|[.!?\n]|$)/giu,
+    /\bact\s+(?:only|solely)\s+as\s+((?:(?:an?|the)\s+)?[^.\n!?]{2,64}?)(?=\s+(?:when|if|provided\s+that)\b|[.!?\n]|$)/giu,
+    /\bact\s+as\s+(?:only|solely)\s+((?:(?:an?|the)\s+)?[^.\n!?]{2,64}?)(?=\s+(?:when|if|provided\s+that)\b|[.!?\n]|$)/giu,
+    /\b(?:your\s+)?only\s+role\s+is\s+((?:(?:an?|the)\s+)?[^.\n!?]{2,64}?)(?=\s+(?:when|if|provided\s+that)\b|[.!?\n]|$)/giu,
+    /(?:너는|당신은)\s+오직\s+([^.\n!?。！？]{2,64}?)(?:이다|입니다|로만\s+행동)/gu,
+    /(?:너의|당신의)\s+유일한\s+역할은\s+([^.\n!?。！？]{2,64}?)(?:이다|입니다)/gu,
+];
+
+const SAFETY_DESCRIPTORS = [
+    {
+        key: 'secret-disclosure',
+        label: '비밀값 공개',
+        value: 'disclosed',
+        action: 'disclose',
+        polarity: 'require',
+        pattern: /(?<!do not )(?<!never )(?<!must not )\b(?:reveal|expose|disclose|share|output|print|provide)\s+(?:(?:the|all|any)\s+)?(?:secret\s+values?|secrets?|passwords?|access\s+tokens?|api\s+keys?|credentials?)(?:\s*(?:and|or|,)\s*(?:secret\s+values?|secrets?|passwords?|access\s+tokens?|api\s+keys?|credentials?)){0,2}(?:\s+(?:verbatim|unchanged|in\s+full))?|(?:비밀번호|접근\s*토큰|api\s*키|자격\s*증명|비밀(?:값|정보)?)[^\n.!?。！？]{0,40}?(?:원문\s*그대로\s*)?(?:공개|노출|출력|제공|알려)(?:하세요|하라|하십시오|해라|해)/giu,
+    },
+    {
+        key: 'secret-disclosure',
+        label: '비밀값 공개',
+        value: 'disclosed',
+        action: 'avoid',
+        polarity: 'prohibit',
+        pattern: /\b(?:(?:(?:do\s+not|don't|don’t|never|must\s+not|should\s+not|shouldn't|shouldn’t|cannot|can't|can’t)(?:[\s,]+(?:ever|directly|actually|simply|under\s+any\s+circumstances)){0,2}|refuse(?:s|d)?\s+to)[\s,]+(?:reveal|expose|disclose|share|output|print|provide)|avoid(?:s|ed)?\s+(?:revealing|exposing|disclosing|sharing|outputting|printing|providing))\s+(?:(?:the|all|any)\s+)?(?:secret\s+values?|secrets?|passwords?|access\s+tokens?|api\s+keys?|credentials?)|\b(?:redact|mask)\s+(?:every|all|any|the)\s+(?:secret\s+)?values?\b|\bkeep\s+(?:(?:the|all|any)\s+)?(?:secret\s+values?|secrets?|passwords?|access\s+tokens?|api\s+keys?|credentials?)\s+(?:secret|private|confidential)\b|(?:비밀번호|접근\s*토큰|api\s*키|자격\s*증명|비밀(?:값|정보)?)[^\n.!?。！？]{0,40}?(?:공개|노출|출력|제공|알려)(?:하지\s*마|하지\s*않|하지\s*말|말라|금지)/giu,
+    },
+    {
+        key: 'harmful-detail',
+        label: '유해 상세 안내',
+        value: 'provided',
+        action: 'provide',
+        polarity: 'require',
+        pattern: /(?<!do not )(?<!never )(?<!must not )\b(?:provide|give|explain|write)\s+(?:detailed|step-by-step|specific)\s+(?:instructions?|guidance|steps?|methods?)\s+(?:for|to)\s+(?:harmful|dangerous|illegal)\b|(?:유해|위험|불법)(?:한)?[^\n.!?。！？]{0,18}(?:상세|구체적)(?:한)?[^\n.!?。！？]{0,12}(?:안내|설명|방법|절차)(?:를|을)?\s*(?:제공|작성|설명|안내)(?:하세요|하라|하십시오|해라|해)/giu,
+    },
+    {
+        key: 'harmful-detail',
+        label: '유해 상세 안내',
+        value: 'provided',
+        action: 'refuse',
+        polarity: 'prohibit',
+        pattern: /\b(?:(?:(?:do\s+not|don't|don’t|never|must\s+not|should\s+not|shouldn't|shouldn’t|cannot|can't|can’t)(?:\s+(?:ever|directly|actually|simply)){0,2}|refuse(?:s|d)?\s+to)\s+(?:provide|give|explain|write)|avoid(?:s|ed)?\s+(?:providing|giving|explaining|writing))\s+(?:detailed|step-by-step|specific)\s+(?:instructions?|guidance|steps?|methods?)\s+(?:for|to)\s+(?:harmful|dangerous|illegal)\b|(?:유해|위험|불법)(?:한)?[^\n.!?。！？]{0,18}(?:상세|구체적)(?:한)?[^\n.!?。！？]{0,12}(?:안내|설명|방법|절차)(?:를|을)?[^\n.!?。！？]{0,8}(?:거부|제공하지|작성하지|설명하지|안내하지)/giu,
+    },
+];
+
+const MEMORY_DESCRIPTORS = [
+    {
+        key: 'history-use',
+        label: '이전 대화 사용',
+        value: 'used',
+        action: 'use',
+        polarity: 'require',
+        pattern: /(?<!do not )(?<!never )(?<!must not )\b(?:use|remember|consider|refer\s+to)\s+(?:the\s+)?(?:previous|prior|earlier)\s+(?:conversation|chat|messages?)(?:\s+when\s+answering)?|(?:이전|과거|앞선)\s*(?:대화|채팅|메시지)(?:를|을)?\s*(?:기억|참고|사용|반영)(?:하세요|하라|하십시오|해라|해)/giu,
+    },
+    {
+        key: 'history-use',
+        label: '이전 대화 사용',
+        value: 'used',
+        action: 'ignore',
+        polarity: 'prohibit',
+        pattern: /\b(?:(?:ignore|forget)|(?:(?:do\s+not|don't|don’t|never|must\s+not|should\s+not|shouldn't|shouldn’t|cannot|can't|can’t)(?:\s+(?:ever|directly|actually|simply)){0,2}|refuse(?:s|d)?\s+to)\s+(?:use|remember|consider|refer\s+to))\s+(?:the\s+)?(?:previous|prior|earlier)\s+(?:conversation|chat|messages?)(?:\s+when\s+answering)?|(?:이전|과거|앞선)\s*(?:대화|채팅|메시지)(?:를|을)?\s*(?:무시|잊|기억하지|참고하지|사용하지|반영하지)/giu,
+    },
+    {
+        key: 'sensitive-retention',
+        label: '민감정보 기억',
+        value: 'retained',
+        action: 'retain',
+        polarity: 'require',
+        pattern: /(?<!do not )(?<!never )(?<!must not )\b(?:remember|store|retain|keep)\s+(?:the\s+)?(?:passwords?|access\s+tokens?|api\s+keys?|credentials?|sensitive\s+(?:information|data)|personal\s+data)(?:\s*(?:and|or|,)\s*(?:passwords?|access\s+tokens?|api\s+keys?|credentials?)){0,2}(?:\s+in\s+memory)?|(?:민감(?:한)?\s*(?:정보|개인정보)|개인정보|비밀번호|접근\s*토큰)(?:와|과|이나|나|,|\s)*[^\n.!?。！？]{0,20}(?:기억|저장|보관)(?:하세요|하라|하십시오|해라|해)/giu,
+    },
+    {
+        key: 'sensitive-retention',
+        label: '민감정보 기억',
+        value: 'retained',
+        action: 'forget',
+        polarity: 'prohibit',
+        pattern: /\b(?:(?:(?:do\s+not|don't|don’t|never|must\s+not|should\s+not|shouldn't|shouldn’t|cannot|can't|can’t)(?:\s+(?:ever|directly|actually|simply)){0,2})\s+(?:remember|store|retain|keep|save)|(?:forget|delete|discard|erase|remove))\s+(?:the\s+)?(?:passwords?|access\s+tokens?|api\s+keys?|credentials?|sensitive\s+(?:information|data)|personal\s+data)(?:\s*(?:and|or|,)\s*(?:passwords?|access\s+tokens?|api\s+keys?|credentials?)){0,2}(?:\s+(?:in|from)\s+memory|\s+after\s+(?:the\s+)?(?:request|session|response))?|(?:민감(?:한)?\s*(?:정보|개인정보)|개인정보|비밀번호|접근\s*토큰)[^\n.!?。！？]{0,28}(?:(?:기억|저장|보관)(?:하지\s*마|하지\s*않|하지\s*말|말라|금지)|(?:삭제|폐기)(?:하세요|하라|하십시오|해라|해))/giu,
+    },
+];
+
 const ROLE_PATTERNS = [
     /\b(?:you are|act as|role is)\s+([^.\n]{3,80})/giu,
     /(?:너는|당신은)\s+([^.\n]{3,80}?)(?:이다|입니다|로 행동)/gu,
@@ -96,12 +218,21 @@ const OVERRIDE_PATTERN = /(?:이전|앞선|위의|기존)[^\n.!?。！？]{0,20}
 const EXAMPLE_PREFIX = /^(?:>|예(?:시)?\s*:|ex(?:ample)?\.?\s*:|e\.g\.\s*)/iu;
 const EXAMPLE_CUE = /(?:예(?:시)?|인용|문구|example|quote)\s*[:：]?/iu;
 const ENGLISH_CONDITION_PREFIX = /(?:^|[,;]\s*)(?:(?:only|even)\s+)?(?:if|when|provided\s+that|for)\s+([^,;.!?。！？]{1,80})\s*$/iu;
-const KOREAN_CONDITION_SUFFIX = /(?:^|[,;]\s*)([^,;.!?。！？]{1,80}?)(?:인\s*경우(?:에는?)?|일\s*때(?:에는?)?|이면|라면|할\s*때)\s*$/iu;
+const ENGLISH_CONDITION_SUFFIX = /^\s*[,;]?\s*(?:(?:only|even)\s+)?(?:if|when|provided\s+that)\s+([^,;.!?。！？]{1,80})/iu;
+const KOREAN_CONDITION_SUFFIX = /(?:^|[,;]\s*)([^,;.!?。！？]{1,80}?)(?:인\s*경우(?:에는?)?|일\s*때(?:에는?)?|이면|라면|할\s*때)\s*[.!?。！？]?\s*$/iu;
 const ENGLISH_EXCEPTION_PREFIX = /(?:unless|except(?:\s+when|\s+for)?)\s+([^,;.!?。！？]{1,80})/iu;
 const KOREAN_EXCEPTION_PREFIX = /예외적으로\s+([^,;.!?。！？]{1,80}?)(?:이면|라면|인\s*경우|일\s*때)/iu;
 const KOREAN_EXCEPTION_SUFFIX = /([^,;.!?。！？]{1,80}?)(?:인\s*경우(?:에는?)?|일\s*때(?:에는?)?)(?:는|은)?\s*(?:제외|예외)/iu;
 const ABSOLUTE_PRIORITY_PATTERN = /(?:절대|무조건|never|under no circumstances)/iu;
 const HIGH_PRIORITY_PATTERN = /(?:반드시|항상|최우선|우선|must|always|only)/iu;
+const NEGATION_SENSITIVE_CATEGORIES = new Set([
+    'tone',
+    'identity',
+    'safety',
+    'memory',
+]);
+const ENGLISH_NEGATED_DIRECTIVE_PREFIX = /(?:^|[^\p{L}])(?:(?:do\s+not|don't|don’t|never|must\s+not|should\s+not|shouldn't|shouldn’t|cannot|can't|can’t)(?:[\s,]+(?:ever|directly|actually|simply|merely|really|under\s+any\s+circumstances)){0,2}|refuse(?:s|d)?\s+to|avoid(?:s|ed)?(?:\s+using|\s+to)?)[\s,]+(?:[\p{L}\p{N}_-]+\s+){0,3}$/iu;
+const KOREAN_NEGATED_DIRECTIVE_SUFFIX = /^\s*(?:(?:하지\s*(?:마(?:세요|라)?|말(?:라)?))(?![\p{L}])|하지\s*않|말라|마세요|않도록|금지|거부)/u;
 
 function normalizedText(value) {
     return String(value ?? '').replace(/\s+/gu, ' ').trim();
@@ -265,7 +396,7 @@ function applicabilityPredicate(value) {
 function contextMatch(pattern, value) {
     const match = String(value ?? '').match(pattern);
     if (!match) return null;
-    const text = normalizedText(match[0]);
+    const text = normalizedText(match[0]).replace(/^[,;]\s*/u, '');
     const clause = normalizedText(match[1]);
     if (!text || !clause) return null;
     return {
@@ -294,7 +425,9 @@ function extractInstructionApplicability(segment, atomStart, atomEnd) {
     const conditionMatch = contextMatch(
         ENGLISH_CONDITION_PREFIX,
         applicabilityPrefix,
-    ) ?? contextMatch(KOREAN_CONDITION_SUFFIX, applicabilityPrefix);
+    ) ?? contextMatch(KOREAN_CONDITION_SUFFIX, applicabilityPrefix)
+        ?? contextMatch(ENGLISH_CONDITION_SUFFIX, after)
+        ?? contextMatch(KOREAN_CONDITION_SUFFIX, after);
     const exceptionMatch = contextMatch(ENGLISH_EXCEPTION_PREFIX, applicabilityPrefix)
         ?? contextMatch(KOREAN_EXCEPTION_PREFIX, applicabilityPrefix)
         ?? contextMatch(ENGLISH_EXCEPTION_PREFIX, after)
@@ -325,6 +458,16 @@ function sourceContext(source) {
             ?? null,
         depth: source?.metadata?.depth ?? null,
     };
+}
+
+function participantScopeForSource(source) {
+    const type = source?.type ?? 'unknown';
+    if (type === 'character') return 'character-profile';
+    if (type === 'persona') return 'user-profile';
+    if (type === 'lorebook') return 'shared-context';
+    if (INSTRUCTION_SOURCE_TYPES.has(type)) return 'assistant-response';
+    if (source?.synthetic || type === 'synthetic') return 'assistant-response';
+    return 'unknown';
 }
 
 export function classifyInstructionCapability(source) {
@@ -401,10 +544,20 @@ export function classifyInstructionCapability(source) {
     };
 }
 
-function atomId(source, category, property, value, start, end, polarity) {
+function atomId(
+    source,
+    participantScope,
+    category,
+    property,
+    value,
+    start,
+    end,
+    polarity,
+) {
     return [
         'atom',
         source.id,
+        participantScope,
         category,
         property,
         value,
@@ -432,6 +585,7 @@ function createAtom(source, capability, descriptor, match, segments) {
         status = 'candidate';
     }
     const context = sourceContext(source);
+    const participantScope = participantScopeForSource(source);
     const confidencePenalty = condition || exception ? 0.08 : 0;
     const confidence = Math.max(
         0,
@@ -441,6 +595,7 @@ function createAtom(source, capability, descriptor, match, segments) {
     return {
         id: atomId(
             source,
+            participantScope,
             descriptor.category,
             descriptor.property,
             descriptor.value,
@@ -456,6 +611,7 @@ function createAtom(source, capability, descriptor, match, segments) {
         valueLabel: descriptor.valueLabel,
         polarity: descriptor.polarity,
         scope: descriptor.scope,
+        participantScope,
         condition,
         conditionPredicate,
         exception,
@@ -482,18 +638,54 @@ function createAtom(source, capability, descriptor, match, segments) {
     };
 }
 
-function descriptorMatches(text, descriptor) {
-    descriptor.pattern.lastIndex = 0;
-    return [...text.matchAll(descriptor.pattern)].map((match) => ({
-        start: match.index,
-        end: match.index + match[0].length,
-        text: match[0],
-    }));
+function categoryEnabledForExtraction(context, category) {
+    return !context.categoryEnabled || context.categoryEnabled(category);
+}
+
+function consumeMatchBudget(context) {
+    if (context.remainingAtoms <= 0 || context.scanBudget <= 0) {
+        context.truncated = true;
+        return false;
+    }
+    context.scanBudget -= 1;
+    return true;
+}
+
+function recordExtractionExclusion(context, source, range, reason, text) {
+    context.exclusions.push({
+        sourceId: source.id,
+        localRange: range,
+        reason,
+        text,
+    });
+}
+
+function negatedRequireMatch(context, descriptor, match) {
+    if (
+        descriptor.polarity !== 'require'
+        || !NEGATION_SENSITIVE_CATEGORIES.has(descriptor.category)
+    ) {
+        return false;
+    }
+    const segment = segmentAt(context.segments, match.start);
+    if (!segment) return false;
+    const before = context.text.slice(segment.start, match.start);
+    const after = context.text.slice(match.end, segment.end);
+    return ENGLISH_NEGATED_DIRECTIVE_PREFIX.test(before)
+        || KOREAN_NEGATED_DIRECTIVE_SUFFIX.test(after);
 }
 
 function extractPatternAtoms(source, capability, descriptor, context) {
     const atoms = [];
-    for (const match of descriptorMatches(context.text, descriptor)) {
+    if (!categoryEnabledForExtraction(context, descriptor.category)) return atoms;
+    descriptor.pattern.lastIndex = 0;
+    for (const rawMatch of context.text.matchAll(descriptor.pattern)) {
+        if (!consumeMatchBudget(context)) break;
+        const match = {
+            start: rawMatch.index,
+            end: rawMatch.index + rawMatch[0].length,
+            text: rawMatch[0],
+        };
         const range = { start: match.start, end: match.end };
         const excluded = context.excluded.find((item) => rangeOverlaps(range, item));
         if (excluded || isQuotedExample(
@@ -502,24 +694,38 @@ function extractPatternAtoms(source, capability, descriptor, context) {
             match.end,
             segmentAt(context.segments, match.start),
         )) {
-            context.exclusions.push({
-                sourceId: source.id,
-                localRange: range,
-                reason: excluded?.reason ?? 'quoted-example',
-                text: match.text,
-            });
+            recordExtractionExclusion(
+                context,
+                source,
+                range,
+                excluded?.reason ?? 'quoted-example',
+                match.text,
+            );
+            continue;
+        }
+        if (negatedRequireMatch(context, descriptor, match)) {
+            recordExtractionExclusion(
+                context,
+                source,
+                range,
+                'negated-directive',
+                match.text,
+            );
             continue;
         }
         atoms.push(createAtom(source, capability, descriptor, match, context.segments));
+        context.remainingAtoms -= 1;
     }
     return atoms;
 }
 
 function extractRoleAtoms(source, capability, context) {
     const atoms = [];
+    if (!categoryEnabledForExtraction(context, 'role')) return atoms;
     for (const pattern of ROLE_PATTERNS) {
         pattern.lastIndex = 0;
         for (const match of context.text.matchAll(pattern)) {
+            if (!consumeMatchBudget(context)) return atoms;
             const value = normalizedText(match[1]).toLowerCase();
             if (!value) continue;
             const range = { start: match.index, end: match.index + match[0].length };
@@ -530,12 +736,13 @@ function extractRoleAtoms(source, capability, context) {
                 range.end,
                 segmentAt(context.segments, range.start),
             )) {
-                context.exclusions.push({
-                    sourceId: source.id,
-                    localRange: range,
-                    reason: excluded?.reason ?? 'quoted-example',
-                    text: match[0],
-                });
+                recordExtractionExclusion(
+                    context,
+                    source,
+                    range,
+                    excluded?.reason ?? 'quoted-example',
+                    match[0],
+                );
                 continue;
             }
             atoms.push(createAtom(source, capability, {
@@ -554,12 +761,92 @@ function extractRoleAtoms(source, capability, context) {
                 end: range.end,
                 text: match[0],
             }, context.segments));
+            context.remainingAtoms -= 1;
         }
     }
     return atoms;
 }
 
-function extractSourceAtoms(source, capability) {
+function normalizedExclusiveIdentity(value) {
+    return normalizedText(value)
+        .toLowerCase()
+        .replace(/^(?:a|an|the)\s+/iu, '')
+        .replace(/\s+(?:only|solely)$/iu, '')
+        .trim();
+}
+
+function extractExclusiveIdentityAtoms(source, capability, context) {
+    const atoms = [];
+    if (!categoryEnabledForExtraction(context, 'identity')) return atoms;
+    const descriptor = {
+        category: 'identity',
+        target: 'assistant',
+        action: 'act-as',
+        property: 'assistant.identity.exclusive',
+        polarity: 'require',
+        scope: 'identity',
+        method: 'pattern:identity:exclusive-role',
+        confidence: 0.97,
+    };
+    for (const pattern of EXCLUSIVE_IDENTITY_PATTERNS) {
+        pattern.lastIndex = 0;
+        for (const match of context.text.matchAll(pattern)) {
+            if (!consumeMatchBudget(context)) return atoms;
+            const value = normalizedExclusiveIdentity(match[1]);
+            if (!value) continue;
+            const range = { start: match.index, end: match.index + match[0].length };
+            const excluded = context.excluded.find((item) => rangeOverlaps(range, item));
+            if (excluded || isQuotedExample(
+                context.text,
+                range.start,
+                range.end,
+                segmentAt(context.segments, range.start),
+            )) {
+                recordExtractionExclusion(
+                    context,
+                    source,
+                    range,
+                    excluded?.reason ?? 'quoted-example',
+                    match[0],
+                );
+                continue;
+            }
+            const boundedMatch = {
+                start: range.start,
+                end: range.end,
+                text: match[0],
+            };
+            if (negatedRequireMatch(context, descriptor, boundedMatch)) {
+                recordExtractionExclusion(
+                    context,
+                    source,
+                    range,
+                    'negated-directive',
+                    match[0],
+                );
+                continue;
+            }
+            atoms.push(createAtom(source, capability, {
+                ...descriptor,
+                value,
+                valueLabel: value,
+            }, {
+                start: range.start,
+                end: range.end,
+                text: match[0],
+            }, context.segments));
+            context.remainingAtoms -= 1;
+        }
+    }
+    return atoms;
+}
+
+function extractSourceAtoms(
+    source,
+    capability,
+    maximumAtoms = INSTRUCTION_MODEL_LIMITS.atoms,
+    categoryEnabled = null,
+) {
     const text = String(source?.content ?? '');
     const exclusions = [];
     const context = {
@@ -567,6 +854,13 @@ function extractSourceAtoms(source, capability) {
         segments: sentenceSegments(text),
         excluded: excludedExampleRanges(text),
         exclusions,
+        categoryEnabled,
+        remainingAtoms: Math.max(0, maximumAtoms),
+        scanBudget: Math.max(
+            INSTRUCTION_MATCH_SCAN_MINIMUM,
+            Math.max(0, maximumAtoms) * INSTRUCTION_MATCH_SCAN_MULTIPLIER,
+        ),
+        truncated: false,
     };
     const atoms = [];
 
@@ -658,7 +952,65 @@ function extractSourceAtoms(source, capability) {
             pattern: feature.negative,
         }, context));
     }
-    atoms.push(...extractRoleAtoms(source, capability, context));
+    for (const tone of TONE_DESCRIPTORS) {
+        atoms.push(...extractPatternAtoms(source, capability, {
+            category: 'tone',
+            target: 'response',
+            action: 'set-tone',
+            property: `response.tone.${tone.axis}`,
+            value: tone.value,
+            valueLabel: tone.label,
+            polarity: 'require',
+            scope: 'style',
+            method: `pattern:tone:${tone.axis}:${tone.value}`,
+            confidence: 0.92,
+            pattern: tone.pattern,
+        }, context));
+    }
+    for (const descriptor of [
+        ...SAFETY_DESCRIPTORS.filter(({ polarity }) => polarity === 'prohibit'),
+        ...SAFETY_DESCRIPTORS.filter(({ polarity }) => polarity !== 'prohibit'),
+    ]) {
+        atoms.push(...extractPatternAtoms(source, capability, {
+            category: 'safety',
+            target: 'response',
+            action: descriptor.action,
+            property: `response.safety.${descriptor.key}`,
+            value: descriptor.value,
+            valueLabel: descriptor.label,
+            polarity: descriptor.polarity,
+            scope: 'safety',
+            method: `pattern:safety:${descriptor.key}:${descriptor.polarity}`,
+            confidence: 0.94,
+            pattern: descriptor.pattern,
+        }, context));
+    }
+    for (const descriptor of [
+        ...MEMORY_DESCRIPTORS.filter(({ polarity }) => polarity === 'prohibit'),
+        ...MEMORY_DESCRIPTORS.filter(({ polarity }) => polarity !== 'prohibit'),
+    ]) {
+        atoms.push(...extractPatternAtoms(source, capability, {
+            category: 'memory',
+            target: 'conversation-memory',
+            action: descriptor.action,
+            property: `memory.${descriptor.key}`,
+            value: descriptor.value,
+            valueLabel: descriptor.label,
+            polarity: descriptor.polarity,
+            scope: 'memory',
+            method: `pattern:memory:${descriptor.key}:${descriptor.polarity}`,
+            confidence: 0.94,
+            pattern: descriptor.pattern,
+        }, context));
+    }
+    const identityAtoms = extractExclusiveIdentityAtoms(source, capability, context);
+    atoms.push(...identityAtoms);
+    atoms.push(...extractRoleAtoms(source, capability, context).filter((roleAtom) => (
+        !identityAtoms.some((identityAtom) => rangeOverlaps(
+            roleAtom.localRange,
+            identityAtom.localRange,
+        ))
+    )));
     atoms.push(...extractPatternAtoms(source, capability, {
         category: 'priority',
         target: 'instruction-set',
@@ -676,6 +1028,7 @@ function extractSourceAtoms(source, capability) {
     const deduplicated = new Map();
     for (const atom of atoms) {
         const key = [
+            atom.participantScope,
             atom.category,
             atom.property,
             atom.value,
@@ -691,6 +1044,7 @@ function extractSourceAtoms(source, capability) {
             (left, right) => left.localRange.start - right.localRange.start,
         ),
         exclusions,
+        truncated: context.truncated,
     };
 }
 
@@ -730,6 +1084,13 @@ function rolesCompatible(left, right) {
 }
 
 function atomsConflict(left, right) {
+    if (
+        left.participantScope === 'unknown'
+        || right.participantScope === 'unknown'
+        || left.participantScope !== right.participantScope
+    ) {
+        return null;
+    }
     if (left.target !== right.target || left.property !== right.property) return null;
     if (left.category === 'priority' || right.category === 'priority') return null;
     if (left.value === right.value && left.polarity !== right.polarity) {
@@ -738,6 +1099,12 @@ function atomsConflict(left, right) {
     if (left.polarity !== 'require' || right.polarity !== 'require') return null;
     if (left.category === 'language' && left.value !== right.value) {
         return 'alternative-values';
+    }
+    if (left.category === 'tone' && left.value !== right.value) {
+        return 'alternative-values';
+    }
+    if (left.category === 'identity' && left.value !== right.value) {
+        return 'exclusive-identity';
     }
     if (
         left.category === 'format'
@@ -888,6 +1255,7 @@ function createRelations(atoms, capabilities, compareSources, categoryEnabled) {
     );
     const semanticAtoms = [...new Map(atoms.map((atom) => [[
         atom.sourceId,
+        atom.participantScope,
         atom.category,
         atom.property,
         atom.value,
@@ -932,6 +1300,7 @@ function createRelations(atoms, capabilities, compareSources, categoryEnabled) {
                 ].join('|'))
                 .sort();
             const relationKey = [
+                left.participantScope,
                 left.category,
                 kind,
                 applicability.applicabilityKind,
@@ -943,6 +1312,7 @@ function createRelations(atoms, capabilities, compareSources, categoryEnabled) {
                 id: `relation:${left.category}:${hashString(relationKey)}`,
                 category: left.category,
                 kind,
+                participantScope: left.participantScope,
                 applicabilityKind: applicability.applicabilityKind,
                 disposition: applicability.disposition,
                 status,
@@ -1093,15 +1463,20 @@ export function buildInstructionModel(
             atomsTruncated = true;
             continue;
         }
-        const extracted = extractSourceAtoms(source, capability);
+        const remaining = INSTRUCTION_MODEL_LIMITS.atoms - atoms.length;
+        const extracted = extractSourceAtoms(
+            source,
+            capability,
+            remaining,
+            categoryEnabled,
+        );
         const enabledAtoms = categoryEnabled
             ? extracted.atoms.filter((atom) => categoryEnabled(atom.category))
             : extracted.atoms;
-        const remaining = INSTRUCTION_MODEL_LIMITS.atoms - atoms.length;
         if (remaining > 0) {
             atoms.push(...enabledAtoms.slice(0, remaining));
         }
-        if (enabledAtoms.length > remaining) atomsTruncated = true;
+        if (enabledAtoms.length > remaining || extracted.truncated) atomsTruncated = true;
         exclusions.push(...extracted.exclusions);
     }
 

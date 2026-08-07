@@ -29,7 +29,7 @@
       "negativeCaseId": "tone-traits-compatible"
     },
     {
-      "axis": "role",
+      "axis": "identity",
       "positiveCaseId": "assistant-role-conflict",
       "negativeCaseId": "participant-roles-compatible"
     },
@@ -37,6 +37,11 @@
       "axis": "safety",
       "positiveCaseId": "safety-disclosure-conflict",
       "negativeCaseId": "safety-redaction-compatible"
+    },
+    {
+      "axis": "memory",
+      "positiveCaseId": "memory-history-conflict",
+      "negativeCaseId": "memory-scopes-compatible"
     }
   ],
   "cases": [
@@ -385,7 +390,7 @@
       "request": {
         "targets": [{ "targetId": "cluster:eval-tone-compatible" }],
         "sources": [
-          { "id": "source:tone-warm", "content": "Use a warm and encouraging tone." },
+          { "id": "source:tone-warm", "content": "Use a warm tone." },
           { "id": "source:tone-concise", "content": "Keep every paragraph concise." }
         ],
         "atoms": [],
@@ -403,8 +408,8 @@
       "request": {
         "targets": [{ "targetId": "finding:eval-tone-conflict" }],
         "sources": [
-          { "id": "source:tone-reassuring", "content": "따뜻하고 안심시키는 말투를 사용하세요." },
-          { "id": "source:tone-hostile", "content": "적대적이고 조롱하는 말투를 사용하세요." }
+          { "id": "source:tone-reassuring", "content": "따뜻한 말투로 답변하세요." },
+          { "id": "source:tone-hostile", "content": "적대적인 말투로 답변하세요." }
         ],
         "atoms": [],
         "relations": []
@@ -416,8 +421,8 @@
           "categories": ["conflict"],
           "sourceIds": ["source:tone-reassuring", "source:tone-hostile"],
           "evidence": [
-            { "sourceId": "source:tone-reassuring", "start": 0, "end": 21 },
-            { "sourceId": "source:tone-hostile", "start": 0, "end": 21 }
+            { "sourceId": "source:tone-reassuring", "start": 0, "end": 14 },
+            { "sourceId": "source:tone-hostile", "start": 0, "end": 15 }
           ]
         }
       ],
@@ -436,8 +441,8 @@
             "atomIds": [],
             "relationIds": [],
             "evidence": [
-              { "sourceId": "source:tone-reassuring", "start": 0, "end": 21, "quote": "따뜻하고 안심시키는 말투를 사용하세요." },
-              { "sourceId": "source:tone-hostile", "start": 0, "end": 21, "quote": "적대적이고 조롱하는 말투를 사용하세요." }
+              { "sourceId": "source:tone-reassuring", "start": 0, "end": 14, "quote": "따뜻한 말투로 답변하세요." },
+              { "sourceId": "source:tone-hostile", "start": 0, "end": 15, "quote": "적대적인 말투로 답변하세요." }
             ]
           }
         ]
@@ -449,8 +454,8 @@
       "request": {
         "targets": [{ "targetId": "cluster:eval-role-compatible" }],
         "sources": [
-          { "id": "source:role-assistant", "type": "system", "content": "어시스턴트는 중립적인 여행 계획 도우미입니다." },
-          { "id": "source:role-user", "type": "persona", "profileKind": "persona", "content": "사용자는 여행지를 선택하는 여행자입니다." }
+          { "id": "source:role-assistant", "type": "system", "content": "당신은 중립적인 여행 계획 도우미입니다." },
+          { "id": "source:role-user", "type": "persona", "profileKind": "persona", "content": "당신은 여행지를 선택하는 여행자입니다." }
         ],
         "atoms": [],
         "relations": []
@@ -467,8 +472,8 @@
       "request": {
         "targets": [{ "targetId": "finding:eval-role-conflict" }],
         "sources": [
-          { "id": "source:role-auditor", "content": "Act only as an impartial auditor of the proposal." },
-          { "id": "source:role-advocate", "content": "Act only as an advocate defending the proposal." }
+          { "id": "source:role-auditor", "content": "Your only role is an impartial auditor of the proposal." },
+          { "id": "source:role-advocate", "content": "Your only role is an advocate defending the proposal." }
         ],
         "atoms": [],
         "relations": []
@@ -480,8 +485,8 @@
           "categories": ["conflict"],
           "sourceIds": ["source:role-auditor", "source:role-advocate"],
           "evidence": [
-            { "sourceId": "source:role-auditor", "start": 0, "end": 49 },
-            { "sourceId": "source:role-advocate", "start": 0, "end": 47 }
+            { "sourceId": "source:role-auditor", "start": 0, "end": 55 },
+            { "sourceId": "source:role-advocate", "start": 0, "end": 53 }
           ]
         }
       ],
@@ -500,8 +505,8 @@
             "atomIds": [],
             "relationIds": [],
             "evidence": [
-              { "sourceId": "source:role-auditor", "start": 0, "end": 49, "quote": "Act only as an impartial auditor of the proposal." },
-              { "sourceId": "source:role-advocate", "start": 0, "end": 47, "quote": "Act only as an advocate defending the proposal." }
+              { "sourceId": "source:role-auditor", "start": 0, "end": 55, "quote": "Your only role is an impartial auditor of the proposal." },
+              { "sourceId": "source:role-advocate", "start": 0, "end": 53, "quote": "Your only role is an advocate defending the proposal." }
             ]
           }
         ]
@@ -569,6 +574,70 @@
             ]
           }
         ]
+      }
+    },
+    {
+      "id": "memory-history-conflict",
+      "requestDigest": "abababababababababababababababababababababababababababababababab",
+      "request": {
+        "targets": [{ "targetId": "finding:eval-memory-history-conflict" }],
+        "sources": [
+          { "id": "source:memory-use-history", "content": "이전 대화를 참고해 답변하세요." },
+          { "id": "source:memory-ignore-history", "content": "이전 대화를 무시하세요." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [
+        {
+          "id": "issue:memory-history-conflict",
+          "targetIds": ["finding:eval-memory-history-conflict"],
+          "categories": ["conflict"],
+          "sourceIds": ["source:memory-use-history", "source:memory-ignore-history"],
+          "evidence": [
+            { "sourceId": "source:memory-use-history", "start": 0, "end": 17 },
+            { "sourceId": "source:memory-ignore-history", "start": 0, "end": 13 }
+          ]
+        }
+      ],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": [
+          {
+            "targetIds": ["finding:eval-memory-history-conflict"],
+            "category": "conflict",
+            "severity": "warning",
+            "title": "Conversation-history rules conflict",
+            "summary": "One rule requires using the previous conversation while the other requires ignoring it.",
+            "rationale": "Both rules govern the same conversation-history object during the same response.",
+            "confidence": 0.99,
+            "sourceIds": ["source:memory-use-history", "source:memory-ignore-history"],
+            "atomIds": [],
+            "relationIds": [],
+            "evidence": [
+              { "sourceId": "source:memory-use-history", "start": 0, "end": 17, "quote": "이전 대화를 참고해 답변하세요." },
+              { "sourceId": "source:memory-ignore-history", "start": 0, "end": 13, "quote": "이전 대화를 무시하세요." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "memory-scopes-compatible",
+      "requestDigest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "request": {
+        "targets": [{ "targetId": "cluster:eval-memory-scopes-compatible" }],
+        "sources": [
+          { "id": "source:memory-use-conversation", "content": "Use the previous conversation when answering." },
+          { "id": "source:memory-forget-secrets", "content": "Never retain passwords or access tokens in memory." }
+        ],
+        "atoms": [],
+        "relations": []
+      },
+      "expectedIssues": [],
+      "referenceResponse": {
+        "version": 1,
+        "suggestions": []
       }
     }
   ]

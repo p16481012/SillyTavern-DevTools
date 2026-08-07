@@ -17,7 +17,11 @@ export const RULE_DEFINITIONS = Object.freeze([
     { id: 'duplicates', labelKey: 'rules.setting.duplicates' },
     { id: 'language', labelKey: 'rules.setting.language' },
     { id: 'format', labelKey: 'rules.setting.format' },
+    { id: 'tone', labelKey: 'rules.setting.tone' },
     { id: 'role', labelKey: 'rules.setting.role' },
+    { id: 'identity', labelKey: 'rules.setting.identity' },
+    { id: 'safety', labelKey: 'rules.setting.safety' },
+    { id: 'memory', labelKey: 'rules.setting.memory' },
     { id: 'directives', labelKey: 'rules.setting.directives' },
     { id: 'largeSource', labelKey: 'rules.setting.largeSource' },
     { id: 'unmatched', labelKey: 'rules.setting.unmatched' },
@@ -325,9 +329,25 @@ function isExplicitlyEnabledSource(source) {
         || source?.metadata?.configuredEnabled === true;
 }
 
-function instructionFindingSeverity(relation) {
+function explicitSafetyDisclosureDemand(atom) {
+    return atom?.category === 'safety'
+        && atom?.property === 'response.safety.secret-disclosure'
+        && atom?.action === 'disclose'
+        && atom?.value === 'disclosed'
+        && atom?.polarity === 'require';
+}
+
+function instructionFindingSeverity(relation, atoms) {
     if (relation.status === 'insufficient-evidence') return 'info';
     if (relation.category === 'language' && relation.status === 'confirmed') {
+        return 'critical';
+    }
+    if (
+        relation.category === 'safety'
+        && relation.kind === 'opposite-polarity'
+        && relation.status === 'confirmed'
+        && atoms.some(explicitSafetyDisclosureDemand)
+    ) {
         return 'critical';
     }
     if (relation.status === 'confirmed') return 'warning';
@@ -373,11 +393,41 @@ function instructionFindingDefinition(relation, atoms) {
             },
         };
     }
+    const semanticDefinitions = {
+        tone: {
+            ruleId: 'tone',
+            idPrefix: 'tone-conflict',
+            titleKey: 'rules.tone.title',
+            messageKey: 'rules.v3.tone.message',
+        },
+        role: {
+            ruleId: 'role',
+            idPrefix: 'role-conflict',
+            titleKey: 'rules.role.title',
+            messageKey: 'rules.v3.role.message',
+        },
+        identity: {
+            ruleId: 'identity',
+            idPrefix: 'identity-conflict',
+            titleKey: 'rules.identity.title',
+            messageKey: 'rules.v3.identity.message',
+        },
+        safety: {
+            ruleId: 'safety',
+            idPrefix: 'safety-conflict',
+            titleKey: 'rules.safety.title',
+            messageKey: 'rules.v3.safety.message',
+        },
+        memory: {
+            ruleId: 'memory',
+            idPrefix: 'memory-conflict',
+            titleKey: 'rules.memory.title',
+            messageKey: 'rules.v3.memory.message',
+        },
+    };
+    const definition = semanticDefinitions[relation.category] ?? semanticDefinitions.role;
     return {
-        ruleId: 'role',
-        idPrefix: 'role-conflict',
-        titleKey: 'rules.role.title',
-        messageKey: 'rules.v3.role.message',
+        ...definition,
         variables: {
             left: values[0] ?? t('common.unknown'),
             right: values[1] ?? t('common.unknown'),
@@ -404,7 +454,7 @@ function findingsFromInstructionModel(model) {
         return finding(
             definition.ruleId,
             id,
-            instructionFindingSeverity(relation),
+            instructionFindingSeverity(relation, atoms),
             definition.titleKey,
             definition.messageKey,
             definition.variables,
@@ -430,6 +480,7 @@ function findingsFromInstructionModel(model) {
                     value: atom.value,
                     polarity: atom.polarity,
                     scope: atom.scope,
+                    participantScope: atom.participantScope,
                     condition: atom.condition,
                     exception: atom.exception,
                     priority: atom.priority,
@@ -471,6 +522,7 @@ function findingsFromInstructionModel(model) {
                     value: atom.value,
                     polarity: atom.polarity,
                     scope: atom.scope,
+                    participantScope: atom.participantScope,
                     condition: atom.condition,
                     exception: atom.exception,
                     priority: atom.priority,

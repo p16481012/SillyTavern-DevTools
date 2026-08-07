@@ -41,6 +41,50 @@ function finding(overrides = {}) {
     };
 }
 
+function scopedSemanticFinding(participantScope = 'assistant-response') {
+    return finding({
+        relationKind: 'incompatible-value',
+        semanticRecords: [{
+            category: 'language',
+            target: 'response',
+            action: 'set',
+            property: 'response.language',
+            value: 'korean',
+            polarity: 'require',
+            scope: 'output',
+            participantScope,
+            condition: null,
+            exception: null,
+            priority: 'normal',
+            status: 'confirmed',
+        }, {
+            category: 'language',
+            target: 'response',
+            action: 'set',
+            property: 'response.language',
+            value: 'english',
+            polarity: 'require',
+            scope: 'output',
+            participantScope,
+            condition: null,
+            exception: null,
+            priority: 'normal',
+            status: 'confirmed',
+        }],
+    });
+}
+
+function withoutParticipantScope(findingWithScope) {
+    return {
+        ...findingWithScope,
+        semanticRecords: findingWithScope.semanticRecords.map((record) => {
+            const legacyRecord = { ...record };
+            delete legacyRecord.participantScope;
+            return legacyRecord;
+        }),
+    };
+}
+
 test('source fingerprints prefer identifiers and ignore capture order and offsets', () => {
     const first = source('language-ko');
     const moved = source('language-ko', {
@@ -263,6 +307,7 @@ test('scoped ignores distinguish semantic conditions and exceptions', () => {
             value: 'korean',
             polarity: 'require',
             scope: 'output',
+            participantScope: 'assistant-response',
             condition: 'when the user writes in Korean',
             exception: null,
             priority: 'normal',
@@ -292,6 +337,128 @@ test('scoped ignores distinguish semantic conditions and exceptions', () => {
         suppressionKey(base, sources),
         suppressionKey(withException, sources),
     );
+});
+
+test('semantic suppression keys keep participant scopes isolated', () => {
+    const sources = [source('shared')];
+    const base = finding({
+        ruleId: 'identity',
+        id: 'identity-conflict',
+        sourceIds: [sources[0].id],
+        relationKind: 'exclusive-identity',
+        semanticRecords: [{
+            category: 'identity',
+            target: 'assistant',
+            action: 'act-as',
+            property: 'assistant.identity.exclusive',
+            value: 'librarian',
+            polarity: 'require',
+            scope: 'identity',
+            participantScope: 'character-profile',
+            condition: null,
+            exception: null,
+            priority: 'normal',
+            status: 'confirmed',
+        }],
+    });
+    const userProfile = {
+        ...base,
+        semanticRecords: [{
+            ...base.semanticRecords[0],
+            participantScope: 'user-profile',
+        }],
+    };
+
+    assert.notEqual(
+        suppressionKey(base, sources),
+        suppressionKey(userProfile, sources),
+    );
+});
+
+test('legacy semantic reviews resolve only for assistant-response findings', () => {
+    const sources = [source('ko'), source('en')];
+    const assistantFinding = scopedSemanticFinding('assistant-response');
+    const legacyFinding = withoutParticipantScope(assistantFinding);
+    const legacyExactKey = findingKey(legacyFinding, sources);
+    const legacyBroadKey = suppressionKey(legacyFinding, sources);
+
+    assert.notEqual(findingKey(assistantFinding, sources), legacyExactKey);
+    assert.notEqual(suppressionKey(assistantFinding, sources), legacyBroadKey);
+
+    const legacyDocument = {
+        decisions: [{
+            findingKey: legacyExactKey,
+            decision: 'false-positive',
+        }],
+        ignores: [{
+            suppressionKey: legacyBroadKey,
+            scope: 'global',
+        }],
+    };
+    const assistantReview = resolveFindingReview(
+        assistantFinding,
+        sources,
+        legacyDocument,
+    );
+    assert.equal(assistantReview.decision, 'false-positive');
+    assert.equal(assistantReview.ignored, true);
+
+    for (const participantScope of ['character-profile', 'user-profile']) {
+        const profileReview = resolveFindingReview(
+            scopedSemanticFinding(participantScope),
+            sources,
+            legacyDocument,
+        );
+        assert.equal(profileReview.decision, null);
+        assert.equal(profileReview.ignored, false);
+        assert.equal(profileReview.hidden, false);
+    }
+});
+
+test('review mutations migrate assistant-response legacy keys without widening scope', () => {
+    const sources = [source('ko'), source('en')];
+    const target = scopedSemanticFinding('assistant-response');
+    const legacyTarget = withoutParticipantScope(target);
+    const legacyExactKey = findingKey(legacyTarget, sources);
+    const legacyBroadKey = suppressionKey(legacyTarget, sources);
+    const currentExactKey = findingKey(target, sources);
+    const currentBroadKey = suppressionKey(target, sources);
+    const legacyDocument = {
+        decisions: [{
+            findingKey: legacyExactKey,
+            decision: 'false-positive',
+        }],
+        ignores: [{
+            suppressionKey: legacyBroadKey,
+            scope: 'global',
+        }],
+    };
+
+    const decided = setFindingDecision(
+        legacyDocument,
+        target,
+        sources,
+        'valid',
+    );
+    assert.deepEqual(
+        decided.decisions.map(({ findingKey: key, decision }) => ({ key, decision })),
+        [{ key: currentExactKey, decision: 'valid' }],
+    );
+
+    const ignored = setFindingIgnore(legacyDocument, target, sources, {
+        enabled: true,
+        scope: 'global',
+    });
+    assert.deepEqual(
+        ignored.ignores.map(({ suppressionKey: key, scope }) => ({ key, scope })),
+        [{ key: currentBroadKey, scope: 'global' }],
+    );
+
+    const cleared = setFindingIgnore(legacyDocument, target, sources, {
+        enabled: false,
+        scope: 'global',
+    });
+    assert.equal(cleared.ignores.length, 0);
 });
 
 test('normalization accepts aliases, deduplicates, caps audit, and drops raw fields', () => {

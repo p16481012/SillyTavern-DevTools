@@ -1,5 +1,21 @@
 # 변경 기록
 
+## 0.17.1 - 2026-08-08
+
+### Rule Inspector 적용 주체와 의미 축 확대
+
+- atom에 `participantScope`를 추가해 어시스턴트 응답·캐릭터 프로필·사용자 페르소나·공유 컨텍스트·미확인을 구분하고, 다른 주체 및 미확인 주체 간 relation을 만들지 않도록 변경
+- 명시적인 한·영 문구에서 말투의 온도·격식·존중, 배타적 어시스턴트 정체성, 비밀 공개·유해 상세 안전 지시, 이전 대화 사용·민감 정보 보관을 bounded atom으로 추출
+- 같은 주체·대상·속성의 반대값 또는 반대 polarity만 충돌로 판정하고 캐릭터와 페르소나의 유사 구조, 다른 말투 속성, 다른 기억 대상을 경고에서 제외
+- 신규 축을 독립 규칙 설정·비교 정책 import/export·한글 finding·지시 구조 근거에 연결하고 검토 무시 fingerprint와 선택적 AI 입력에 적용 주체를 보존
+- 확정된 비밀 원문 공개 요구가 실제 포함된 안전 충돌만 치명적으로 표시하고 유해 상세 충돌은 경고, 후보·근거 부족은 보수적으로 유지
+- 공식 합성 Provider 평가를 18개 사례와 조건·예외·말투·정체성·안전·메모리 6개 release gate로 확대하고 3회 평가의 최대 호출 수를 54회로 고정
+
+### 검증
+
+- 한·영 atom·오탐 대조군, 주체 분리, 축별 설정, 검토 fingerprint, 제품 relation→finding→AI closure 경로를 단위·제품 fixture로 검증
+- manifest·package·runtime import query·onboarding fixture·sandbox harness의 버전을 `0.17.1`로 통일
+
 ## 0.17.0 - 2026-08-08
 
 ### Rule Inspector 조건·예외 적용 범위 판정

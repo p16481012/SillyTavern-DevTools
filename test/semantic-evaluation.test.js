@@ -116,17 +116,17 @@ test('validated reference suggestions pass deterministic usefulness, false-posit
         evidenceAccuracy: 1,
     });
     assert.deepEqual(first.counts, {
-        expectedIssues: 8,
-        suggestions: 8,
-        matchedIssues: 8,
+        expectedIssues: 9,
+        suggestions: 9,
+        matchedIssues: 9,
         falsePositives: 0,
-        expectedEvidence: 16,
-        evidence: 16,
-        correctEvidence: 16,
+        expectedEvidence: 18,
+        evidence: 18,
+        correctEvidence: 18,
         missingResults: 0,
     });
-    assert.equal(first.releaseGates.configuredCount, 5);
-    assert.equal(first.releaseGates.passedCount, 5);
+    assert.equal(first.releaseGates.configuredCount, 6);
+    assert.equal(first.releaseGates.passedCount, 6);
     assert.equal(first.releaseGates.failedCount, 0);
     assert.deepEqual(first.releaseGates.failures, []);
     assert.equal(first.releaseGates.axes.every(({ passed }) => passed), true);
@@ -175,9 +175,9 @@ test('regression report fails each quality gate for missed, spurious, and irrele
 
     assert.equal(report.complete, true);
     assert.equal(report.passed, false);
-    assert.equal(report.metrics.usefulnessRate, 3 / 4);
-    assert.equal(report.metrics.falsePositiveRate, 1 / 7);
-    assert.equal(report.metrics.evidenceAccuracy, 5 / 8);
+    assert.equal(report.metrics.usefulnessRate, 7 / 9);
+    assert.equal(report.metrics.falsePositiveRate, 1 / 8);
+    assert.equal(report.metrics.evidenceAccuracy, 2 / 3);
     assert.deepEqual(report.failures, [
         'usefulness-below-threshold',
         'false-positive-rate-above-threshold',
@@ -220,17 +220,18 @@ test('over-broad target or source attribution is not counted as a correct issue'
     const report = evaluateSemanticSuggestionCorpus(corpus, results);
 
     assert.equal(report.passed, false);
-    assert.equal(report.counts.matchedIssues, 7);
+    assert.equal(report.counts.matchedIssues, 8);
     assert.equal(report.counts.falsePositives, 1);
 });
 
-test('condition, exception, tone, role, and safety each have positive and negative controls', () => {
+test('condition, exception, tone, identity, safety, and memory each have positive and negative controls', () => {
     const pairs = [
         ['conditional-same-branch-conflict', 'conditional-branches-compatible'],
         ['exception-scope-conflict', 'exception-narrows-default-compatible'],
         ['tone-polarity-conflict', 'tone-traits-compatible'],
         ['assistant-role-conflict', 'participant-roles-compatible'],
         ['safety-disclosure-conflict', 'safety-redaction-compatible'],
+        ['memory-history-conflict', 'memory-scopes-compatible'],
     ];
 
     const expandedCases = [];
@@ -242,8 +243,9 @@ test('condition, exception, tone, role, and safety each have positive and negati
             ['condition', ...pairs[0]],
             ['exception', ...pairs[1]],
             ['tone', ...pairs[2]],
-            ['role', ...pairs[3]],
+            ['identity', ...pairs[3]],
             ['safety', ...pairs[4]],
+            ['memory', ...pairs[5]],
         ],
     );
     const hasKoreanSource = (entry) => entry.request.sources.some(
@@ -262,8 +264,8 @@ test('condition, exception, tone, role, and safety each have positive and negati
         assert.notEqual(hasKoreanSource(positive), hasKoreanSource(negative), positiveId);
         expandedCases.push(positive, negative);
     }
-    assert.equal(expandedCases.filter(hasKoreanSource).length, 5);
-    assert.equal(expandedCases.filter((entry) => !hasKoreanSource(entry)).length, 5);
+    assert.equal(expandedCases.filter(hasKoreanSource).length, 6);
+    assert.equal(expandedCases.filter((entry) => !hasKoreanSource(entry)).length, 6);
 });
 
 test('each gated positive case must exact-match even when aggregate rates still pass', () => {

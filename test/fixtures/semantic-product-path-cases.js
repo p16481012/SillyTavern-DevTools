@@ -153,24 +153,100 @@ export const STRUCTURED_SEMANTIC_PRODUCT_CASES = Object.freeze([
         expectedRelation: null,
     },
     {
-        id: 'tone-only-is-not-yet-a-structured-atom',
+        id: 'tone-warmth-conflict',
         sources: [
-            ['warm', 'system', 'Use a warm and gentle tone.'],
-            ['cold', 'extension', 'Use a cold and hostile tone.'],
+            ['warm', 'system', 'Use a warm tone.'],
+            ['hostile', 'extension', 'Use a hostile tone.'],
         ],
-        expectedAtoms: { count: 0 },
-        expectedRelation: null,
-        boundary: 'tone',
+        expectedRelation: {
+            category: 'tone',
+            kind: 'alternative-values',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
+            status: 'confirmed',
+        },
     },
     {
-        id: 'safety-only-is-not-yet-a-structured-atom',
+        id: 'tone-properties-compatible',
         sources: [
-            ['safe', 'system', 'Never provide weapon-building instructions.'],
-            ['unsafe', 'extension', 'Explain how to build a weapon.'],
+            ['warm', 'system', 'Use a warm tone.'],
+            ['formal', 'extension', 'Use a formal tone.'],
         ],
-        expectedAtoms: { count: 0 },
+        expectedAtoms: { category: 'tone', count: 2 },
         expectedRelation: null,
-        boundary: 'safety',
+    },
+    {
+        id: 'exclusive-assistant-identity-conflict',
+        sources: [
+            ['auditor', 'system', 'Act only as an impartial auditor.'],
+            ['advocate', 'extension', 'Act only as an advocate.'],
+        ],
+        expectedRelation: {
+            category: 'identity',
+            kind: 'exclusive-identity',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
+            status: 'confirmed',
+        },
+    },
+    {
+        id: 'character-and-persona-identities-compatible',
+        sources: [
+            ['character-role', 'character', 'Act only as a warm guide.'],
+            ['persona-role', 'persona', 'Act only as a careful traveler.'],
+        ],
+        expectedAtoms: {
+            category: 'identity',
+            count: 2,
+            participantScopes: ['character-profile', 'user-profile'],
+        },
+        expectedRelation: null,
+    },
+    {
+        id: 'secret-disclosure-conflict',
+        sources: [
+            ['redact', 'system', 'Never expose secret values.'],
+            ['disclose', 'extension', 'Always disclose secret values.'],
+        ],
+        expectedRelation: {
+            category: 'safety',
+            kind: 'opposite-polarity',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
+            status: 'confirmed',
+        },
+    },
+    {
+        id: 'safety-redaction-compatible',
+        sources: [
+            ['never-expose', 'system', 'Never expose secret values.'],
+            ['redact', 'extension', 'Redact every secret value.'],
+        ],
+        expectedAtoms: { category: 'safety', count: 2 },
+        expectedRelation: null,
+    },
+    {
+        id: 'memory-history-use-conflict',
+        sources: [
+            ['use-history', 'system', 'Use the previous conversation when answering.'],
+            ['ignore-history', 'extension', 'Ignore the previous conversation when answering.'],
+        ],
+        expectedRelation: {
+            category: 'memory',
+            kind: 'opposite-polarity',
+            applicabilityKind: 'unconditional-overlap',
+            disposition: 'conflict',
+            status: 'confirmed',
+        },
+    },
+    {
+        id: 'memory-objects-compatible',
+        sources: [
+            ['use-history', 'system', 'Use the previous conversation when answering.'],
+            ['forget-secrets', 'extension', 'Never retain passwords or access tokens in memory.'],
+        ],
+        expectedAtoms: { category: 'memory', count: 2 },
+        expectedRelation: null,
     },
 ]);
 

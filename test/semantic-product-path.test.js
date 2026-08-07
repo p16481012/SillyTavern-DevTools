@@ -15,6 +15,10 @@ const RULE_SETTINGS = {
         format: true,
         role: true,
         directives: true,
+        tone: true,
+        identity: true,
+        safety: true,
+        memory: true,
         largeSource: false,
         unmatched: false,
     },
@@ -129,6 +133,13 @@ for (const fixture of STRUCTURED_SEMANTIC_PRODUCT_CASES) {
                     fixture.expectedAtoms.count,
                     `${fixture.id}: atom boundary changed`,
                 );
+                if (fixture.expectedAtoms.participantScopes) {
+                    assert.deepEqual(
+                        sorted(atoms.map(({ participantScope }) => participantScope)),
+                        sorted(fixture.expectedAtoms.participantScopes),
+                        `${fixture.id}: participant scopes changed`,
+                    );
+                }
             }
             assert.equal(
                 analysis.findings.some(({ relationId }) => Boolean(relationId)),
@@ -210,6 +221,7 @@ for (const fixture of STRUCTURED_SEMANTIC_PRODUCT_CASES) {
             assert.equal(atom.property, productAtom.property);
             assert.equal(atom.value, productAtom.value);
             assert.equal(atom.polarity, productAtom.polarity);
+            assert.equal(atom.participantScope, productAtom.participantScope);
             assert.equal(atom.condition, productAtom.condition ?? '');
             assert.equal(atom.exception, productAtom.exception ?? '');
             assert.deepEqual(atom.localRange, productAtom.localRange);

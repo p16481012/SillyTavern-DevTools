@@ -49,7 +49,11 @@ const POLICY_CATEGORIES = new Set([
     '*',
     'language',
     'format',
+    'tone',
     'role',
+    'identity',
+    'safety',
+    'memory',
     'directives',
     'duplicates',
 ]);

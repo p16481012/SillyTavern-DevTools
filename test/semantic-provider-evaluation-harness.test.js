@@ -77,7 +77,7 @@ test('official provider corpus is frozen, synthetic-only, bounded, and product-p
     const suite = createOfficialSemanticProviderEvaluationSuite();
     assert.equal(Object.isFrozen(suite), true);
     assert.equal(Object.isFrozen(suite.corpus), true);
-    assert.equal(suite.corpus.cases.length, 16);
+    assert.equal(suite.corpus.cases.length, 18);
     assert.deepEqual(suite.corpus.privacy, {
         synthetic: true,
         containsUserContent: false,
@@ -102,6 +102,24 @@ test('official provider corpus is frozen, synthetic-only, bounded, and product-p
         ].includes(pathKind)),
         false,
     );
+    assert.deepEqual(
+        suite.cases.reduce((coverage, { pathKind }) => {
+            if (pathKind === 'structured-relation') coverage.structuredRelation += 1;
+            else if (pathKind === 'structured-atom-bridge') {
+                coverage.structuredAtomBridge += 1;
+            } else if (pathKind === 'source-bridge') coverage.sourceBridge += 1;
+            return coverage;
+        }, {
+            structuredRelation: 0,
+            structuredAtomBridge: 0,
+            sourceBridge: 0,
+        }),
+        {
+            structuredRelation: 5,
+            structuredAtomBridge: 6,
+            sourceBridge: 7,
+        },
+    );
     assert.equal(
         suite.cases.every(({ preparation }) => (
             preparation.snapshot.privacy.mode === 'full'
@@ -117,10 +135,10 @@ test('official suite publishes a stable versioned SHA-256 manifest', () => {
         schemaVersion: 1,
         corpusKind: suite.corpus.kind,
         corpusVersion: suite.corpus.version,
-        caseCount: 16,
+        caseCount: 18,
         caseIds: suite.cases.map(({ id }) => id),
         digestAlgorithm: 'SHA-256',
-        digest: '94fd431f2d2bb67ab2f2b6a7e28c741e8ad99f45dbfbe1f5392b04eb91f83fca',
+        digest: 'e6d8aca47466c213559e3b5d3f15183348974cf77d3bd86ea26287cd337d0fd5',
     });
     assert.equal(
         createHash('sha256').update(suite.canonicalManifest).digest('hex'),
@@ -312,14 +330,14 @@ test('each approved case makes one fresh serial provider call and returns aggreg
     });
 
     assert.equal(result.status, 'complete');
-    assert.equal(result.completedCalls, 16);
-    assert.equal(result.totalCalls, 16);
+    assert.equal(result.completedCalls, 18);
+    assert.equal(result.totalCalls, 18);
     assert.equal(result.aggregate.passed, false);
     assert.equal(result.aggregate.smokePassed, true);
     assert.equal(result.aggregate.qualityEligible, false);
     assert.equal(result.aggregate.complete, true);
-    assert.equal(approvals.length, 16);
-    assert.equal(adapter.calls, 16);
+    assert.equal(approvals.length, 18);
+    assert.equal(adapter.calls, 18);
     assert.equal(adapter.maximumActiveCalls, 1);
     assert.equal(result.persistsRawPrompt, false);
     assert.equal(result.persistsRawResponse, false);
@@ -354,8 +372,8 @@ test('three repetitions bypass memory cache and make an independently consented 
     assert.equal(result.aggregate.repetitionCount, 3);
     assert.equal(result.aggregate.passed, true);
     assert.equal(result.aggregate.qualityEligible, true);
-    assert.equal(approvals, 48);
-    assert.equal(adapter.calls, 48);
+    assert.equal(approvals, 54);
+    assert.equal(adapter.calls, 54);
 });
 
 test('declining a preview is terminal and never contacts the provider', async () => {

@@ -85,6 +85,7 @@ function fixture() {
         value: 'en',
         polarity: 'require',
         scope: 'output',
+        participantScope: 'assistant-response',
         condition: '',
         exception: '',
         priority: 'high',
@@ -309,6 +310,10 @@ test('prepare sends only selected active closure and exposes an exact consent pr
             disposition: 'conflict',
         }],
     );
+    assert.deepEqual(
+        prepared.request.atoms.map(({ participantScope }) => participantScope),
+        ['assistant-response', 'assistant-response'],
+    );
     assert.doesNotMatch(prepared.prompt, /must-never-leave|sk-proj-/u);
     assert.equal('chatId' in prepared.request, false);
     assert.equal('request' in prepared.request, false);
@@ -336,6 +341,23 @@ test('prepare rejects unknown relation applicability taxonomy values', async () 
                 && error.reason === 'invalid-relation-applicability',
         );
     }
+});
+
+test('prepare rejects unknown participant scope values before provider use', async () => {
+    const data = fixture();
+    data.analysis.instructions.atoms[0].participantScope = 'same-looking-profile';
+    await assert.rejects(
+        prepareSemanticInspection({
+            snapshot: data.snapshot,
+            analysis: data.analysis,
+            targetIds: [data.ids.finding],
+            provider: 'openrouter',
+            model: 'example/model',
+        }),
+        (error) => error instanceof SemanticInspectorError
+            && error.code === 'SEMANTIC_INVALID_INPUT'
+            && error.reason === 'invalid-atom-participant',
+    );
 });
 
 test('prepare distinguishes character and persona profiles without forwarding metadata', async () => {

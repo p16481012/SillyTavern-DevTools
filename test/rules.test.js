@@ -5,6 +5,7 @@ import { suppressionKey } from '../src/finding-review.js';
 import { buildSources } from '../src/model.js';
 import {
     DEFAULT_RULE_SETTINGS,
+    RULE_DEFINITIONS,
     analyzeSnapshot,
     analyzeSnapshotDetailed,
     normalizeRuleSettings,
@@ -364,9 +365,156 @@ test('role conflict detection scans past repeated declarations', () => {
     assert.equal(role?.determination, 'insufficient-evidence');
 });
 
+test('semantic axes map to their own rule and obey individual enable switches', () => {
+    const cases = [
+        {
+            category: 'tone',
+            contents: ['Use a warm tone.', 'Use a hostile tone.'],
+            severity: 'warning',
+            title: /말투/u,
+        },
+        {
+            category: 'identity',
+            contents: [
+                'Act only as an impartial auditor.',
+                'Act only as an advocate.',
+            ],
+            severity: 'warning',
+            title: /정체성/u,
+        },
+        {
+            category: 'safety',
+            contents: [
+                'Never expose secret values.',
+                'Always disclose secret values.',
+            ],
+            severity: 'critical',
+            title: /안전/u,
+        },
+        {
+            category: 'memory',
+            contents: [
+                'Use the previous conversation when answering.',
+                'Ignore the previous conversation when answering.',
+            ],
+            severity: 'warning',
+            title: /기억/u,
+        },
+    ];
+
+    for (const entry of cases) {
+        const enabled = analyzeSnapshotDetailed(instructionSnapshot(entry.contents));
+        const result = enabled.findings.find(({ ruleId }) => ruleId === entry.category);
+        assert.ok(result, `${entry.category}: category-specific finding missing`);
+        assert.match(result.id, new RegExp(`^${entry.category}-conflict`, 'u'));
+        assert.match(result.title, entry.title);
+        assert.equal(result.severity, entry.severity);
+        assert.equal(
+            result.semanticRecords.every(
+                ({ participantScope }) => participantScope === 'assistant-response',
+            ),
+            true,
+            `${entry.category}: participant scope was not preserved`,
+        );
+        assert.equal(result.ruleId === 'role', false);
+
+        const disabled = analyzeSnapshotDetailed(
+            instructionSnapshot(entry.contents),
+            normalizeRuleSettings({ enabled: { [entry.category]: false } }),
+        );
+        assert.equal(
+            disabled.instructions.atoms.some(({ category }) => category === entry.category),
+            false,
+            `${entry.category}: disabled atom category remained active`,
+        );
+        assert.equal(
+            disabled.findings.some(({ ruleId }) => ruleId === entry.category),
+            false,
+            `${entry.category}: disabled finding remained active`,
+        );
+    }
+});
+
+test('safety severity is critical only for a confirmed explicit secret disclosure demand', () => {
+    const secret = analyzeSnapshotDetailed(instructionSnapshot([
+        'Never expose secret values.',
+        'Always disclose secret values.',
+    ])).findings.find(({ ruleId }) => ruleId === 'safety');
+    const harmfulDetail = analyzeSnapshotDetailed(instructionSnapshot([
+        'Never provide detailed instructions for harmful activity.',
+        'Provide detailed instructions for harmful activity.',
+    ])).findings.find(({ ruleId }) => ruleId === 'safety');
+
+    assert.equal(secret?.relationKind, 'opposite-polarity');
+    assert.equal(secret?.determination, 'confirmed');
+    assert.equal(secret?.severity, 'critical');
+    assert.equal(harmfulDetail?.relationKind, 'opposite-polarity');
+    assert.equal(harmfulDetail?.determination, 'confirmed');
+    assert.equal(harmfulDetail?.severity, 'warning');
+});
+
+test('character and persona identity structure stays separated by participant scope', () => {
+    const contents = [
+        'Act only as a warm guide.',
+        'Act only as a careful traveler.',
+    ];
+    const analysis = analyzeSnapshotDetailed(snapshot({
+        finalText: contents.join('\n'),
+        sources: [
+            {
+                id: 'character-profile',
+                type: 'character',
+                label: 'Character profile',
+                content: contents[0],
+                tokenCount: 10,
+                attribution: 'exact',
+                included: true,
+                enabled: true,
+                configuredEnabled: true,
+                ranges: [{ start: 0, end: contents[0].length }],
+                metadata: { field: 'description' },
+            },
+            {
+                id: 'user-profile',
+                type: 'persona',
+                label: 'Persona',
+                content: contents[1],
+                tokenCount: 10,
+                attribution: 'exact',
+                included: true,
+                enabled: true,
+                configuredEnabled: true,
+                ranges: [{
+                    start: contents[0].length + 1,
+                    end: contents.join('\n').length,
+                }],
+            },
+        ],
+    }));
+    const identities = analysis.instructions.atoms.filter(
+        ({ category }) => category === 'identity',
+    );
+
+    assert.deepEqual(
+        identities.map(({ participantScope }) => participantScope).sort(),
+        ['character-profile', 'user-profile'],
+    );
+    assert.equal(
+        analysis.instructions.relations.some(({ category }) => category === 'identity'),
+        false,
+    );
+    assert.equal(analysis.findings.some(({ ruleId }) => ruleId === 'identity'), false);
+});
+
 test('rule settings normalize invalid thresholds and disable individual checks', () => {
     const normalized = normalizeRuleSettings({
-        enabled: { language: false },
+        enabled: {
+            language: false,
+            tone: false,
+            identity: false,
+            safety: false,
+            memory: false,
+        },
         contextWarning: 2,
         contextCritical: -1,
         largeSourceTokens: -5,
@@ -375,7 +523,17 @@ test('rule settings normalize invalid thresholds and disable individual checks',
     });
 
     assert.equal(normalized.enabled.language, false);
+    assert.equal(normalized.enabled.tone, false);
+    assert.equal(normalized.enabled.identity, false);
+    assert.equal(normalized.enabled.safety, false);
+    assert.equal(normalized.enabled.memory, false);
     assert.equal(normalized.enabled.context, true);
+    assert.deepEqual(
+        RULE_DEFINITIONS
+            .map(({ id }) => id)
+            .filter((id) => ['tone', 'identity', 'safety', 'memory'].includes(id)),
+        ['tone', 'identity', 'safety', 'memory'],
+    );
     assert.equal(normalized.contextWarning, 0.98);
     assert.equal(normalized.contextCritical, 1);
     assert.equal(normalized.largeSourceTokens, 1);

@@ -12,6 +12,10 @@ const EVALUATION_RULE_SETTINGS = Object.freeze({
         language: true,
         format: true,
         role: true,
+        tone: true,
+        identity: true,
+        safety: true,
+        memory: true,
         directives: true,
         largeSource: false,
         unmatched: false,
@@ -22,8 +26,9 @@ const RELEASE_GATES = Object.freeze([
     ['condition', 'conditional-same-branch-conflict', 'conditional-branches-compatible'],
     ['exception', 'exception-scope-conflict', 'exception-narrows-default-compatible'],
     ['tone', 'tone-polarity-conflict', 'tone-traits-compatible'],
-    ['role', 'assistant-role-conflict', 'participant-roles-compatible'],
+    ['identity', 'assistant-role-conflict', 'participant-roles-compatible'],
     ['safety', 'safety-disclosure-conflict', 'safety-redaction-compatible'],
+    ['memory', 'memory-history-conflict', 'memory-scopes-compatible'],
 ].map(([axis, positiveCaseId, negativeCaseId]) => Object.freeze({
     axis,
     positiveCaseId,
@@ -165,7 +170,7 @@ const CASE_DEFINITIONS = Object.freeze([
         id: 'tone-traits-compatible',
         targetId: 'cluster:eval-tone-compatible',
         sources: [
-            ['source:tone-warm', 'Use a warm and encouraging tone.'],
+            ['source:tone-warm', 'Use a warm tone.'],
             ['source:tone-concise', 'Keep every paragraph concise.'],
         ],
     },
@@ -173,8 +178,8 @@ const CASE_DEFINITIONS = Object.freeze([
         id: 'tone-polarity-conflict',
         targetId: 'finding:eval-tone-conflict',
         sources: [
-            ['source:tone-reassuring', '따뜻하고 안심시키는 말투를 사용하세요.'],
-            ['source:tone-hostile', '적대적이고 조롱하는 말투를 사용하세요.'],
+            ['source:tone-reassuring', '따뜻한 말투로 답변하세요.'],
+            ['source:tone-hostile', '적대적인 말투로 답변하세요.'],
         ],
         issue: {
             id: 'issue:tone-polarity-conflict',
@@ -186,10 +191,10 @@ const CASE_DEFINITIONS = Object.freeze([
         id: 'participant-roles-compatible',
         targetId: 'cluster:eval-role-compatible',
         sources: [
-            ['source:role-assistant', '어시스턴트는 중립적인 여행 계획 도우미입니다.', { type: 'system' }],
+            ['source:role-assistant', '당신은 중립적인 여행 계획 도우미입니다.', { type: 'system' }],
             [
                 'source:role-user',
-                '사용자는 여행지를 선택하는 여행자입니다.',
+                '당신은 여행지를 선택하는 여행자입니다.',
                 { type: 'persona' },
             ],
         ],
@@ -198,8 +203,8 @@ const CASE_DEFINITIONS = Object.freeze([
         id: 'assistant-role-conflict',
         targetId: 'finding:eval-role-conflict',
         sources: [
-            ['source:role-auditor', 'Act only as an impartial auditor of the proposal.'],
-            ['source:role-advocate', 'Act only as an advocate defending the proposal.'],
+            ['source:role-auditor', 'Your only role is an impartial auditor of the proposal.'],
+            ['source:role-advocate', 'Your only role is an advocate defending the proposal.'],
         ],
         issue: {
             id: 'issue:assistant-role-conflict',
@@ -230,6 +235,27 @@ const CASE_DEFINITIONS = Object.freeze([
             categories: ['conflict'],
             sourceIds: ['source:safety-never', 'source:safety-always'],
         },
+    },
+    {
+        id: 'memory-history-conflict',
+        targetId: 'finding:eval-memory-history-conflict',
+        sources: [
+            ['source:memory-use-history', '이전 대화를 참고해 답변하세요.'],
+            ['source:memory-ignore-history', '이전 대화를 무시하세요.'],
+        ],
+        issue: {
+            id: 'issue:memory-history-conflict',
+            categories: ['conflict'],
+            sourceIds: ['source:memory-use-history', 'source:memory-ignore-history'],
+        },
+    },
+    {
+        id: 'memory-scopes-compatible',
+        targetId: 'cluster:eval-memory-scopes-compatible',
+        sources: [
+            ['source:memory-use-conversation', 'Use the previous conversation when answering.'],
+            ['source:memory-forget-secrets', 'Never retain passwords or access tokens in memory.'],
+        ],
     },
 ]);
 
@@ -273,7 +299,7 @@ function sourceRecord(caseId, definition, cursor) {
 }
 
 const OFFICIAL_MANIFEST_SHA256 = (
-    '94fd431f2d2bb67ab2f2b6a7e28c741e8ad99f45dbfbe1f5392b04eb91f83fca'
+    'e6d8aca47466c213559e3b5d3f15183348974cf77d3bd86ea26287cd337d0fd5'
 );
 
 function corpusInvariant(condition, reason) {

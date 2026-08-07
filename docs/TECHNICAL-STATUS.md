@@ -1,4 +1,16 @@
-# v0.17.0 기술 구현 현황
+# v0.17.1 기술 구현 현황
+
+## v0.17.1 적용 주체와 의미 axis
+
+- 모든 instruction atom은 `assistant-response`, `character-profile`, `user-profile`, `shared-context`, `unknown` 중 하나의 `participantScope`를 갖습니다. 이 값은 atom ID·dedup·relation ID·finding semantic record·검토 suppression key·AI 입력에 보존됩니다.
+- `system`·`jailbreak`·`extension`·설정 prompt utility와 synthetic fallback은 어시스턴트 응답, character·persona·lorebook reference는 각각 캐릭터·사용자·공유 컨텍스트로 분류합니다. source origin이 character인 system prompt라도 제품 source type이 system이면 응답 지시로 비교됩니다.
+- 서로 다른 적용 주체 또는 `unknown`이 포함된 atom pair는 relation을 만들지 않습니다. reference source는 atom을 표시할 수 있지만 기존 capability 경계에 따라 정적 충돌 비교 대상이 아닙니다.
+- `tone`은 warmth·formality·respect의 명시적 반대값, `identity`는 `only/solely`가 있는 배타 역할, `safety`는 secret disclosure·harmful detail의 요구/금지, `memory`는 history use·sensitive retention의 사용/금지를 제한된 한·영 패턴으로 추출합니다.
+- 같은 주체·target·property에서 반대값 또는 반대 polarity가 있을 때만 relation을 만듭니다. 따뜻함과 격식, 이전 대화 사용과 비밀번호 미보관처럼 property가 다르면 양립으로 남습니다.
+- finding은 신규 축별 고유 ruleId·제목·설명을 사용합니다. 확정된 opposite-polarity secret disclosure relation에 실제 `disclose/disclosed/require` atom이 있을 때만 critical이며 harmful detail은 warning, 후보·근거 부족은 info 중심입니다.
+- 선택적 AI 의미 검사는 안전 enum인 `participantScope`를 전달하고 알 수 없는 값은 provider 호출 전에 실패로 닫습니다. system prompt도 다른 주체·다른 memory object를 단순 유사성으로 충돌 처리하지 않도록 명시합니다.
+- 공식 합성 Provider suite는 18개 사례, condition·exception·tone·identity·safety·memory 6개 release gate와 1~3회·최대 54회 호출 상한을 사용합니다.
+- 자유 서술 정체성, 대명사 해석, 복합 자연어 함의, 실제 우선순위 승자, 자동 원본 수정은 구현 범위가 아닙니다.
 
 ## v0.17.0 조건·예외 relation 적용 범위
 
@@ -186,21 +198,21 @@
 
 ## v0.14.1 공식 Provider harness·구조 경로 평가
 
-- 규칙 검사 AI 연결 설정의 접힌 고급 도구에서 고정 합성 corpus 16건을 현재 연결 또는 선택 프로필로 한 건씩 실행합니다. 1회 smoke와 3회 품질 판정을 구분하며 자동 일괄 실행은 없습니다.
+- 규칙 검사 AI 연결 설정의 접힌 고급 도구에서 고정 합성 corpus 18건을 현재 연결 또는 선택 프로필로 한 건씩 실행합니다. 1회 smoke와 3회 품질 판정을 구분하며 자동 일괄 실행은 없습니다.
 - harness는 `index.js`가 만든 동일 `SemanticInspector`만 주입받아 기존 adapter와 `SemanticCaptureGate`를 공유합니다. 별도 adapter·gate·fetch·SDK·API key 입력 경로는 없습니다.
 - 각 사례는 `prepare → 구조 closure exact gate → 합성 원문/identity/digest 미리보기 → 초기화된 1회 동의 → cache 초기화 → inspect` 순서를 따릅니다. provider/model/route/profile identity 변경, 선택 profile의 current fallback, cache hit, 보정된 evidence offset과 구조 양성 응답의 atom/relation 귀속 누락은 실패로 중단합니다.
 - 준비 identity는 adapter의 실제 전송 route에 결속됩니다. profile이 전송 직전에 사라지거나 current route가 profile로 바뀌면 capture gate를 열거나 provider를 호출하기 전에 실패합니다.
-- 결과는 즉시 target/category/source/atom/relation/evidence offset만 평가기에 투영하고 원문·raw response·quote·제안 설명·opaque profile ID를 상태나 영구 저장소에 남기지 않습니다. 최대 48회, 응답 상한 2,048, 직렬 1건, 자동 retry 없음입니다.
+- 결과는 즉시 target/category/source/atom/relation/evidence offset만 평가기에 투영하고 원문·raw response·quote·제안 설명·opaque profile ID를 상태나 영구 저장소에 남기지 않습니다. 최대 54회, 응답 상한 2,048, 직렬 1건, 자동 retry 없음입니다.
 - 동의 완료·전송 시도·검증 완료 수를 별도로 표시합니다. 논리 취소나 timeout 뒤에도 underlying provider 요청이 끝날 때까지 inspector 단위 lease를 유지해 새 일반 검사·평가 세션이 겹치지 않게 합니다.
 - 1회 결과는 smoke일 뿐 공식 통과가 아니며, 같은 public provider/model/route 조합에서 3회 모두 통과해야 해당 단일 연결 셀의 품질 통과로 표시합니다. 다른 provider family나 모델로 일반화하지 않습니다.
 - corpus version·16개 case ID·SHA-256 manifest를 고정합니다. 공식 suite의 구조 경로 분포는 실제 relation 제품 target 2건, 실제 atom을 운반하는 평가 bridge 1건, 구조가 없는 source bridge 13건입니다.
-- 구조 제품 경로 fixture는 10건입니다. 조건·예외·역할·지시문·포맷의 실제 분석 relation 6건과 동일 언어·호환 역할·말투·안전 음성 경계 4건을 거쳐 `prepare()`의 source/atom/relation closure와 ID를 검사합니다.
+- 구조 제품 경로 fixture는 19건입니다. 조건·예외·말투·정체성·안전·메모리·역할·지시문·포맷의 충돌·양립·무관 pair를 실제 제품 분석으로 만들고 `prepare()`의 source/atom/relation closure·participantScope와 ID를 검사합니다.
 - 확인된 공백: 말투와 안전 의미는 현재 정적 atom 분류가 없어 실제 relation-backed 일반 AI target을 만들지 못합니다. canonical provider corpus의 해당 사례는 source bridge를 사용하므로 이 결과를 구조 경로 통과로 표기하지 않습니다.
 - provider timeout보다 gate ticket이 먼저 만료되지 않도록 호출별 ticket TTL은 timeout에 30초 여유를 둡니다.
 
 ## v0.14.0 합성 의미 평가·실제 provider 절차
 
-- 합성 평가 corpus는 v2로 올라가며 6건에서 16건으로 늘어났습니다. 조건·예외·말투·역할·안전마다 충돌해야 하는 양성 1건과 충돌하면 안 되는 음성 1건을 추가하고 신규 사례를 한국어 5건·영어 5건으로 교차 배치했습니다.
+- 합성 평가 corpus v2는 v0.17.1에서 18건으로 늘어났습니다. 조건·예외·말투·정체성·안전·메모리마다 충돌해야 하는 양성 1건과 충돌하면 안 되는 음성 1건을 한·영 교차 대조군으로 유지합니다.
 - reference evidence의 quote와 source exact slice·기대 범위가 일치하는지, 다섯 의미 축의 양성/음성 쌍과 언어 균형이 유지되는지 자동 검사합니다.
 - corpus `releaseGates`는 전체 평균과 별도로 각 축의 양성 exact issue match·기대 근거 pair 전부 적중·불필요한 근거 없음과 음성 제안 0건을 강제합니다. 한 축의 실패가 다른 축의 성적으로 희석되지 않습니다.
 - corpus v2는 `releaseGates`가 필수라 구 평가기가 새 fixture를 지원 버전으로 오인하지 않습니다. 현 평가기는 gate가 없는 legacy v1만 종전 집계로 명시 지원합니다.
@@ -486,7 +498,7 @@
 - 공식 SillyTavern 공개 이벤트는 provider response usage와 대응 provider request ID를 제공하지 않으므로 기본 설치의 provider usage·비용은 `unavailable`입니다. 별도 integration이 같은 공개 ID를 제공할 때만 adapter를 사용할 수 있습니다.
 - `MESSAGE_RECEIVED`의 `extra.token_count`는 provider 보고 usage가 아니라 로컬 출력 추정치이며 하나의 활성 generation을 안전하게 고를 수 없으면 미연결 또는 산정 불가로 남습니다.
 - provider 서버가 변환한 최종 HTTP body와 내부 upstream provider는 공개 프런트엔드 이벤트만으로 확정할 수 없습니다.
-- 정적 Rule Inspector는 명시적 언어·형식·역할·포함/금지·이전 지시 무시 표현을 중심으로 하며 자연어 의미 전체를 이해하지 않습니다.
+- 정적 Rule Inspector는 명시적 언어·형식·역할·포함/금지·조건·예외와 bounded 말투·배타 정체성·안전·메모리 표현을 중심으로 하며 자연어 의미 전체를 이해하지 않습니다.
 - 조건·예외는 짧은 equality와 exact clause의 동치·배타 및 직접 예외 특수화만 1차 판정합니다. 복합 조건의 일반 논리 관계, 말투·정체성·안전·메모리 의미 충돌과 실제 우선순위 승자는 아직 판정하지 않습니다.
 - v0.9.1 이전 스냅샷에는 프리셋·캐릭터·채팅 범위 지문이 없고 v0.9.2 이전 스냅샷에는 구조 provenance가 없습니다.
 

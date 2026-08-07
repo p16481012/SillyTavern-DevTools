@@ -231,11 +231,41 @@ function stableEvidence(value, state = { length: 0 }, depth = 0) {
     return result;
 }
 
-function evidenceDigest(finding) {
+function semanticRecordsForKey(finding, includeParticipantScope = true) {
+    const semanticRecords = own(finding, 'semanticRecords');
+    if (!Array.isArray(semanticRecords)) return [];
+    if (includeParticipantScope) return semanticRecords;
+    return semanticRecords.map((record) => {
+        if (
+            !record
+            || typeof record !== 'object'
+            || !hasOwn(record, 'participantScope')
+        ) {
+            return record;
+        }
+        const legacyRecord = Object.create(null);
+        for (const key of Object.keys(record)) {
+            if (key !== 'participantScope') legacyRecord[key] = record[key];
+        }
+        return legacyRecord;
+    });
+}
+
+function allowsLegacyParticipantFallback(finding) {
+    const semanticRecords = own(finding, 'semanticRecords');
+    return Array.isArray(semanticRecords)
+        && semanticRecords.length > 0
+        && semanticRecords.every((record) => (
+            canonicalText(own(record, 'participantScope'), 80)
+                === 'assistant-response'
+        ));
+}
+
+function evidenceDigest(finding, includeParticipantScope = true) {
     const semanticRecords = own(finding, 'semanticRecords');
     const evidence = stableEvidence(
         Array.isArray(semanticRecords) && semanticRecords.length > 0
-            ? semanticRecords
+            ? semanticRecordsForKey(finding, includeParticipantScope)
             : [
                 own(finding, 'evidence'),
                 own(finding, 'evidenceRecords'),
@@ -256,7 +286,11 @@ function findingSemanticId(finding, broad = false) {
  * Exact key: changes when the finding's semantic evidence changes, while
  * excluding positions and keeping all prompt/evidence text behind a digest.
  */
-function findingKeyFromLookup(finding = {}, lookup) {
+function findingKeyFromLookup(
+    finding = {},
+    lookup,
+    includeParticipantScope = true,
+) {
     const semantic = Array.isArray(own(finding, 'semanticRecords'))
         && finding.semanticRecords.length > 0;
     return `finding:v1:${digest([
@@ -266,7 +300,7 @@ function findingKeyFromLookup(finding = {}, lookup) {
         canonicalText(own(finding, 'method'), 160),
         canonicalText(own(finding, 'determination'), 160),
         findingSourceFingerprintsFromLookup(finding, lookup, false).join(','),
-        evidenceDigest(finding),
+        evidenceDigest(finding, includeParticipantScope),
     ])}`;
 }
 
@@ -278,21 +312,31 @@ export function findingKey(finding = {}, sources = []) {
  * Broader key: excludes exact evidence and the variable suffix of a finding ID
  * so an "always ignore" rule can survive equivalent future captures.
  */
-function suppressionKeyFromLookup(finding = {}, lookup) {
+function suppressionKeyFromLookup(
+    finding = {},
+    lookup,
+    includeParticipantScope = true,
+) {
     const semanticRecords = Array.isArray(own(finding, 'semanticRecords'))
-        ? finding.semanticRecords.map((record) => ({
-            category: own(record, 'category'),
-            target: own(record, 'target'),
-            action: own(record, 'action'),
-            property: own(record, 'property'),
-            value: own(record, 'value'),
-            polarity: own(record, 'polarity'),
-            scope: own(record, 'scope'),
-            condition: own(record, 'condition'),
-            exception: own(record, 'exception'),
-            priority: own(record, 'priority'),
-            status: own(record, 'status'),
-        }))
+        ? finding.semanticRecords.map((record) => {
+            const normalized = {
+                category: own(record, 'category'),
+                target: own(record, 'target'),
+                action: own(record, 'action'),
+                property: own(record, 'property'),
+                value: own(record, 'value'),
+                polarity: own(record, 'polarity'),
+                scope: own(record, 'scope'),
+                condition: own(record, 'condition'),
+                exception: own(record, 'exception'),
+                priority: own(record, 'priority'),
+                status: own(record, 'status'),
+            };
+            if (includeParticipantScope && hasOwn(record, 'participantScope')) {
+                normalized.participantScope = own(record, 'participantScope');
+            }
+            return normalized;
+        })
         : [];
     return `suppression:v1:${digest([
         canonicalText(own(finding, 'ruleId'), 160),
@@ -466,8 +510,18 @@ export function setFindingDecision(
 ) {
     const normalized = normalizeFindingReviewDocument(document);
     const key = findingKey(finding, sources);
+    const legacyKey = allowsLegacyParticipantFallback(finding)
+        ? findingKeyFromLookup(
+            finding,
+            sourceFingerprintLookup(sources),
+            false,
+        )
+        : '';
     const nextDecision = REVIEW_DECISIONS.has(decision) ? decision : null;
-    const decisions = normalized.decisions.filter((entry) => entry.findingKey !== key);
+    const decisions = normalized.decisions.filter((entry) => (
+        entry.findingKey !== key
+        && (!legacyKey || entry.findingKey !== legacyKey)
+    ));
     if (nextDecision) {
         decisions.push({
             findingKey: key,
@@ -500,11 +554,20 @@ export function setFindingIgnore(
 ) {
     const normalized = normalizeFindingReviewDocument(document);
     const key = suppressionKey(finding, sources);
+    const legacyKey = allowsLegacyParticipantFallback(finding)
+        ? suppressionKeyFromLookup(
+            finding,
+            sourceFingerprintLookup(sources),
+            false,
+        )
+        : '';
     const normalizedScope = REVIEW_SCOPE_SET.has(scope) ? scope : 'global';
     const normalizedScopeKey = reviewScopeKey(normalizedScope, scopeKey);
     if (normalizedScope !== 'global' && !normalizedScopeKey) return normalized;
     const ignores = normalized.ignores.filter((entry) => !(
-        entry.suppressionKey === key
+        (entry.suppressionKey === key || (
+            legacyKey && entry.suppressionKey === legacyKey
+        ))
         && entry.scope === normalizedScope
         && entry.scopeKey === normalizedScopeKey
     ));
@@ -608,17 +671,36 @@ function prepareReviewResolver(
     return (finding) => {
         const exactKey = findingKeyFromLookup(finding, fingerprints);
         const broadKey = suppressionKeyFromLookup(finding, fingerprints);
-        const exact = decisions.get(exactKey) ?? null;
+        // Pre-participant-scope semantic keys remain readable only for the
+        // historical assistant-response domain. New profile/context findings
+        // must never inherit an old broad ignore whose participant was unknown.
+        const legacyFallback = allowsLegacyParticipantFallback(finding);
+        const legacyExactKey = legacyFallback
+            ? findingKeyFromLookup(finding, fingerprints, false)
+            : '';
+        const legacyBroadKey = legacyFallback
+            ? suppressionKeyFromLookup(finding, fingerprints, false)
+            : '';
+        const exact = decisions.get(exactKey)
+            ?? (legacyExactKey && legacyExactKey !== exactKey
+                ? decisions.get(legacyExactKey)
+                : null)
+            ?? null;
+        const broadKeys = legacyBroadKey && legacyBroadKey !== broadKey
+            ? [broadKey, legacyBroadKey]
+            : [broadKey];
 
         let ignore = null;
         for (const scope of REVIEW_SCOPES) {
             let latest = null;
             for (const scopeKey of acceptedScopeKeys.get(scope)) {
-                const candidate = ignores.get(
-                    `${broadKey}|${scope}|${scopeKey ?? ''}`,
-                );
-                if (candidate && (!latest || candidate.index > latest.index)) {
-                    latest = candidate;
+                for (const candidateKey of broadKeys) {
+                    const candidate = ignores.get(
+                        `${candidateKey}|${scope}|${scopeKey ?? ''}`,
+                    );
+                    if (candidate && (!latest || candidate.index > latest.index)) {
+                        latest = candidate;
+                    }
                 }
             }
             if (latest) ignore = latest.entry;

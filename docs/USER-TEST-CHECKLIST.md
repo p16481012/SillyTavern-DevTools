@@ -1,10 +1,27 @@
-# v0.17.0 사용자 실사용 체크리스트
+# v0.17.1 사용자 실사용 체크리스트
 
-v0.17.0은 Rule Inspector가 같은 조건의 충돌과 동시에 적용되지 않는 조건·예외 관계를 구분합니다. 업데이트 뒤 SillyTavern 페이지를 한 번 새로고침하고, 가능하면 아래 예시처럼 조건만 다른 프롬프트를 실제 요청에 포함해 확인하면 됩니다.
+v0.17.1은 Rule Inspector가 적용 주체와 말투·정체성·안전·메모리 의미 축을 구조화합니다. 업데이트 뒤 SillyTavern 페이지를 한 번 새로고침하고, 실제 사용 중인 프롬프트를 바꾸기 어렵다면 아래 문구를 임시 테스트 프롬프트로 나눠 넣어 확인하면 됩니다.
+
+## v0.17.1 적용 주체와 의미 검사
+
+- [ ] 업데이트 뒤 ST DevTools 설정 또는 헤더에 `v0.17.1`이 표시된다.
+- [ ] `Use a warm tone.`과 `Use a hostile tone.`을 서로 다른 활성 prompt로 넣으면 `응답 말투 충돌` finding과 warmth 근거가 표시된다.
+- [ ] `Use a warm tone.`과 `Use a formal tone.`은 서로 다른 말투 속성이므로 충돌 finding을 만들지 않는다.
+- [ ] 같은 어시스턴트 응답 범위의 `Act only as an impartial auditor.`와 `Act only as an advocate.`는 배타적 정체성 충돌로 표시된다.
+- [ ] 캐릭터 프로필과 사용자 페르소나에 비슷한 이름·나이·외형·성격 구조가 있어도 서로 충돌하거나 중복으로 경고되지 않는다.
+- [ ] `Never expose secret values.`와 `Always disclose secret values.`는 확정 안전 충돌이며 명시적 원문 공개 요구 때문에 치명적으로 표시된다.
+- [ ] `Never provide detailed instructions for harmful actions.`와 `Provide detailed instructions for harmful actions.`의 확정 충돌은 안전 finding으로 표시되지만 비밀 원문 공개가 아니므로 치명적으로 승격되지 않는다.
+- [ ] `Use the previous conversation when answering.`와 `Ignore the previous conversation when answering.`은 같은 memory object의 반대 지시로 표시된다.
+- [ ] 이전 대화를 사용하라는 지시와 비밀번호·접근 토큰을 기억하지 말라는 지시는 memory property가 다르므로 충돌하지 않는다.
+- [ ] `지시 구조 분석 V3` 원자 상세에서 각 원자의 `적용 주체`와 번역된 속성·대상·행동을 확인할 수 있다.
+- [ ] 말투·정체성·안전·메모리 규칙을 각각 끄면 해당 축 finding만 사라지고 다른 축은 유지된다.
+- [ ] 비교 정책 export/import에 신규 축이 유지되고, 한 참가자에서 무시한 finding이 다른 참가자의 결과까지 숨기지 않는다.
+- [ ] AI 의미 검사 미리보기는 사용자가 선택한 source·atom·relation만 포함하며 신규 원자의 적용 주체를 보존한다.
+- [ ] 기존 v0.17.0의 같은 조건 충돌·배타 조건 양립·예외 특수화 양립 판정이 그대로 유지된다.
 
 ## v0.17.0 조건·예외 적용 범위
 
-- [ ] 업데이트 뒤 ST DevTools 설정 또는 헤더에 `v0.17.0`이 표시된다.
+- [ ] 현재 `v0.17.1`에서도 아래 v0.17.0 조건·예외 판정이 그대로 유지된다.
 - [ ] `locale = ko일 때 한국어로 답하세요`와 `locale = ko일 때 영어로 답하세요`처럼 같은 단순 조건의 반대 지시는 규칙 검사에서 충돌로 표시된다.
 - [ ] 같은 조건 충돌의 구조 근거에 `같은 조건에서 겹침`이 표시되고 판정은 `확정`이다.
 - [ ] `locale = ko일 때 한국어로 답하세요`와 `locale = en일 때 영어로 답하세요`처럼 같은 키의 값이 다른 단순 조건은 충돌 finding에 나타나지 않는다.
@@ -288,8 +305,8 @@ v0.16.9는 강조를 먼저 보여주고 뒤늦게 스크롤하던 순서를 없
 
 - [ ] ST DevTools 제목에 `v0.16.0`이 표시된다.
 - [ ] 규칙 검사 AI 연결 설정 안의 `고급: 공식 합성 Provider 평가`는 기본 접힘이며 일반 검사 흐름을 가리지 않는다.
-- [ ] `1회`를 선택하면 16건, `3회`를 선택하면 48건과 최대 응답 상한 합계가 호출 전에 표시된다.
-- [ ] corpus v2·16건·SHA-256 digest와 실제 relation target 2건, atom bridge 1건, source bridge 13건이 표시된다.
+- [ ] `1회`를 선택하면 18건, `3회`를 선택하면 54건과 최대 응답 상한 합계가 호출 전에 표시된다.
+- [ ] corpus v2·18건·SHA-256 digest와 실제 relation target 5건, atom bridge 6건, source bridge 7건이 표시된다.
 - [ ] 한 번 버튼을 누를 때 한 사례의 미리보기만 열리고 case ID·반복·순서·provider/model·digest·합성 원문이 보인다.
 - [ ] 각 미리보기의 동의 체크는 항상 빈 상태이며 취소하면 provider 호출과 자동 다음 실행 없이 세션이 종료된다.
 - [ ] 선택한 Connection Manager 프로필이 미리보기 뒤 사라져도 current 연결을 호출하지 않고 identity 변경 오류로 중단한다.
@@ -316,7 +333,7 @@ v0.16.9는 강조를 먼저 보여주고 뒤늦게 스크롤하던 순서를 없
 - [ ] 화면 읽기 도구를 사용하면 AI 검사 준비·동의 대기·실행·완료 또는 오류 상태가 status로 안내되고 실행 중 영역이 busy로 전달된다.
 - [ ] 샌드박스의 `AI 요청 한도 오류 fixture`에서 `SEMANTIC_RATE_LIMITED · provider-rate-limited` 진단을 확인할 수 있다.
 
-합성 평가 corpus v2 16건과 유용성·오탐률·근거 범위 pair 적중률, 각 의미 축의 양성 issue·근거 pair 완전 적중·음성 무제안 gate는 자동 테스트 대상입니다. 특정 실제 모델의 품질을 통과로 보증하는 항목이 아니므로 사용자가 지금 API 비용을 들여 corpus 전체를 반복 실행할 필요는 없습니다. 나중에 실제 provider를 평가할 때는 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)의 개인정보·동의·비용·중단 기준을 사용합니다.
+합성 평가 corpus v2 18건과 유용성·오탐률·근거 범위 pair 적중률, 각 의미 축의 양성 issue·근거 pair 완전 적중·음성 무제안 gate는 자동 테스트 대상입니다. 특정 실제 모델의 품질을 통과로 보증하는 항목이 아니므로 사용자가 지금 API 비용을 들여 corpus 전체를 반복 실행할 필요는 없습니다. 나중에 실제 provider를 평가할 때는 [`SEMANTIC-PROVIDER-MANUAL-EVALUATION.md`](SEMANTIC-PROVIDER-MANUAL-EVALUATION.md)의 개인정보·동의·비용·중단 기준을 사용합니다.
 
 ## v0.12.4 회귀 검토
 

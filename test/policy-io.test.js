@@ -61,7 +61,11 @@ function ruleSettings() {
             duplicates: true,
             language: true,
             format: true,
+            tone: true,
             role: true,
+            identity: true,
+            safety: true,
+            memory: true,
             directives: true,
             largeSource: true,
             unmatched: true,
@@ -154,6 +158,31 @@ test('versioned policy export round-trips canonically and excludes audit records
         'language-korean',
     );
     assert.deepEqual(parsePolicyDocument(JSON.stringify(parsed)), parsed);
+});
+
+test('semantic rule axes and comparison categories round-trip through policy IO', () => {
+    const semanticCategories = ['tone', 'identity', 'safety', 'memory'];
+    const settings = ruleSettings();
+    for (const category of semanticCategories) settings.enabled[category] = false;
+    const policy = comparisonPolicy();
+    policy.profiles[0].groupDefinitions[0].categories = semanticCategories;
+
+    const parsed = parsePolicyDocument(serializePolicyDocument({
+        ruleSettings: settings,
+        comparisonPolicy: policy,
+        reviews: reviews(),
+        exportedAt: 1_775_088_000_000,
+        extensionVersion: '0.17.1',
+    }));
+
+    for (const category of semanticCategories) {
+        assert.equal(parsed.components.ruleSettings.data.enabled[category], false);
+    }
+    assert.deepEqual(
+        parsed.components.comparisonPolicy.data.profiles[0]
+            .groupDefinitions[0].categories,
+        semanticCategories,
+    );
 });
 
 test('flat legacy manual identities are accepted but emitted in canonical nested form', () => {
