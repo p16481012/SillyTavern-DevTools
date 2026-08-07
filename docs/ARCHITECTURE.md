@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.16.10의 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.16.11의 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -9,6 +9,14 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
+
+### 탭별 빈 상태와 scroll owner
+
+`emptyStateModel(tabId, loadedCount, totalCount)`은 DOM과 저장소를 수정하지 않는 순수 상태 모델입니다. 전송 프롬프트·기록·변경 비교·규칙 검사·검색의 문구와 아이콘을 나누고, 변경 비교에서는 현재 불러온 수와 저장 총수를 함께 사용해 `0/2`, `1/2`, 읽기 수 부족을 구분합니다. 저장 총수는 충분하지만 loaded timeline이 한 개뿐이면 캡처를 더 요구하지 않고 설정 modal의 불러오기 수로 연결합니다.
+
+라이브 `render()`만 `.st-devtools-content.is-empty-state`를 매번 동기화합니다. `renderEmpty()`는 기능 설명서의 격리 preview에서도 재사용되므로 scroll owner에 side effect를 만들지 않습니다. 빈 상태 전용 CSS는 scrollbar rail만 숨기고 `overflow-y: auto`를 유지해 토글 전후의 `clientWidth`를 고정하면서 touch·wheel·keyboard와 focus 기반 스크롤을 보존합니다. 일반 기록·비교·검사 화면은 기존의 보이는 scrollbar를 그대로 사용합니다.
+
+`renderCaptureTroubleshooting()`은 캡처 문제 설명과 새로고침을 하나의 disclosure에 두며, 주 행동과 복구 행동을 분리합니다. `.st-devtools-empty`는 `border-box`와 `min-width: 0`으로 패널 폭 안에서 padding을 계산합니다.
 
 ### 세 갈래 도움말 경계
 

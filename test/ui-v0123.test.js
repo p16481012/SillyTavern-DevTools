@@ -27,7 +27,7 @@ test('v0.12.3 UI contracts preserve AI work across tabs and expose compact contr
     ]);
     const render = ui.slice(
         ui.indexOf('    render() {'),
-        ui.indexOf('    renderEmpty()', ui.indexOf('    render() {')),
+        ui.indexOf('    renderEmpty(', ui.indexOf('    render() {')),
     );
     const provenanceStart = ui.indexOf('    renderProvenanceDetails(source) {');
     const provenance = ui.slice(

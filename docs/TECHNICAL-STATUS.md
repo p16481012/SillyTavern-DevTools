@@ -1,4 +1,13 @@
-# v0.16.10 기술 구현 현황
+# v0.16.11 기술 구현 현황
+
+## v0.16.11 탭별 빈 상태·스크롤 폭 안정화
+
+- `emptyStateModel()`은 활성 탭, 현재 불러온 요청 수와 저장 총수를 입력으로 받아 탭별 제목·설명·아이콘·행동과 비교 진행 상태를 결정합니다. DOM이 없는 순수 모델로 분리해 `0/2`, `1/2`, 읽기 수 부족 상태를 결정적으로 회귀 검증합니다.
+- `render()`는 렌더마다 `.st-devtools-content`의 `is-empty-state`를 제거한 뒤 실제 활성 view로 다시 계산합니다. 기능 설명서 preview가 `renderEmpty()`를 직접 사용해도 라이브 scroll owner 상태를 바꾸지 않습니다.
+- 전송 프롬프트에만 빠른 시작 카드를 표시합니다. 기록·비교·검사·검색은 각 기능의 입력 조건을 설명하고, 공통 `renderCaptureTroubleshooting()`이 문제 해결 문구와 새로고침을 한 disclosure에서 제공합니다.
+- 변경 비교는 불러온 요청이 두 개 미만이어도 저장 총수가 두 개 이상이면 새 요청을 요구하지 않고 `openSettings()`를 통해 불러올 스냅샷 수 설정으로 연결합니다.
+- `.st-devtools-content.is-empty-state`는 표준·WebKit scrollbar rail만 숨기며 기존 `overflow-y: auto`를 유지합니다. 390×640 샌드박스에서 disclosure 전후 `clientWidth`와 카드 rect가 같고 `scrollWidth === clientWidth`인 상태에서 실제 휠 스크롤이 진행됨을 확인했습니다.
+- `.st-devtools-empty`는 `border-box`와 `min-width: 0`을 사용해 모바일에서 100% 폭에 좌우 padding이 더해지던 overflow를 차단합니다.
 
 ## v0.16.10 토글 암막 안정화·도움말 정보 구조
 
@@ -17,7 +26,7 @@
 
 ## v0.16.8 실제 확장 캐시·모바일 자동 스크롤 수명주기
 
-- 실제 확장 진입점은 `./src/ui.js?v=0.16.8`을 import합니다. manifest 버전만 바뀌고 하위 모듈 URL이 같아 이전 UI 코드가 재사용되는 경로를 차단하며, `test/version.test.js`가 무버전 UI import의 재발을 막습니다.
+- 실제 확장 진입점은 `./src/ui.js?v=<확장 버전>`을 import합니다. manifest 버전만 바뀌고 하위 모듈 URL이 같아 이전 UI 코드가 재사용되는 경로를 차단하며, `test/version.test.js`가 무버전 UI import의 재발을 막습니다.
 - 자동 스크롤은 시작 당시 target과 단계에 연결됩니다. 늦게 도착한 `scrollend`나 fallback timer는 현재 target이 달라졌으면 새 단계의 위치 계산을 끝내지 않습니다.
 - 네이티브 smooth scroll을 호출한 직후 같은 scroller에 `scrollLeft = 0`을 다시 대입하지 않습니다. 가로 위치는 같은 `scrollTo({ left: 0 })` 호출에서 고정해 모바일 브라우저가 세로 animation을 취소할 여지를 없앱니다.
 - scroll 완료 뒤 현재 target을 안전 영역 기준으로 다시 검사합니다. 레이아웃·폰트·callout 배치가 이동 중 바뀌어 대상이 벗어났다면 즉시 최종 좌표를 보정하고 spotlight geometry를 다시 계산합니다.
@@ -486,9 +495,10 @@
 
 ## 아직 미구현
 
-### v0.15.x 이후 방향
+### v0.17.x 이후 방향
 
-- 말투·안전 의미의 정적 atom·relation 양성/음성 경계를 과잉 탐지 없이 추가하는 분류 설계
+- 조건 동치·포함·배타와 일반 규칙·예외 관계를 오탐 없이 판정하는 relation 설계
+- 말투·정체성·안전·메모리 의미의 정적 atom·relation 양성/음성 경계를 축별로 추가하는 분류 설계
 - title·summary·rationale의 의미 정확성을 다루는 bounded 사람 검토 rubric
 - 실제 초보자 검토에서 확인되는 briefing 길이·practice task dock·debrief 결과 설명과 모바일 sheet 밀도 보정
 
@@ -496,6 +506,8 @@
 
 ## 다음 구현 우선순위
 
-1. 말투·안전 구조 atom 분류는 합성 양성/음성 사례와 오탐 budget을 먼저 고정한 뒤 제품 경로에 연결합니다.
-2. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 v0.14.x 패치를 만듭니다.
-3. 온보딩은 실제 초보자 검토 뒤 briefing·practice·debrief 카피와 모바일 sheet 흐름을 보정하되 6개 주제·39단계와 view-session 격리·종료 시 live view 복구 경계를 기본값으로 유지합니다.
+1. 조건·예외 relation은 같은 조건의 충돌, 배타 조건의 비충돌, 일반 규칙을 좁히는 예외를 양성/음성 corpus와 오탐 budget으로 먼저 고정합니다.
+2. 말투·정체성·안전·메모리 atom은 참가자·대상 scope와 축별 release gate를 정한 뒤 제품 경로에 연결합니다.
+3. 검사 결과는 근거 위치·비교·사용자 판정·제안 복사까지 이어지게 하되 원본 자동 수정은 추가하지 않습니다.
+4. 실제 provider에서 확인된 호환 문제는 원문 없이 code·reason·provider family·route만으로 필요 시 호환 패치를 만듭니다.
+5. 온보딩은 실제 초보자 검토 뒤 briefing·practice·debrief 카피를 보정하되 view-session 격리와 종료 시 live view 복구 경계를 유지합니다.

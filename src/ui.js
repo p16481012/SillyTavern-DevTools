@@ -267,6 +267,49 @@ export function growthChartDomain(values = []) {
     });
 }
 
+export function emptyStateModel(
+    tabId = 'explorer',
+    snapshotCount = 0,
+    totalCount = snapshotCount,
+) {
+    const tab = TABS.find(([id]) => id === tabId) ?? TABS[0];
+    const knownTab = tab[0];
+    const loadedCount = Math.max(0, Number(snapshotCount) || 0);
+    const storedCount = Math.max(loadedCount, Number(totalCount) || 0);
+    const needsMoreLoaded = knownTab === 'diff'
+        && loadedCount < 2
+        && storedCount >= 2;
+    const diffState = needsMoreLoaded
+        ? 'load'
+        : loadedCount === 1
+            ? 'one'
+            : 'zero';
+    return Object.freeze({
+        tabId: knownTab,
+        icon: tab[3],
+        loadedCount,
+        storedCount,
+        needsMoreLoaded,
+        titleKey: knownTab === 'diff'
+            ? `empty.diff.title.${diffState}`
+            : `empty.${knownTab}.title`,
+        descriptionKey: knownTab === 'diff'
+            ? `empty.diff.description.${diffState}`
+            : `empty.${knownTab}.description`,
+        progressValue: knownTab === 'diff'
+            ? Math.min(2, loadedCount)
+            : null,
+        showQuickStart: knownTab === 'explorer',
+        backLabelKey: (
+            knownTab === 'diff'
+            && loadedCount === 1
+            && !needsMoreLoaded
+        )
+            ? 'empty.diff.sendAnother'
+            : 'action.returnToChat',
+    });
+}
+
 function capturePipelineErrorMessage(detail) {
     const code = typeof detail?.error?.code === 'string'
         ? detail.error.code
@@ -2954,7 +2997,7 @@ export class DevToolsWindow {
         }, 0);
     }
 
-    openSettings() {
+    openSettings({ targetId = '' } = {}) {
         if (!this.settingsOverlay || !this.settingsPanel) return;
         this.closeHelpCenter({ restoreFocus: false });
         this.closeRulesSettings({ restoreFocus: false });
@@ -2982,6 +3025,14 @@ export class DevToolsWindow {
         queueMicrotask(() => {
             if (this.settingsOverlay && !this.settingsOverlay.hidden) {
                 this.settingsPanel?.focus({ preventScroll: true });
+                const target = targetId
+                    ? this.settingsPanel?.querySelector(`#${targetId}`)
+                    : null;
+                target?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'nearest',
+                });
             }
         });
     }
@@ -7915,15 +7966,32 @@ export class DevToolsWindow {
             proseElement('p', t('help.step1Description')),
         );
         nextStep.append(nextStepIcon, nextStepCopy);
+        section.appendChild(nextStep);
+        return section;
+    }
+
+    renderCaptureTroubleshooting() {
         const diagnostics = element('details', {
             className: 'st-devtools-empty-diagnostics st-devtools-disclosure',
         });
-        diagnostics.append(
-            element('summary', { text: t('help.troubleshootTitle') }),
+        diagnostics.appendChild(element('summary', {
+            text: t('help.troubleshootTitle'),
+        }));
+        const content = element('div', {
+            className: 'st-devtools-empty-diagnostics-content',
+        });
+        const refresh = element('button', {
+            className: 'menu_button',
+            text: t('action.refresh'),
+            type: 'button',
+        });
+        refresh.addEventListener('click', () => this.refresh());
+        content.append(
             proseElement('p', t('help.troubleshootDescription')),
+            refresh,
         );
-        section.append(nextStep, diagnostics);
-        return section;
+        diagnostics.appendChild(content);
+        return diagnostics;
     }
 
     syncOpaqueTheme() {
@@ -8861,6 +8929,7 @@ export class DevToolsWindow {
         this.content.id = this.panelElementId(activeTab);
         this.content.setAttribute('aria-labelledby', this.tabElementId(activeTab));
         this.content.replaceChildren(this.renderScreenHeader(activeTab));
+        this.content.classList?.remove('is-empty-state');
         if (this.tutorialIsActive()) {
             const practiceNotice = element('div', {
                 className: 'st-devtools-onboarding-practice-notice',
@@ -8887,8 +8956,13 @@ export class DevToolsWindow {
         }
 
         const snapshot = this.selectedSnapshot();
+        const snapshotCount = this.activeTimeline().length;
         if (!snapshot && activeTab !== 'timeline') {
-            this.content.appendChild(this.renderEmpty());
+            this.content.classList?.add('is-empty-state');
+            this.content.appendChild(this.renderEmpty(activeTab, {
+                snapshotCount,
+                totalCount: this.activeTimelineTotalCount(),
+            }));
             return;
         }
         const privacyMode = snapshot?.privacy?.mode ?? 'full';
@@ -8913,6 +8987,12 @@ export class DevToolsWindow {
             }
             this.content.appendChild(privacyNotice);
         }
+
+        this.content.classList?.toggle(
+            'is-empty-state',
+            (activeTab === 'timeline' && !snapshot)
+                || (activeTab === 'diff' && snapshotCount < 2),
+        );
 
         const renderers = {
             explorer: () => this.renderExplorer(snapshot),
@@ -9034,30 +9114,73 @@ export class DevToolsWindow {
         return region;
     }
 
-    renderEmpty() {
+    renderEmpty(tabId = 'explorer', {
+        snapshotCount = this.activeTimeline().length,
+        totalCount = this.activeTimelineTotalCount(),
+    } = {}) {
+        const model = emptyStateModel(tabId, snapshotCount, totalCount);
         const empty = element('div', { className: 'st-devtools-empty' });
         empty.append(
-            element('i', { className: 'fa-solid fa-wave-square' }),
-            element('h3', { text: t('empty.title') }),
-            proseElement('p', t('empty.description')),
-            this.renderQuickStart({ showHeading: true }),
+            element('i', { className: `fa-solid ${model.icon}` }),
+            element('h3', { text: t(model.titleKey) }),
+            proseElement('p', t(model.descriptionKey, {
+                loaded: model.loadedCount,
+                total: model.storedCount,
+            })),
         );
+        if (model.progressValue !== null) {
+            const progress = element('div', {
+                className: 'st-devtools-empty-progress',
+            });
+            progress.setAttribute('role', 'progressbar');
+            progress.setAttribute('aria-label', t('empty.diff.progressLabel'));
+            progress.setAttribute('aria-valuemin', '0');
+            progress.setAttribute('aria-valuemax', '2');
+            progress.setAttribute('aria-valuenow', String(model.progressValue));
+            progress.append(
+                element('span', { text: t('empty.diff.progressLabel') }),
+                element('strong', {
+                    text: t('empty.diff.progress', { count: model.progressValue }),
+                }),
+            );
+            const track = element('span', {
+                className: 'st-devtools-empty-progress-track',
+            });
+            for (let index = 0; index < 2; index += 1) {
+                track.appendChild(element('span', {
+                    className: index < model.progressValue ? 'is-filled' : '',
+                }));
+            }
+            progress.appendChild(track);
+            empty.appendChild(progress);
+        }
+        if (model.showQuickStart) {
+            empty.appendChild(this.renderQuickStart({ showHeading: true }));
+        }
+        empty.appendChild(this.renderCaptureTroubleshooting());
         const actions = element('div', {
             className: 'st-devtools-empty-actions',
         });
+        if (model.needsMoreLoaded) {
+            const settings = element('button', {
+                className: 'menu_button st-devtools-primary-button',
+                text: t('empty.diff.openSettings'),
+                type: 'button',
+            });
+            settings.addEventListener('click', () => this.openSettings({
+                targetId: 'st-devtools-settings-timeline-limit',
+            }));
+            actions.appendChild(settings);
+        }
         const back = element('button', {
-            className: 'menu_button st-devtools-primary-button',
-            text: t('action.returnToChat'),
+            className: model.needsMoreLoaded
+                ? 'menu_button'
+                : 'menu_button st-devtools-primary-button',
+            text: t(model.backLabelKey),
             type: 'button',
         });
         back.addEventListener('click', () => this.close());
-        const refresh = element('button', {
-            className: 'menu_button',
-            text: t('action.refresh'),
-            type: 'button',
-        });
-        refresh.addEventListener('click', () => this.refresh());
-        actions.append(back, refresh);
+        actions.appendChild(back);
         empty.appendChild(actions);
         return empty;
     }
@@ -10033,7 +10156,10 @@ export class DevToolsWindow {
         }
 
         if (timeline.length === 0) {
-            page.appendChild(this.renderEmpty());
+            page.appendChild(this.renderEmpty('timeline', {
+                snapshotCount: timeline.length,
+                totalCount,
+            }));
             if (corruptWarning) page.appendChild(corruptWarning);
             if (storageDetails) page.appendChild(storageDetails);
             return page;
@@ -11077,7 +11203,10 @@ export class DevToolsWindow {
         const page = element('div', { className: 'st-devtools-page' });
         const timeline = this.activeTimeline();
         if (timeline.length < 2) {
-            page.appendChild(proseElement('p', t('diff.minimum')));
+            page.appendChild(this.renderEmpty('diff', {
+                snapshotCount: timeline.length,
+                totalCount: this.activeTimelineTotalCount(),
+            }));
             return page;
         }
 

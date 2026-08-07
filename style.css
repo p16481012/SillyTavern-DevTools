@@ -902,6 +902,18 @@
     background: var(--st-devtools-panel-bg);
 }
 
+/* v0.16.11 — keep empty-state cards still while diagnostics expand. */
+.st-devtools-content.is-empty-state {
+    -ms-overflow-style: none !important;
+    scrollbar-width: none !important;
+}
+
+.st-devtools-content.is-empty-state::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+}
+
 .st-devtools-screen-header {
     box-sizing: border-box;
     display: flex;
@@ -1351,11 +1363,23 @@
     font-weight: 700;
 }
 
-.st-devtools-empty-diagnostics > p {
-    margin: 0;
+.st-devtools-empty-diagnostics-content {
+    display: grid;
+    justify-items: start;
+    gap: 0.75rem;
     padding: 0.72rem 0.8rem 0.85rem;
     border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-empty-diagnostics-content > p {
+    margin: 0;
     line-height: 1.5;
+}
+
+.st-devtools-overlay .st-devtools-window
+.st-devtools-empty-diagnostics-content > .menu_button {
+    min-height: 40px !important;
+    padding: 0.5rem 0.8rem !important;
 }
 
 @keyframes st-devtools-capture-pulse {
@@ -1539,12 +1563,14 @@
 }
 
 .st-devtools-empty {
+    box-sizing: border-box;
     display: grid;
     justify-items: center;
     gap: 0.75rem;
     margin: auto;
     width: min(100%, 36rem);
     max-width: 34rem;
+    min-width: 0;
     padding: 1.5rem;
     text-align: center;
 }
@@ -1559,6 +1585,47 @@
 
 .st-devtools-empty > i {
     font-size: 2rem;
+}
+
+.st-devtools-empty-progress {
+    display: grid;
+    width: min(20rem, 100%);
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 0.45rem 0.75rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-surface);
+    text-align: left;
+}
+
+.st-devtools-empty-progress > span:first-child {
+    color: var(--st-devtools-text-muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.st-devtools-empty-progress > strong {
+    color: var(--st-devtools-primary);
+    font-size: 0.95rem;
+}
+
+.st-devtools-empty-progress-track {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.35rem;
+}
+
+.st-devtools-empty-progress-track > span {
+    height: 0.35rem;
+    border-radius: 999px;
+    background: var(--st-devtools-surface-muted);
+}
+
+.st-devtools-empty-progress-track > span.is-filled {
+    background: var(--st-devtools-primary);
 }
 
 .st-devtools-picker {

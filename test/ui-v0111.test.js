@@ -445,23 +445,30 @@ test('header actions and capture status expose explicit accessible names', async
     assert.match(updateStatus, /\.title = accessibleStatus/u);
 });
 
-test('empty state provides concise quick start and recovery actions', async () => {
+test('empty states provide contextual next steps and one recovery surface', async () => {
     const ui = await readFile(UI_SOURCE_URL, 'utf8');
     const empty = sourceBlock(
         ui,
-        '\n    renderEmpty() {',
+        '\n    renderEmpty(',
         '\n    renderSnapshotPicker(',
     );
+    assert.match(empty, /emptyStateModel\(tabId, snapshotCount, totalCount\)/u);
     assert.match(empty, /this\.renderQuickStart\(\{ showHeading: true \}\)/u);
+    assert.match(empty, /if \(model\.showQuickStart\)/u);
+    assert.match(empty, /this\.renderCaptureTroubleshooting\(\)/u);
     assert.match(empty, /className: 'st-devtools-empty-actions'/u);
-    assert.match(empty, /text: t\('action\.returnToChat'\)/u);
+    assert.match(empty, /text: t\(model\.backLabelKey\)/u);
+    assert.match(empty, /empty\.diff\.openSettings/u);
     assert.match(empty, /back\.addEventListener\('click', \(\) => this\.close\(\)\)/u);
-    assert.match(empty, /text: t\('action\.refresh'\)/u);
-    assert.match(empty, /refresh\.addEventListener\('click', \(\) => this\.refresh\(\)\)/u);
 
     const quickStart = sourceBlock(
         ui,
         '\n    renderQuickStart(',
+        '\n    renderCaptureTroubleshooting() {',
+    );
+    const troubleshooting = sourceBlock(
+        ui,
+        '\n    renderCaptureTroubleshooting() {',
         '\n    syncOpaqueTheme() {',
     );
     assert.doesNotMatch(quickStart, /for \(const index of \[1, 2, 3\]\)/u);
@@ -472,7 +479,15 @@ test('empty state provides concise quick start and recovery actions', async () =
     assert.match(quickStart, /nextStepIcon\.setAttribute\('aria-hidden', 'true'\)/u);
     assert.match(quickStart, /help\.step1Title/u);
     assert.match(quickStart, /help\.step1Description/u);
-    assert.match(quickStart, /className: 'st-devtools-empty-diagnostics/u);
+    assert.doesNotMatch(quickStart, /st-devtools-empty-diagnostics/u);
+    assert.match(troubleshooting, /className: 'st-devtools-empty-diagnostics/u);
+    assert.match(troubleshooting, /help\.troubleshootTitle/u);
+    assert.match(troubleshooting, /help\.troubleshootDescription/u);
+    assert.match(troubleshooting, /text: t\('action\.refresh'\)/u);
+    assert.match(
+        troubleshooting,
+        /refresh\.addEventListener\('click', \(\) => this\.refresh\(\)\)/u,
+    );
 });
 
 test('rule results separate AI mode and settings from local supporting sections', async () => {
@@ -566,6 +581,24 @@ test('beginner UI labels cover navigation, quick start, capture, and recovery st
         ...EXPECTED_TABS.map((id) => `tab.${id}`),
         ...EXPECTED_TABS.map((id) => `screen.${id}.description`),
         'empty.quickStartTitle',
+        'empty.explorer.title',
+        'empty.explorer.description',
+        'empty.timeline.title',
+        'empty.timeline.description',
+        'empty.diff.title.zero',
+        'empty.diff.title.one',
+        'empty.diff.title.load',
+        'empty.diff.description.zero',
+        'empty.diff.description.one',
+        'empty.diff.description.load',
+        'empty.diff.progressLabel',
+        'empty.diff.progress',
+        'empty.diff.sendAnother',
+        'empty.diff.openSettings',
+        'empty.rules.title',
+        'empty.rules.description',
+        'empty.search.title',
+        'empty.search.description',
         'help.step1Title',
         'help.step1Description',
         'help.troubleshootTitle',

@@ -193,7 +193,7 @@ test('settings open without surprising input focus and keep an explicit top clos
     );
     const open = sourceBlock(
         ui,
-        '\n    openSettings() {',
+        '\n    openSettings(',
         '\n    closeSettings(',
     );
     const focusTask = sourceBlock(
