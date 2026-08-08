@@ -916,6 +916,66 @@ export function semanticSuggestionCopyText(suggestion) {
     return sections.join('\n\n');
 }
 
+function workflowRange(value) {
+    const start = Number(value?.start);
+    const end = Number(value?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        return null;
+    }
+    return { start, end };
+}
+
+/**
+ * Build at most two bounded evidence views for one finding. Evidence is joined
+ * to instruction atoms by atomId instead of relying on array order.
+ */
+export function findingWorkflowEvidence(finding, instructionModel = null) {
+    const atomById = new Map(
+        (Array.isArray(instructionModel?.atoms) ? instructionModel.atoms : [])
+            .filter((atom) => typeof atom?.id === 'string')
+            .map((atom) => [atom.id, atom]),
+    );
+    const records = Array.isArray(finding?.evidenceRecords)
+        ? finding.evidenceRecords
+        : [];
+    const seen = new Set();
+    const result = [];
+    for (const record of records) {
+        if (!record || typeof record !== 'object') continue;
+        const atomId = typeof record.atomId === 'string' ? record.atomId : null;
+        const sourceId = typeof record.sourceId === 'string' ? record.sourceId : null;
+        const text = typeof record.text === 'string' ? record.text : '';
+        if (!sourceId || !text.trim()) continue;
+        const localRange = workflowRange(record.localRange);
+        const key = `${atomId ?? ''}|${sourceId}|${localRange?.start ?? ''}|${localRange?.end ?? ''}|${text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const atom = atomId ? atomById.get(atomId) ?? null : null;
+        result.push({
+            atomId,
+            sourceId,
+            sourceLabel: typeof record.sourceLabel === 'string' && record.sourceLabel.trim()
+                ? record.sourceLabel.trim()
+                : sourceId,
+            text,
+            localRange,
+            finalRanges: (Array.isArray(atom?.finalRanges) ? atom.finalRanges : [])
+                .map(workflowRange)
+                .filter(Boolean),
+            comparison: atom ? {
+                property: atom.property ?? null,
+                value: atom.valueLabel ?? atom.value ?? null,
+                polarity: atom.polarity ?? null,
+                participantScope: atom.participantScope ?? null,
+                condition: atom.condition ?? null,
+                exception: atom.exception ?? null,
+            } : null,
+        });
+        if (result.length >= 2) break;
+    }
+    return result;
+}
+
 export class DevToolsWindow {
     constructor({
         getContext,
@@ -1006,6 +1066,11 @@ export class DevToolsWindow {
         this.activeComparisonProfileId = this.comparisonPolicySettings.profiles?.[0]?.id ?? 'global';
         this.findingReviewDocument = this.loadFindingReviewDocument();
         this.findingHiddenOnce = new Set();
+        this.ruleWorkflowOpenFindingKeys = new Set();
+        this.ruleWorkflowReturn = null;
+        this.ruleWorkflowSequence = 0;
+        this.pendingSemanticWorkflowTargetId = null;
+        this.semanticWorkflowFindingKey = null;
         this.ruleAuditLog = this.loadRuleAuditLog();
         this.ruleReviewStatus = '';
         this.ruleReviewStatusIsError = false;
@@ -1243,6 +1308,8 @@ export class DevToolsWindow {
     }
 
     invalidateAnalysisState() {
+        this.ruleWorkflowReturn = null;
+        this.ruleWorkflowSequence = (this.ruleWorkflowSequence ?? 0) + 1;
         if (this.analysisRevision >= Number.MAX_SAFE_INTEGER) {
             this.analysisRevision = 0;
             this.analysisCache.clear();
@@ -1273,6 +1340,12 @@ export class DevToolsWindow {
         if (this.selectedId === nextId) return false;
         this.invalidateAnalysisState();
         this.selectedId = nextId;
+        if (
+            this.ruleWorkflowReturn
+            && this.ruleWorkflowReturn.snapshotId !== nextId
+        ) {
+            this.ruleWorkflowReturn = null;
+        }
         return true;
     }
 
@@ -8122,7 +8195,9 @@ export class DevToolsWindow {
                 );
             }
             this.pruneTimelineSelection();
-            if (!alreadyPresent) this.selectedId = snapshot.id;
+            if (!alreadyPresent) {
+                this.selectedId = snapshot.id;
+            }
         }
         if (panelVisible) {
             this.render();
@@ -8889,6 +8964,21 @@ export class DevToolsWindow {
         }
         const currentTab = this.activeTabId();
         const changed = nextTab !== currentTab;
+        const pendingWorkflowReturn = (
+            !this.tutorialIsActive()
+            && nextTab === 'rules'
+            && currentTab === 'explorer'
+        )
+            ? this.ruleWorkflowReturn
+            : null;
+        const workflowReturn = (
+            pendingWorkflowReturn
+            && pendingWorkflowReturn.snapshotId === this.selectedSnapshot()?.id
+            && pendingWorkflowReturn.analysisRevision === this.analysisRevision
+        )
+            ? pendingWorkflowReturn
+            : null;
+        if (pendingWorkflowReturn) this.ruleWorkflowReturn = null;
         if (this.tutorialIsActive()) {
             this.onboardingSession.tabId = nextTab;
         } else {
@@ -8909,6 +8999,13 @@ export class DevToolsWindow {
             this.content.scrollLeft = 0;
         }
         if (focus) this.activeTabButton()?.focus();
+        if (workflowReturn) {
+            this.scheduleRuleFindingFocus(
+                workflowReturn.findingKey,
+                workflowReturn.snapshotId,
+                workflowReturn.analysisRevision,
+            );
+        }
         return true;
     }
 
@@ -9471,6 +9568,52 @@ export class DevToolsWindow {
         return overview;
     }
 
+    renderRuleWorkflowReturnBanner(snapshot) {
+        const route = this.ruleWorkflowReturn;
+        if (
+            !route
+            || route.snapshotId !== snapshot?.id
+            || route.analysisRevision !== this.analysisRevision
+        ) return null;
+        const banner = element('section', {
+            className: 'st-devtools-rule-workflow-return',
+        });
+        banner.setAttribute('role', 'status');
+        const copy = element('div');
+        copy.append(
+            element('strong', { text: t('review.workflow.returnTitle') }),
+            proseElement('p', t('review.workflow.returnDescription')),
+        );
+        const back = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: t('review.workflow.returnAction'),
+            type: 'button',
+        });
+        back.addEventListener('click', () => this.returnToRuleFinding());
+        const icon = element('i', { className: 'fa-solid fa-shield-halved' });
+        icon.setAttribute('aria-hidden', 'true');
+        banner.append(icon, copy, back);
+        return banner;
+    }
+
+    returnToRuleFinding() {
+        const route = this.ruleWorkflowReturn;
+        if (!route) return false;
+        if (route.analysisRevision !== this.analysisRevision) {
+            this.ruleWorkflowReturn = null;
+            return false;
+        }
+        this.ruleWorkflowReturn = null;
+        this.setSelectedSnapshotId(route.snapshotId);
+        this.selectTab('rules');
+        this.scheduleRuleFindingFocus(
+            route.findingKey,
+            route.snapshotId,
+            route.analysisRevision,
+        );
+        return true;
+    }
+
     renderExplorer(snapshot) {
         const page = element('div', { className: 'st-devtools-page' });
         const includedOnly = this.activeExplorerIncludedOnly();
@@ -9490,6 +9633,8 @@ export class DevToolsWindow {
             source.id,
             sourceMappingColor(source, index),
         ]));
+        const returnBanner = this.renderRuleWorkflowReturnBanner(snapshot);
+        if (returnBanner) page.appendChild(returnBanner);
         page.append(this.renderExplorerOverview(snapshot));
         const guide = element('details', {
             className: 'st-devtools-disclosure st-devtools-explorer-guide',
@@ -9981,23 +10126,140 @@ export class DevToolsWindow {
         setTimeout(callback, 0);
     }
 
-    openExplorerForFinding(snapshot, finding, target) {
+    preferredScrollBehavior() {
+        return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+            ? 'auto'
+            : 'smooth';
+    }
+
+    focusRuleFinding(findingKey) {
+        const card = [...this.window.querySelectorAll('.st-devtools-rule-card')]
+            .find((node) => node.dataset.findingId === findingKey);
+        const target = card
+            ?? this.window.querySelector('.st-devtools-reviewed-findings > summary')
+            ?? this.window.querySelector('.st-devtools-rule-review-status');
+        if (!target) return false;
+        this.clearRuleFocus();
+        if (card) card.classList.add('rule-focus');
+        if (!target.matches('button, summary, input, select, textarea, [tabindex]')) {
+            target.tabIndex = -1;
+        }
+        target.scrollIntoView({
+            block: 'center',
+            behavior: this.preferredScrollBehavior(),
+        });
+        target.focus?.({ preventScroll: true });
+        return true;
+    }
+
+    scheduleRuleFindingFocus(
+        findingKey,
+        expectedSnapshotId = null,
+        expectedAnalysisRevision = null,
+    ) {
+        this.scheduleExplorerFocus(() => {
+            if (this.activeTabId() !== 'rules') return;
+            if (
+                expectedSnapshotId
+                && this.selectedSnapshot()?.id !== expectedSnapshotId
+            ) return;
+            if (
+                expectedAnalysisRevision != null
+                && this.analysisRevision !== expectedAnalysisRevision
+            ) return;
+            if (this.focusRuleFinding(findingKey)) return;
+            if (typeof MutationObserver !== 'function' || !this.content) return;
+            const observer = new MutationObserver(() => {
+                if (this.activeTabId() !== 'rules') {
+                    observer.disconnect();
+                    return;
+                }
+                if (
+                    expectedSnapshotId
+                    && this.selectedSnapshot()?.id !== expectedSnapshotId
+                ) {
+                    observer.disconnect();
+                    return;
+                }
+                if (
+                    expectedAnalysisRevision != null
+                    && this.analysisRevision !== expectedAnalysisRevision
+                ) {
+                    observer.disconnect();
+                    return;
+                }
+                if (this.focusRuleFinding(findingKey)) observer.disconnect();
+            });
+            observer.observe(this.content, { childList: true, subtree: true });
+            const timeout = setTimeout(() => observer.disconnect(), 3_000);
+            timeout?.unref?.();
+        });
+    }
+
+    openExplorerForFinding(snapshot, finding, target, evidence = null) {
         const practiceSession = this.tutorialIsActive()
             ? this.onboardingSession
             : null;
+        const findingKey = finding.review?.findingKey ?? finding.id;
         this.setSelectedSnapshotId(snapshot.id);
+        const workflowSequence = this.ruleWorkflowSequence + 1;
+        this.ruleWorkflowSequence = workflowSequence;
+        if (!practiceSession) {
+            this.ruleWorkflowOpenFindingKeys.add(findingKey);
+            this.ruleWorkflowReturn = {
+                snapshotId: snapshot.id,
+                findingKey,
+                sequence: workflowSequence,
+                analysisRevision: this.analysisRevision,
+            };
+        }
+        const sourceIds = evidence?.sourceId
+            ? [evidence.sourceId]
+            : finding.sourceIds;
+        const finalRanges = evidence
+            ? evidence.finalRanges ?? []
+            : finding.finalRanges;
         this.selectTab('explorer');
         this.scheduleExplorerFocus(() => {
             if (practiceSession && this.onboardingSession !== practiceSession) return;
+            if (
+                !practiceSession
+                && (
+                    this.activeTabId() !== 'explorer'
+                    || this.selectedSnapshot()?.id !== snapshot.id
+                    || this.ruleWorkflowReturn?.sequence !== workflowSequence
+                    || this.ruleWorkflowReturn?.analysisRevision
+                        !== this.analysisRevision
+                )
+            ) return;
             if (target === 'sources') {
-                this.focusRuleSources(finding.sourceIds, finding.finalRanges);
+                this.focusRuleSources(sourceIds, finalRanges, evidence);
             } else {
-                this.focusRuleEvidence(finding.finalRanges, finding.sourceIds);
+                this.focusRuleEvidence(finalRanges, sourceIds);
             }
         });
     }
 
-    focusRuleSources(sourceIds, finalRanges = []) {
+    highlightLocalSourceEvidence(card, localRange) {
+        const range = workflowRange(localRange);
+        if (!card || !range) return null;
+        const pre = card.querySelector('.st-devtools-source-body > pre');
+        const text = pre?.textContent ?? '';
+        if (!pre || range.start < 0 || range.end > text.length) return null;
+        const mark = element('mark', {
+            className: 'st-devtools-rule-evidence-mark rule-focus',
+            text: text.slice(range.start, range.end),
+        });
+        mark.tabIndex = -1;
+        pre.replaceChildren(
+            document.createTextNode(text.slice(0, range.start)),
+            mark,
+            document.createTextNode(text.slice(range.end)),
+        );
+        return mark;
+    }
+
+    focusRuleSources(sourceIds, finalRanges = [], evidence = null) {
         this.clearRuleFocus();
         const selected = new Set(sourceIds);
         let cards = [...this.window.querySelectorAll('.st-devtools-source')]
@@ -10019,8 +10281,18 @@ export class DevToolsWindow {
         this.highlightFinalEvidence(finalRanges);
         const first = cards[0];
         if (!first) return;
-        first.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        first.querySelector('summary')?.focus({ preventScroll: true });
+        const exactEvidence = (
+            evidence?.sourceId === first.dataset.sourceId
+                ? this.highlightLocalSourceEvidence(first, evidence.localRange)
+                : null
+        );
+        const scrollTarget = exactEvidence ?? first;
+        scrollTarget.scrollIntoView({
+            block: 'center',
+            behavior: this.preferredScrollBehavior(),
+        });
+        if (exactEvidence) exactEvidence.focus({ preventScroll: true });
+        else first.querySelector('summary')?.focus({ preventScroll: true });
     }
 
     highlightFinalEvidence(ranges) {
@@ -10095,13 +10367,19 @@ export class DevToolsWindow {
         const matches = this.highlightFinalEvidence(finalRanges);
         const first = matches[0];
         if (first) {
-            first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            first.scrollIntoView({
+                block: 'center',
+                behavior: this.preferredScrollBehavior(),
+            });
             first.focus({ preventScroll: true });
             return;
         }
         if (!finalCard) return;
         finalCard.classList.add('rule-focus');
-        finalCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        finalCard.scrollIntoView({
+            block: 'center',
+            behavior: this.preferredScrollBehavior(),
+        });
         finalCard.querySelector('summary')?.focus({ preventScroll: true });
     }
 
@@ -14186,6 +14464,274 @@ export class DevToolsWindow {
         return global ? [global] : [];
     }
 
+    renderRuleWorkflowHeading(step, titleKey, descriptionKey) {
+        const heading = element('div', {
+            className: 'st-devtools-rule-workflow-heading',
+        });
+        const copy = element('div');
+        copy.append(
+            element('strong', { text: t(titleKey) }),
+            proseElement('p', t(descriptionKey)),
+        );
+        heading.append(
+            element('span', { text: String(step) }),
+            copy,
+        );
+        return heading;
+    }
+
+    renderFindingComparisonFacts(comparison) {
+        const facts = element('dl', {
+            className: 'st-devtools-finding-evidence-facts',
+        });
+        const appendFact = (labelKey, value) => {
+            if (value == null || value === '') return;
+            facts.append(
+                element('dt', { text: t(labelKey) }),
+                element('dd', { text: String(value) }),
+            );
+        };
+        appendFact(
+            'review.workflow.property',
+            comparison?.property
+                ? translatedValue(
+                    `rules.property.${comparison.property}`,
+                    comparison.property,
+                )
+                : null,
+        );
+        appendFact('review.workflow.value', comparison?.value);
+        appendFact(
+            'review.workflow.polarity',
+            comparison?.polarity
+                ? translatedValue(
+                    `rules.polarity.${comparison.polarity}`,
+                    comparison.polarity,
+                )
+                : null,
+        );
+        appendFact(
+            'review.workflow.participant',
+            comparison?.participantScope
+                ? translatedValue(
+                    `rules.participant.${comparison.participantScope}`,
+                    comparison.participantScope,
+                )
+                : null,
+        );
+        appendFact('review.workflow.condition', comparison?.condition);
+        appendFact('review.workflow.exception', comparison?.exception);
+        return facts;
+    }
+
+    renderFindingEvidenceWorkflow(snapshot, finding, instructionModel, tutorial) {
+        const findingKey = finding.review?.findingKey ?? finding.id;
+        const evidenceItems = findingWorkflowEvidence(finding, instructionModel);
+        const fallbackEvidenceCount = (
+            evidenceItems.length === 0
+            && typeof finding.evidence === 'string'
+            && finding.evidence.trim()
+        ) ? 1 : 0;
+        const evidenceCount = evidenceItems.length || fallbackEvidenceCount;
+        const details = element('details', {
+            className: 'st-devtools-rule-evidence st-devtools-finding-evidence-workflow',
+        });
+        details.open = !tutorial && this.ruleWorkflowOpenFindingKeys.has(findingKey);
+        const evidenceTitleKey = evidenceCount >= 2
+            ? 'review.workflow.evidenceTitle'
+            : 'review.workflow.evidenceSingleTitle';
+        const summary = element('summary');
+        const summaryCopy = element('span', {
+            className: 'st-devtools-finding-evidence-summary-copy',
+        });
+        summaryCopy.append(
+            element('strong', { text: t(evidenceTitleKey) }),
+            element('small', {
+                text: t('review.workflow.evidenceCount', {
+                    count: evidenceCount,
+                }),
+            }),
+        );
+        summary.append(
+            element('span', {
+                className: 'st-devtools-rule-workflow-step-number',
+                text: '2',
+            }),
+            summaryCopy,
+        );
+        details.appendChild(summary);
+        details.addEventListener('toggle', () => {
+            if (!tutorial) {
+                if (details.open) this.ruleWorkflowOpenFindingKeys.add(findingKey);
+                else this.ruleWorkflowOpenFindingKeys.delete(findingKey);
+            }
+            if (tutorial && details.open) {
+                this.recordOnboardingAction('toggle', details);
+            }
+        });
+        attachLazyDetailsContent(details, () => {
+            const body = element('div', {
+                className: 'st-devtools-finding-evidence-body',
+            });
+            body.appendChild(proseElement(
+                'p',
+                t('review.workflow.evidenceDescription'),
+            ));
+            if (finding.applicabilityKind) {
+                body.appendChild(element('span', {
+                    className: 'st-devtools-finding-relation-label',
+                    text: translatedValue(
+                        `rules.v3.applicability.${finding.applicabilityKind}`,
+                        finding.applicabilityKind,
+                    ),
+                }));
+            }
+            const grid = element('div', {
+                className: 'st-devtools-finding-evidence-grid',
+            });
+            for (const [index, evidence] of evidenceItems.entries()) {
+                const evidenceCard = element('article', {
+                    className: 'st-devtools-finding-evidence-card',
+                });
+                evidenceCard.append(
+                    element('small', {
+                        text: t('review.workflow.evidenceItem', {
+                            index: index + 1,
+                            count: evidenceItems.length,
+                        }),
+                    }),
+                    element('strong', { text: evidence.sourceLabel }),
+                    element('pre', { text: evidence.text }),
+                );
+                const facts = this.renderFindingComparisonFacts(evidence.comparison);
+                if (facts.childElementCount > 0) evidenceCard.appendChild(facts);
+                const inspect = element('button', {
+                    className: 'menu_button st-devtools-finding-evidence-open',
+                    text: t('review.workflow.inspectEvidence'),
+                    type: 'button',
+                });
+                inspect.addEventListener('click', () => {
+                    this.openExplorerForFinding(
+                        snapshot,
+                        finding,
+                        'sources',
+                        evidence,
+                    );
+                });
+                evidenceCard.appendChild(inspect);
+                grid.appendChild(evidenceCard);
+            }
+            if (evidenceItems.length === 0 && finding.evidence) {
+                const fallback = element('article', {
+                    className: 'st-devtools-finding-evidence-card is-fallback',
+                });
+                fallback.append(
+                    element('strong', { text: t('rules.evidence') }),
+                    element('pre', { text: finding.evidence }),
+                );
+                grid.appendChild(fallback);
+            }
+            if (grid.childElementCount > 0) body.appendChild(grid);
+            else body.appendChild(proseElement(
+                'p',
+                t('review.workflow.evidenceUnavailable'),
+            ));
+            const actions = element('div', {
+                className: 'st-devtools-rule-actions st-devtools-finding-evidence-actions',
+            });
+            if (finding.sourceIds?.length > 0) {
+                const sources = element('button', {
+                    className: 'menu_button',
+                    text: t('review.workflow.inspectTogether'),
+                    type: 'button',
+                });
+                sources.addEventListener('click', () => {
+                    this.openExplorerForFinding(snapshot, finding, 'sources');
+                });
+                if (finding.ruleId === 'format') {
+                    sources.dataset.tourId = 'rule-related-sources';
+                }
+                actions.appendChild(sources);
+            }
+            if (finding.finalRanges?.length > 0) {
+                const finalEvidence = element('button', {
+                    className: 'menu_button',
+                    text: t('action.viewFinalEvidence'),
+                    type: 'button',
+                });
+                finalEvidence.addEventListener('click', () => {
+                    this.openExplorerForFinding(snapshot, finding, 'final');
+                });
+                actions.appendChild(finalEvidence);
+            }
+            if (actions.childElementCount > 0) body.appendChild(actions);
+            return body;
+        });
+        return details;
+    }
+
+    prepareSemanticWorkflowForFinding(snapshot, finding) {
+        if (
+            this.tutorialIsActive()
+            || !this.semanticSnapshotSupportsInspection(snapshot)
+            || !this.semanticTargetHasClosure(finding, 'finding')
+        ) {
+            return false;
+        }
+        if (!this.preferences.semanticInspectorEnabled) {
+            const preferences = this.updateSemanticInspectorPreferences({
+                semanticInspectorEnabled: true,
+            }, { render: false });
+            if (!preferences) return false;
+        }
+        const targetId = `finding:${finding.id}`;
+        const state = this.ensureSemanticInspectionSnapshot(snapshot);
+        state.targetIds.clear();
+        state.targetIds.add(targetId);
+        this.invalidateSemanticInspectionOutcome(state);
+        this.pendingSemanticWorkflowTargetId = targetId;
+        this.semanticWorkflowFindingKey = finding.review?.findingKey ?? finding.id;
+        this.ruleViewMode = 'ai';
+        this.render();
+        globalThis.toastr?.info?.(
+            t('review.workflow.aiPrepared'),
+            'ST DevTools',
+        );
+        return true;
+    }
+
+    renderFindingNextAction(snapshot, finding) {
+        const section = element('section', {
+            className: 'st-devtools-finding-next-action',
+        });
+        section.appendChild(this.renderRuleWorkflowHeading(
+            4,
+            'review.workflow.nextTitle',
+            'review.workflow.nextDescription',
+        ));
+        const action = element('button', {
+            className: 'menu_button st-devtools-primary-button',
+            text: t('review.workflow.aiAction'),
+            type: 'button',
+        });
+        const snapshotSupported = this.semanticSnapshotSupportsInspection(snapshot);
+        const hasClosure = this.semanticTargetHasClosure(finding, 'finding');
+        action.disabled = !snapshotSupported || !hasClosure;
+        action.addEventListener('click', () => {
+            this.prepareSemanticWorkflowForFinding(snapshot, finding);
+        });
+        section.appendChild(action);
+        if (!snapshotSupported || !hasClosure) {
+            section.appendChild(proseElement(
+                'small',
+                t(snapshotSupported
+                    ? 'review.workflow.aiUnavailableNoEvidence'
+                    : 'semantic.fullSnapshotOnly'),
+            ));
+        }
+        return section;
+    }
+
     shouldStageFindingReview() {
         return Boolean(
             this.comparisonPolicyDirty
@@ -14221,6 +14767,7 @@ export class DevToolsWindow {
             this.ruleReviewStatusIsError = !result.ok;
         }
         this.render();
+        this.scheduleRuleFindingFocus(finding.review?.findingKey ?? finding.id);
     }
 
     updateFindingIgnore(snapshot, finding, enabled, review = null, profile = null) {
@@ -14235,6 +14782,7 @@ export class DevToolsWindow {
             this.ruleReviewStatus = t('review.scopeUnavailable');
             this.ruleReviewStatusIsError = true;
             this.render();
+            this.scheduleRuleFindingFocus(finding.review?.findingKey ?? finding.id);
             return;
         }
         const staged = this.shouldStageFindingReview();
@@ -14266,44 +14814,54 @@ export class DevToolsWindow {
             this.ruleReviewStatusIsError = !result.ok;
         }
         this.render();
+        this.scheduleRuleFindingFocus(finding.review?.findingKey ?? finding.id);
     }
 
     renderFindingReviewControls(snapshot, finding) {
-        const details = element('details', { className: 'st-devtools-finding-review' });
-        details.appendChild(element('summary', { text: t('review.action.open') }));
-        const fieldset = element('fieldset');
-        fieldset.appendChild(element('legend', { text: t('review.decisionLegend') }));
-        const decisionName = `finding-review-${finding.review.findingKey}`;
+        const section = element('section', { className: 'st-devtools-finding-review' });
+        const heading = this.renderRuleWorkflowHeading(
+            3,
+            'review.workflow.decisionTitle',
+            'review.workflow.decisionDescription',
+        );
+        const decisionActions = element('div', {
+            className: 'st-devtools-finding-decision-actions',
+        });
         for (const decision of ['valid', 'false-positive']) {
-            const label = element('label');
-            const input = element('input');
-            input.type = 'radio';
-            input.name = decisionName;
-            input.value = decision;
-            input.checked = finding.review.decision === decision;
-            label.append(
-                input,
-                document.createTextNode(` ${t(`review.status.${decision}`)}`),
+            const button = element('button', {
+                className: 'menu_button st-devtools-finding-decision',
+                text: t(`review.status.${decision}`),
+                type: 'button',
+            });
+            button.dataset.decision = decision;
+            button.setAttribute(
+                'aria-pressed',
+                String(finding.review.decision === decision),
             );
-            fieldset.appendChild(label);
+            button.addEventListener('click', () => {
+                this.updateFindingDecision(snapshot, finding, decision);
+            });
+            decisionActions.appendChild(button);
         }
-        const saveDecision = element('button', {
-            className: 'menu_button',
-            text: t('review.action.saveDecision'),
-            type: 'button',
-        });
-        saveDecision.addEventListener('click', () => {
-            const selected = fieldset.querySelector('input:checked')?.value;
-            if (selected) this.updateFindingDecision(snapshot, finding, selected);
-        });
         const clear = element('button', {
-            className: 'menu_button',
+            className: 'menu_button st-devtools-finding-decision-clear',
             text: t('review.action.clear'),
             type: 'button',
         });
         clear.disabled = !finding.review.decision;
         clear.addEventListener('click', () => {
             this.updateFindingDecision(snapshot, finding, null);
+        });
+        decisionActions.appendChild(clear);
+
+        const details = element('details', {
+            className: 'st-devtools-finding-review-advanced st-devtools-disclosure',
+        });
+        details.appendChild(element('summary', {
+            text: t('review.workflow.advancedActions'),
+        }));
+        const advanced = element('div', {
+            className: 'st-devtools-finding-review-advanced-body',
         });
         const scopeProfiles = this.findingIgnoreScopeProfiles(snapshot);
         const ignoreScope = element('select');
@@ -14341,21 +14899,24 @@ export class DevToolsWindow {
             type: 'button',
         });
         hide.addEventListener('click', () => {
-            this.findingHiddenOnce.add(finding.review.findingKey);
+            const findingKey = finding.review?.findingKey ?? finding.id;
+            this.findingHiddenOnce.add(findingKey);
             this.ruleReviewStatus = t('review.saved.hiddenOnce');
             this.ruleReviewStatusIsError = false;
             this.render();
+            this.scheduleRuleFindingFocus(findingKey);
         });
         const actions = element('div', {
             className: 'st-devtools-finding-review-actions',
         });
-        actions.append(saveDecision, clear, ignore, hide);
-        details.append(
-            fieldset,
+        actions.append(ignore, hide);
+        advanced.append(
             this.policyField('review.ignoreScope', ignoreScope),
             actions,
         );
-        return details;
+        details.appendChild(advanced);
+        section.append(heading, decisionActions, details);
+        return section;
     }
 
     renderReviewedFindings(snapshot, reviewResult) {
@@ -14404,6 +14965,9 @@ export class DevToolsWindow {
                         this.ruleReviewStatus = t('review.saved.restored');
                         this.ruleReviewStatusIsError = false;
                         this.render();
+                        this.scheduleRuleFindingFocus(
+                            finding.review?.findingKey ?? finding.id,
+                        );
                     } else if (finding.review.ignored) {
                         this.updateFindingIgnore(snapshot, finding, false, finding.review);
                     } else {
@@ -14476,6 +15040,8 @@ export class DevToolsWindow {
         const previous = this.semanticInspectionState;
         previous?.controller?.abort();
         this.closeSemanticConsent(false);
+        this.pendingSemanticWorkflowTargetId = null;
+        this.semanticWorkflowFindingKey = null;
         this.semanticInspectionState = {
             snapshotId,
             analysisRevision: this.analysisRevision,
@@ -14883,9 +15449,36 @@ export class DevToolsWindow {
     }
 
     resetSemanticInspectionForSettingsChange(preferences = this.preferences) {
+        const workflowFindingKey = this.semanticWorkflowFindingKey;
+        const workflowTargetId = workflowFindingKey
+            ? (
+                [...(this.semanticInspectionState?.targetIds ?? [])]
+                    .find((targetId) => (
+                        typeof targetId === 'string'
+                        && targetId.startsWith('finding:')
+                    ))
+                ?? this.pendingSemanticWorkflowTargetId
+            )
+            : null;
+        const snapshotId = workflowFindingKey
+            ? (
+                this.semanticInspectionState?.snapshotId
+                ?? this.selectedSnapshot()?.id
+                ?? null
+            )
+            : null;
         this.cancelSemanticProviderEvaluation();
         this.cancelSemanticInspection();
-        this.resetSemanticInspectionState();
+        this.resetSemanticInspectionState(snapshotId);
+        if (
+            preferences?.semanticInspectorEnabled
+            && workflowFindingKey
+            && workflowTargetId
+        ) {
+            this.semanticWorkflowFindingKey = workflowFindingKey;
+            this.pendingSemanticWorkflowTargetId = workflowTargetId;
+            this.semanticInspectionState.targetIds.add(workflowTargetId);
+        }
         if (!preferences?.semanticInspectorEnabled) {
             this.clearSemanticInspectorCache();
         }
@@ -15477,6 +16070,29 @@ export class DevToolsWindow {
             ),
         );
         section.appendChild(heading);
+        if (this.semanticWorkflowFindingKey) {
+            const workflow = element('div', {
+                className: 'st-devtools-semantic-workflow-return',
+            });
+            workflow.appendChild(proseElement(
+                'p',
+                t('review.workflow.aiWorkspaceDescription'),
+            ));
+            const back = element('button', {
+                className: 'menu_button',
+                text: t('review.workflow.aiReturnAction'),
+                type: 'button',
+            });
+            back.addEventListener('click', () => {
+                const findingKey = this.semanticWorkflowFindingKey;
+                this.semanticWorkflowFindingKey = null;
+                this.ruleViewMode = 'local';
+                this.render();
+                this.scheduleRuleFindingFocus(findingKey);
+            });
+            workflow.appendChild(back);
+            section.appendChild(workflow);
+        }
         if (!this.semanticSnapshotSupportsInspection(snapshot)) {
             section.appendChild(proseElement(
                 'p',
@@ -15536,6 +16152,10 @@ export class DevToolsWindow {
             const label = element('label', {
                 className: 'st-devtools-semantic-target',
             });
+            label.classList.toggle(
+                'is-workflow-target',
+                targetId === this.pendingSemanticWorkflowTargetId,
+            );
             const input = element('input');
             input.type = 'checkbox';
             input.checked = state.targetIds.has(targetId);
@@ -15558,6 +16178,9 @@ export class DevToolsWindow {
         const findingDetails = element('details', {
             className: 'st-devtools-semantic-targets st-devtools-disclosure',
         });
+        findingDetails.open = semanticFindings.some(
+            (finding) => state.targetIds.has(`finding:${finding.id}`),
+        );
         const findingSummary = element('summary');
         findingSummary.append(
             element('strong', { text: t('semantic.findingTargets') }),
@@ -15753,6 +16376,22 @@ export class DevToolsWindow {
         section.__stDevToolsSemanticRefresh = refresh;
         this.semanticInspectorHost = section;
         refresh();
+        const pendingTargetId = this.pendingSemanticWorkflowTargetId;
+        if (pendingTargetId && availableTargetIds.has(pendingTargetId)) {
+            queueMicrotask(() => {
+                if (this.pendingSemanticWorkflowTargetId !== pendingTargetId) return;
+                const input = inputs.find(
+                    (candidate) => candidate.dataset.semanticTargetId === pendingTargetId,
+                );
+                const target = input?.closest('.st-devtools-semantic-target');
+                target?.scrollIntoView({
+                    block: 'center',
+                    behavior: this.preferredScrollBehavior(),
+                });
+                run.focus({ preventScroll: true });
+                this.pendingSemanticWorkflowTargetId = null;
+            });
+        }
         return section;
     }
 
@@ -16882,7 +17521,18 @@ export class DevToolsWindow {
                     text: t('review.status.valid'),
                 }));
             }
-            card.append(header, proseElement('p', item.message));
+            const reason = element('section', {
+                className: 'st-devtools-finding-reason',
+            });
+            reason.append(
+                this.renderRuleWorkflowHeading(
+                    1,
+                    'review.workflow.reasonTitle',
+                    'review.workflow.reasonDescription',
+                ),
+                proseElement('p', item.message),
+            );
+            card.append(header, reason);
             if (item.determination) {
                 const metadata = element('div', {
                     className: 'st-devtools-rule-finding-meta',
@@ -16913,61 +17563,20 @@ export class DevToolsWindow {
                             : item.clusterId,
                     }));
                 }
-                card.appendChild(metadata);
+                reason.appendChild(metadata);
             }
-            if (item.evidence) {
-                const evidence = element('details', { className: 'st-devtools-rule-evidence' });
-                const evidenceTitle = t(item.ruleId === 'unmatched'
-                    ? 'rules.unmatched.evidence'
-                    : 'rules.evidence');
-                const evidenceSummary = element('summary');
-                evidenceSummary.appendChild(explainedTitle(
-                    evidenceTitle,
-                    t('rules.evidenceDescription'),
-                    {
-                        titleTag: 'span',
-                        helpTopicId: 'rule-v3-structure',
-                    },
-                ));
-                evidence.append(
-                    evidenceSummary,
-                    element('pre', { text: item.evidence }),
+            card.appendChild(this.renderFindingEvidenceWorkflow(
+                snapshot,
+                item,
+                analysis?.instructions,
+                tutorial,
+            ));
+            if (!tutorial) {
+                card.append(
+                    this.renderFindingReviewControls(snapshot, item),
+                    this.renderFindingNextAction(snapshot, item),
                 );
-                evidence.addEventListener('toggle', () => {
-                    if (tutorial && evidence.open) {
-                        this.recordOnboardingAction('toggle', evidence);
-                    }
-                });
-                card.appendChild(evidence);
             }
-            const actions = element('div', { className: 'st-devtools-rule-actions' });
-            if (item.sourceIds?.length > 0) {
-                const sources = element('button', {
-                    className: 'menu_button',
-                    text: t('action.viewRelatedSources', { count: item.sourceIds.length }),
-                    type: 'button',
-                });
-                sources.addEventListener('click', () => {
-                    this.openExplorerForFinding(snapshot, item, 'sources');
-                });
-                if (item.ruleId === 'format') {
-                    sources.dataset.tourId = 'rule-related-sources';
-                }
-                actions.appendChild(sources);
-            }
-            if (item.finalRanges?.length > 0) {
-                const finalEvidence = element('button', {
-                    className: 'menu_button',
-                    text: t('action.viewFinalEvidence'),
-                    type: 'button',
-                });
-                finalEvidence.addEventListener('click', () => {
-                    this.openExplorerForFinding(snapshot, item, 'final');
-                });
-                actions.appendChild(finalEvidence);
-            }
-            if (actions.childElementCount > 0) card.appendChild(actions);
-            if (!tutorial) card.appendChild(this.renderFindingReviewControls(snapshot, item));
             list.appendChild(card);
         }
         host.appendChild(list);

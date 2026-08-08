@@ -114,7 +114,7 @@ test('v0.13.1 exposes clearly named copy actions without an edit path', async ()
     assert.match(explorer, /'action\.copyContent'/u);
     assert.match(semantic, /'action\.copySuggestion'/u);
     assert.match(i18n, /'action\.copySource': '원문 복사'/u);
-    assert.match(i18n, /'action\.copySuggestion': '제안 내용 복사'/u);
+    assert.match(i18n, /'action\.copySuggestion': '제안 설명 복사'/u);
     assert.match(css, /\.st-devtools-window \.st-devtools-copy-button/u);
     assert.match(css, /width: auto !important/u);
 });

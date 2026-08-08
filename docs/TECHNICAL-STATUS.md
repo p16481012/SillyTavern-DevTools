@@ -1,4 +1,16 @@
-# v0.17.1 기술 구현 현황
+# v0.17.2 기술 구현 현황
+
+## v0.17.2 finding 검토·근거 왕복·AI 연결 흐름
+
+- `findingWorkflowEvidence()`는 finding의 evidence atom ID를 현재 instruction model의 atom map에 다시 연결하고, 유효한 서로 다른 atom만 최대 두 개 반환합니다. 배열 위치나 표시 순서를 identity로 신뢰하지 않으며 참조가 없으면 근거를 새로 추정하지 않습니다.
+- 각 finding 카드는 `발견 이유 → 근거 비교 → 판정 → AI 다음 행동`의 번호형 흐름을 사용합니다. 근거에는 source, property·value, polarity, participantScope, condition·exception과 실제 원문 위치 availability만 표시합니다.
+- 개별 근거와 두 근거 함께 보기 action은 기존 source/final 위치 탐색 경로만 사용합니다. 검사 화면을 벗어날 때 finding key와 복귀 focus를 메모리에 보관하고, 명시적인 복귀 action에서 같은 카드로 돌아와 focus를 복원합니다. 이 route 상태는 스냅샷·정책·검토 기록에 저장하지 않습니다.
+- `유효`·`오탐`은 기존 exact review key, `이번만 숨김`은 현재 panel session, `항상 무시`는 사용자가 확인한 suppression scope를 그대로 사용합니다. 새 workflow가 판정 의미나 저장 범위를 넓히지 않습니다.
+- AI action은 정확히 한 finding을 선택하고 기존 Semantic Inspector 준비 화면으로 이동할 뿐 provider를 호출하지 않습니다. 실제 호출은 종전처럼 미리보기·매회 동의·identity 재검증 뒤에만 가능하며, AI 화면에서 로컬 finding으로 돌아오는 route도 메모리 전용입니다.
+- 제안 복사는 strict validator를 통과해 화면에 표시된 title·summary·rationale만 `제안 설명`으로 조립합니다. SillyTavern 원본, 정적 finding, 비교 정책과 판정에 쓰거나 자동 적용하는 경로는 없습니다.
+- `full`에서 보존된 source·range만 원문 탐색에 사용합니다. `redacted`·`metadata`, 누락 source, 잘못된 offset에서는 원문·범위를 복원하거나 추측하지 않고 사용할 수 없는 상태를 표시합니다.
+- evidence grid는 container 폭 620px 이상에서만 두 열이며 좁은 화면에서는 한 열입니다. action은 최소 44px, 판정은 텍스트와 `aria-pressed`를 함께 쓰고 복귀 상태는 live region과 focus로 알립니다. `prefers-reduced-motion`이면 smooth scroll 대신 즉시 이동합니다.
+- 버전 계약은 manifest·package·runtime import query·onboarding fixture·`sandbox/index.html`·`sandbox/ui-harness.html`·sandbox harness runtime을 함께 검증합니다.
 
 ## v0.17.1 적용 주체와 의미 axis
 

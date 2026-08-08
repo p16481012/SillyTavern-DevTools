@@ -10055,3 +10055,352 @@ button.st-devtools-help-list-row:last-child {
     font-size: 0.8rem;
     line-height: 1.6;
 }
+
+/* v0.17.2 — finding evidence, review, and suggestion workflow */
+.st-devtools-finding-reason,
+.st-devtools-finding-review,
+.st-devtools-finding-next-action {
+    min-width: 0;
+    margin-top: 0.75rem;
+}
+
+.st-devtools-finding-reason > p {
+    margin: 0.65rem 0 0;
+}
+
+.st-devtools-rule-workflow-heading {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 1.65rem minmax(0, 1fr);
+    align-items: start;
+    gap: 0.55rem;
+}
+
+.st-devtools-rule-workflow-heading > span,
+.st-devtools-rule-workflow-step-number {
+    display: inline-grid;
+    width: 1.65rem;
+    height: 1.65rem;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary);
+    font-size: 0.72rem;
+    font-weight: 850;
+}
+
+.st-devtools-rule-workflow-heading > div {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+}
+
+.st-devtools-rule-workflow-heading strong {
+    color: var(--st-devtools-text);
+    font-size: 0.88rem;
+}
+
+.st-devtools-rule-workflow-heading p {
+    margin: 0;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+
+.st-devtools-finding-evidence-workflow {
+    min-width: 0;
+    margin-top: 0.75rem;
+    overflow: clip;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-panel-bg);
+}
+
+.st-devtools-finding-evidence-workflow > summary {
+    box-sizing: border-box;
+    display: grid;
+    min-height: 48px;
+    grid-template-columns: 1.65rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.65rem;
+    list-style: none;
+}
+
+.st-devtools-finding-evidence-workflow > summary::-webkit-details-marker {
+    display: none;
+}
+
+.st-devtools-finding-evidence-workflow > summary::after {
+    grid-column: 3;
+    grid-row: 1;
+    color: var(--st-devtools-text-subtle);
+    content: '\203a';
+    justify-self: end;
+    line-height: 1;
+    transform: rotate(90deg);
+}
+
+.st-devtools-finding-evidence-workflow[open] > summary {
+    border-bottom: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-finding-evidence-workflow[open] > summary::after {
+    transform: rotate(-90deg);
+}
+
+.st-devtools-finding-evidence-summary-copy {
+    display: flex;
+    min-width: 0;
+    grid-column: 2;
+    grid-row: 1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+}
+
+.st-devtools-finding-evidence-summary-copy small {
+    color: var(--st-devtools-text-muted);
+    font-weight: 650;
+}
+
+.st-devtools-finding-evidence-body {
+    display: grid;
+    min-width: 0;
+    gap: 0.65rem;
+    padding: 0.7rem;
+}
+
+.st-devtools-finding-evidence-body > p {
+    margin: 0;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+
+.st-devtools-finding-relation-label {
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.24rem 0.5rem;
+    border-radius: 999px;
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary);
+    font-size: 0.72rem;
+    font-weight: 750;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-finding-evidence-grid {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.6rem;
+}
+
+.st-devtools-finding-evidence-card {
+    display: grid;
+    min-width: 0;
+    align-content: start;
+    gap: 0.45rem;
+    padding: 0.65rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-surface);
+}
+
+.st-devtools-finding-evidence-card > small {
+    color: var(--st-devtools-primary);
+    font-size: 0.7rem;
+    font-weight: 800;
+}
+
+.st-devtools-finding-evidence-card > strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-finding-evidence-card pre {
+    min-width: 0;
+    max-height: 10rem;
+    margin: 0;
+    overflow: auto;
+    padding: 0.55rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-panel-bg);
+    color: var(--st-devtools-text);
+    font: inherit;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-finding-evidence-facts {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+    gap: 0.25rem 0.55rem;
+    margin: 0;
+    font-size: 0.74rem;
+}
+
+.st-devtools-finding-evidence-facts dt {
+    color: var(--st-devtools-text-muted);
+}
+
+.st-devtools-finding-evidence-facts dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--st-devtools-text);
+    overflow-wrap: anywhere;
+}
+
+.st-devtools-window .st-devtools-finding-evidence-open,
+.st-devtools-window .st-devtools-finding-next-action > .menu_button {
+    width: 100% !important;
+}
+
+.st-devtools-finding-evidence-actions,
+.st-devtools-finding-decision-actions {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.st-devtools-finding-decision-actions {
+    margin-top: 0.6rem;
+}
+
+.st-devtools-window .st-devtools-finding-decision-actions > .menu_button {
+    min-height: 44px;
+    flex: 1 1 7rem !important;
+}
+
+.st-devtools-window .st-devtools-finding-decision[aria-pressed='true'] {
+    background: var(--st-devtools-primary-soft) !important;
+    color: var(--st-devtools-primary) !important;
+    box-shadow: inset 0 0 0 2px var(--st-devtools-primary) !important;
+}
+
+.st-devtools-finding-review-advanced {
+    margin-top: 0.55rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-finding-next-action > small {
+    color: var(--st-devtools-text-muted);
+    line-height: 1.5;
+}
+
+.st-devtools-finding-review-advanced > summary {
+    min-height: 44px;
+    padding-block: 0.55rem;
+    color: var(--st-devtools-text-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.st-devtools-finding-review-advanced-body {
+    display: grid;
+    min-width: 0;
+    gap: 0.55rem;
+    padding-top: 0.2rem;
+}
+
+.st-devtools-finding-next-action {
+    display: grid;
+    gap: 0.6rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--st-devtools-border);
+}
+
+.st-devtools-rule-workflow-return {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 0.6rem;
+    padding: 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--st-devtools-primary) 36%, var(--st-devtools-border));
+    border-radius: var(--st-devtools-radius-md);
+    background: var(--st-devtools-primary-soft);
+}
+
+.st-devtools-rule-workflow-return > i {
+    margin-top: 0.15rem;
+    color: var(--st-devtools-primary);
+}
+
+.st-devtools-rule-workflow-return > div {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+}
+
+.st-devtools-rule-workflow-return p {
+    margin: 0;
+    color: var(--st-devtools-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.st-devtools-window .st-devtools-rule-workflow-return > .menu_button {
+    width: 100% !important;
+    grid-column: 1 / -1;
+}
+
+.st-devtools-rule-card.rule-focus {
+    outline: 3px solid color-mix(in srgb, var(--st-devtools-primary) 62%, transparent);
+    outline-offset: 3px;
+}
+
+.st-devtools-semantic-target.is-workflow-target {
+    box-shadow: inset 3px 0 0 var(--st-devtools-primary);
+}
+
+.st-devtools-semantic-workflow-return {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    padding: 0.65rem;
+    border: 1px solid var(--st-devtools-border);
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-primary-soft);
+}
+
+.st-devtools-semantic-workflow-return > p {
+    min-width: min(16rem, 100%);
+    flex: 1 1 16rem;
+    margin: 0;
+    color: var(--st-devtools-text);
+    font-size: 0.78rem;
+    line-height: 1.55;
+}
+
+@container (min-width: 620px) {
+    .st-devtools-finding-evidence-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .st-devtools-rule-workflow-return {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+    }
+
+    .st-devtools-window .st-devtools-rule-workflow-return > .menu_button {
+        width: auto !important;
+        grid-column: auto;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .st-devtools-rule-card.rule-focus {
+        scroll-behavior: auto;
+    }
+}

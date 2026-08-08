@@ -228,7 +228,10 @@ test('practice keeps provider and AI paths guarded and uses deterministic local 
     );
     assert.match(rules, /if \(\s*!tutorial\s*&&\s*providedAnalysis === undefined/u);
     assert.match(rules, /if \(!tutorial && this\.ruleViewMode === 'ai'\)/u);
-    assert.match(rules, /if \(!tutorial\) card\.appendChild\(this\.renderFindingReviewControls/u);
+    assert.match(
+        rules,
+        /if \(!tutorial\) \{\s*card\.append\(\s*this\.renderFindingReviewControls\(snapshot, item\),\s*this\.renderFindingNextAction\(snapshot, item\),/u,
+    );
     assert.match(search, /const matches = tutorial\s*\? searchSnapshot\(/u);
     assert.match(search, /: \(await this\.runUiAnalysis\('search'/u);
 });

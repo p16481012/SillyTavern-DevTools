@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.17.1의 Rule Inspector 적용 주체·말투·정체성·안전·메모리 axis와 v0.17.0의 조건·예외 적용 범위 판정·별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.17.2의 Rule Inspector 결과 카드 검토·근거 왕복·단일 finding AI 연결 흐름, v0.17.1의 적용 주체·말투·정체성·안전·메모리 axis와 v0.17.0의 조건·예외 적용 범위 판정·별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -9,6 +9,18 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
+
+### Rule Inspector 결과 workflow 경계
+
+v0.17.2의 `findingWorkflowEvidence()`는 finding이 보존한 evidence atom ID를 현재 instruction model의 atom map에 결합하고, 서로 다른 유효 atom을 최대 두 개만 반환합니다. source 배열 순서나 화면 위치로 근거 identity를 추측하지 않으며 끊어진 ID, 중복 ID, 없는 source·range는 새 근거로 대체하지 않습니다. 따라서 결과 카드의 비교는 새로운 의미 추론 단계가 아니라 이미 생성된 relation 근거를 읽기 쉽게 투영하는 단계입니다.
+
+결과 카드의 원문 이동은 기존 explorer의 source/final provenance 경로만 사용합니다. 검사 화면을 떠날 때 finding key·복귀 route·focus 대상만 panel memory에 보관하고, 명시적인 복귀 action에서 같은 finding을 다시 렌더링한 뒤 focus를 돌려줍니다. 이 navigation state는 snapshot, localStorage의 정책·검토 데이터, archive에 쓰지 않습니다. `prefers-reduced-motion`이면 같은 목적지로 즉시 이동합니다.
+
+검토 action은 기존 `finding-review.js`의 exact `유효`·`오탐`, session-only `이번만 숨김`, 확인된 scope의 `항상 무시`를 호출합니다. workflow가 suppression key나 우선순위를 새로 정의하지 않습니다. AI action도 finding 하나를 선택해 기존 Semantic Inspector의 준비 화면으로 route할 뿐 `inspect()`를 호출하지 않습니다. provider 호출은 정확한 preview, 호출별 동의와 identity 재검증 뒤에만 시작합니다.
+
+AI 결과의 `제안 설명 복사`는 strict validator를 통과해 화면에 표시된 title·summary·rationale만 클립보드로 전달합니다. 원본 프롬프트·정적 finding·비교 정책·검토 판정을 수정하거나 제안을 자동 적용하는 경로는 없습니다. `redacted`·`metadata` 스냅샷과 누락 provenance에서는 원문·위치를 복원하지 않으며, full 원문을 AI에 전송하는 기존 개인정보 동의 경계도 그대로 유지합니다.
+
+근거 비교는 container 폭 620px 이상에서만 두 열이고 그보다 좁으면 문서 순서의 한 열입니다. action은 최소 44px, 판정 control은 텍스트·`aria-pressed`를 함께 사용하고 복귀 상태는 focus와 live status로 전달합니다. 따라서 상태 의미가 색상이나 motion에만 의존하지 않습니다.
 
 ### Rule Inspector 적용 주체와 의미 axis
 
