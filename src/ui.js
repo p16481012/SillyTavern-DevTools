@@ -940,17 +940,34 @@ export function findingWorkflowEvidence(finding, instructionModel = null) {
         : [];
     const seen = new Set();
     const result = [];
+    const evidenceLimit = finding?.ruleId === 'duplicates' ? 20 : 2;
     for (const record of records) {
         if (!record || typeof record !== 'object') continue;
         const atomId = typeof record.atomId === 'string' ? record.atomId : null;
         const sourceId = typeof record.sourceId === 'string' ? record.sourceId : null;
         const text = typeof record.text === 'string' ? record.text : '';
         if (!sourceId || !text.trim()) continue;
-        const localRange = workflowRange(record.localRange);
-        const key = `${atomId ?? ''}|${sourceId}|${localRange?.start ?? ''}|${localRange?.end ?? ''}|${text}`;
+        const localRanges = (Array.isArray(record.localRanges)
+            ? record.localRanges
+            : [record.localRange])
+            .map(workflowRange)
+            .filter(Boolean);
+        const localRange = localRanges[0] ?? null;
+        const key = `${atomId ?? ''}|${sourceId}|${localRanges
+            .map(({ start, end }) => `${start}:${end}`)
+            .join(',')}|${text}`;
         if (seen.has(key)) continue;
         seen.add(key);
         const atom = atomId ? atomById.get(atomId) ?? null : null;
+        const atomFinalRanges = (Array.isArray(atom?.finalRanges) ? atom.finalRanges : [])
+            .map(workflowRange)
+            .filter(Boolean);
+        const recordFinalRanges = (Array.isArray(record.finalRanges) ? record.finalRanges : [])
+            .map(workflowRange)
+            .filter(Boolean);
+        const occurrenceCount = Number(record.occurrenceCount);
+        const omittedLocationCount = Number(record.omittedLocationCount);
+        const omittedFinalLocationCount = Number(record.omittedFinalLocationCount);
         result.push({
             atomId,
             sourceId,
@@ -959,9 +976,18 @@ export function findingWorkflowEvidence(finding, instructionModel = null) {
                 : sourceId,
             text,
             localRange,
-            finalRanges: (Array.isArray(atom?.finalRanges) ? atom.finalRanges : [])
-                .map(workflowRange)
-                .filter(Boolean),
+            localRanges,
+            finalRanges: atomFinalRanges.length > 0 ? atomFinalRanges : recordFinalRanges,
+            occurrenceCount: Number.isFinite(occurrenceCount) && occurrenceCount > 0
+                ? Math.round(occurrenceCount)
+                : Math.max(1, localRanges.length),
+            locationsTruncated: record.locationsTruncated === true,
+            omittedLocationCount: Number.isFinite(omittedLocationCount)
+                ? Math.max(0, Math.round(omittedLocationCount))
+                : 0,
+            omittedFinalLocationCount: Number.isFinite(omittedFinalLocationCount)
+                ? Math.max(0, Math.round(omittedFinalLocationCount))
+                : 0,
             comparison: atom ? {
                 property: atom.property ?? null,
                 value: atom.valueLabel ?? atom.value ?? null,
@@ -971,7 +997,7 @@ export function findingWorkflowEvidence(finding, instructionModel = null) {
                 exception: atom.exception ?? null,
             } : null,
         });
-        if (result.length >= 2) break;
+        if (result.length >= evidenceLimit) break;
     }
     return result;
 }
@@ -10240,23 +10266,47 @@ export class DevToolsWindow {
         });
     }
 
-    highlightLocalSourceEvidence(card, localRange) {
-        const range = workflowRange(localRange);
-        if (!card || !range) return null;
+    highlightLocalSourceEvidence(card, localRanges) {
+        const ranges = (Array.isArray(localRanges) ? localRanges : [localRanges])
+            .map(workflowRange)
+            .filter(Boolean)
+            .sort((left, right) => left.start - right.start);
+        if (!card || ranges.length === 0) return null;
         const pre = card.querySelector('.st-devtools-source-body > pre');
         const text = pre?.textContent ?? '';
-        if (!pre || range.start < 0 || range.end > text.length) return null;
-        const mark = element('mark', {
-            className: 'st-devtools-rule-evidence-mark rule-focus',
-            text: text.slice(range.start, range.end),
-        });
-        mark.tabIndex = -1;
-        pre.replaceChildren(
-            document.createTextNode(text.slice(0, range.start)),
-            mark,
-            document.createTextNode(text.slice(range.end)),
-        );
-        return mark;
+        if (!pre) return null;
+        const valid = ranges.filter(({ start, end }) => start >= 0 && end <= text.length);
+        if (valid.length === 0) return null;
+        const merged = [];
+        for (const range of valid) {
+            const previous = merged.at(-1);
+            if (previous && range.start <= previous.end) {
+                previous.end = Math.max(previous.end, range.end);
+            } else {
+                merged.push({ ...range });
+            }
+        }
+        const fragment = document.createDocumentFragment();
+        const marks = [];
+        let cursor = 0;
+        for (const range of merged) {
+            if (range.start > cursor) {
+                fragment.appendChild(document.createTextNode(text.slice(cursor, range.start)));
+            }
+            const mark = element('mark', {
+                className: 'st-devtools-rule-evidence-mark rule-focus',
+                text: text.slice(range.start, range.end),
+            });
+            mark.tabIndex = -1;
+            fragment.appendChild(mark);
+            marks.push(mark);
+            cursor = range.end;
+        }
+        if (cursor < text.length) {
+            fragment.appendChild(document.createTextNode(text.slice(cursor)));
+        }
+        pre.replaceChildren(fragment);
+        return marks[0] ?? null;
     }
 
     focusRuleSources(sourceIds, finalRanges = [], evidence = null) {
@@ -10264,12 +10314,13 @@ export class DevToolsWindow {
         const selected = new Set(sourceIds);
         let cards = [...this.window.querySelectorAll('.st-devtools-source')]
             .filter((node) => selected.has(node.dataset.sourceId));
-        if (cards.length === 0 && sourceIds?.[0]) {
-            const virtualTarget = this.virtualSourceLists.get(sourceIds[0]);
-            const controller = virtualTarget?.ensureMounted?.();
-            controller?.scrollToIndex?.(virtualTarget.index);
+        const mountedIds = new Set(cards.map((card) => card.dataset.sourceId));
+        for (const sourceId of sourceIds ?? []) {
+            if (mountedIds.has(sourceId)) continue;
+            this.ensureSourceCardMounted(sourceId);
             cards = [...this.window.querySelectorAll('.st-devtools-source')]
                 .filter((node) => selected.has(node.dataset.sourceId));
+            cards.forEach((card) => mountedIds.add(card.dataset.sourceId));
         }
         for (const card of cards) {
             card.closest('.st-devtools-source-group')?.setAttribute('open', '');
@@ -10283,7 +10334,12 @@ export class DevToolsWindow {
         if (!first) return;
         const exactEvidence = (
             evidence?.sourceId === first.dataset.sourceId
-                ? this.highlightLocalSourceEvidence(first, evidence.localRange)
+                ? this.highlightLocalSourceEvidence(
+                    first,
+                    evidence.localRanges?.length
+                        ? evidence.localRanges
+                        : evidence.localRange,
+                )
                 : null
         );
         const scrollTarget = exactEvidence ?? first;
@@ -14527,12 +14583,39 @@ export class DevToolsWindow {
     renderFindingEvidenceWorkflow(snapshot, finding, instructionModel, tutorial) {
         const findingKey = finding.review?.findingKey ?? finding.id;
         const evidenceItems = findingWorkflowEvidence(finding, instructionModel);
+        const duplicateEvidenceSummary = (
+            finding.ruleId === 'duplicates'
+            && finding.evidenceSummary
+            && typeof finding.evidenceSummary === 'object'
+        ) ? finding.evidenceSummary : null;
+        const recordedSourceCount = new Set(
+            (Array.isArray(finding.evidenceRecords) ? finding.evidenceRecords : [])
+                .map((record) => record?.sourceId)
+                .filter(Boolean),
+        ).size;
+        const summarySourceCount = Number(duplicateEvidenceSummary?.sourceCount);
+        const totalEvidenceCount = finding.ruleId === 'duplicates'
+            ? (
+                Number.isFinite(summarySourceCount) && summarySourceCount > 0
+                    ? Math.round(summarySourceCount)
+                    : Math.max(
+                        recordedSourceCount,
+                        new Set(Array.isArray(finding.sourceIds) ? finding.sourceIds : []).size,
+                    )
+            )
+            : evidenceItems.length;
+        const summaryOmittedSourceCount = Number(duplicateEvidenceSummary?.omittedSourceCount);
+        const omittedEvidenceCount = (
+            Number.isFinite(summaryOmittedSourceCount) && summaryOmittedSourceCount >= 0
+                ? Math.round(summaryOmittedSourceCount)
+                : Math.max(0, totalEvidenceCount - evidenceItems.length)
+        );
         const fallbackEvidenceCount = (
             evidenceItems.length === 0
             && typeof finding.evidence === 'string'
             && finding.evidence.trim()
         ) ? 1 : 0;
-        const evidenceCount = evidenceItems.length || fallbackEvidenceCount;
+        const evidenceCount = totalEvidenceCount || fallbackEvidenceCount;
         const details = element('details', {
             className: 'st-devtools-rule-evidence st-devtools-finding-evidence-workflow',
         });
@@ -14577,6 +14660,16 @@ export class DevToolsWindow {
                 'p',
                 t('review.workflow.evidenceDescription'),
             ));
+            if (omittedEvidenceCount > 0) {
+                body.appendChild(proseElement(
+                    'p',
+                    t('review.workflow.evidenceOmitted', {
+                        shown: evidenceItems.length,
+                        count: omittedEvidenceCount,
+                    }),
+                    { className: 'st-devtools-finding-evidence-omitted' },
+                ));
+            }
             if (finding.applicabilityKind) {
                 body.appendChild(element('span', {
                     className: 'st-devtools-finding-relation-label',
@@ -14585,6 +14678,83 @@ export class DevToolsWindow {
                         finding.applicabilityKind,
                     ),
                 }));
+            }
+            const locationRanges = finding.ruleId === 'duplicates'
+                ? finding.finalRanges ?? []
+                : evidenceItems.flatMap(({ finalRanges }) => finalRanges);
+            const finalPositionKeys = new Set(locationRanges.map(
+                ({ start, end }) => `${start}:${end}`,
+            ));
+            const mappedSourceIds = new Set();
+            const finalRangeOwners = new Map();
+            if (finding.ruleId === 'duplicates') {
+                for (const record of Array.isArray(finding.evidenceRecords)
+                    ? finding.evidenceRecords
+                    : []) {
+                    const sourceId = record?.sourceId;
+                    if (!sourceId) continue;
+                    const ranges = (Array.isArray(record.finalRanges) ? record.finalRanges : [])
+                        .map(workflowRange)
+                        .filter(Boolean);
+                    if (ranges.length > 0) mappedSourceIds.add(sourceId);
+                    for (const { start, end } of ranges) {
+                        const key = `${start}:${end}`;
+                        const owners = finalRangeOwners.get(key) ?? new Set();
+                        owners.add(sourceId);
+                        finalRangeOwners.set(key, owners);
+                    }
+                }
+            }
+            const summaryFinalLocationCount = Number(
+                duplicateEvidenceSummary?.finalLocationCount,
+            );
+            const finalPositionCount = (
+                Number.isFinite(summaryFinalLocationCount) && summaryFinalLocationCount >= 0
+                    ? Math.round(summaryFinalLocationCount)
+                    : finalPositionKeys.size
+            );
+            const summaryUnmappedSourceCount = Number(
+                duplicateEvidenceSummary?.unmappedSourceCount,
+            );
+            const unmappedSourceCount = finding.ruleId === 'duplicates'
+                ? (
+                    Number.isFinite(summaryUnmappedSourceCount)
+                    && summaryUnmappedSourceCount >= 0
+                        ? Math.round(summaryUnmappedSourceCount)
+                        : Math.max(0, totalEvidenceCount - mappedSourceIds.size)
+                )
+                : 0;
+            const sharesFinalLocation = duplicateEvidenceSummary
+                ? duplicateEvidenceSummary.sharedFinalLocation === true
+                : [...finalRangeOwners.values()].some((owners) => owners.size > 1);
+            if (evidenceItems.length > 0) {
+                body.appendChild(element('p', {
+                    className: 'st-devtools-finding-evidence-location-summary',
+                    text: finalPositionCount > 0
+                        ? t('review.workflow.locationSummary', {
+                            sourceCount: totalEvidenceCount,
+                            finalCount: finalPositionCount,
+                        })
+                        : t('review.workflow.locationSummaryUnavailable', {
+                            sourceCount: totalEvidenceCount,
+                        }),
+                }));
+                if (unmappedSourceCount > 0) {
+                    body.appendChild(proseElement(
+                        'p',
+                        t('review.workflow.unmappedFinalLocation', {
+                            count: unmappedSourceCount,
+                        }),
+                        { className: 'st-devtools-finding-evidence-unmapped-location' },
+                    ));
+                }
+                if (sharesFinalLocation) {
+                    body.appendChild(proseElement(
+                        'p',
+                        t('review.workflow.sharedFinalLocation'),
+                        { className: 'st-devtools-finding-evidence-shared-location' },
+                    ));
+                }
             }
             const grid = element('div', {
                 className: 'st-devtools-finding-evidence-grid',
@@ -14597,14 +14767,45 @@ export class DevToolsWindow {
                     element('small', {
                         text: t('review.workflow.evidenceItem', {
                             index: index + 1,
-                            count: evidenceItems.length,
+                            count: totalEvidenceCount,
                         }),
                     }),
                     element('strong', { text: evidence.sourceLabel }),
                     element('pre', { text: evidence.text }),
                 );
+                if (evidence.occurrenceCount > 1) {
+                    evidenceCard.appendChild(element('span', {
+                        className: 'st-devtools-badge st-devtools-evidence-occurrence-count',
+                        text: t('review.workflow.occurrenceCount', {
+                            count: evidence.occurrenceCount,
+                        }),
+                    }));
+                }
+                if (evidence.omittedLocationCount > 0) {
+                    evidenceCard.appendChild(proseElement(
+                        'p',
+                        t('review.workflow.localLocationsOmitted', {
+                            shown: evidence.localRanges.length,
+                            count: evidence.omittedLocationCount,
+                        }),
+                        { className: 'st-devtools-finding-evidence-location-omitted' },
+                    ));
+                }
+                if (evidence.omittedFinalLocationCount > 0) {
+                    evidenceCard.appendChild(proseElement(
+                        'p',
+                        t('review.workflow.finalLocationsOmitted', {
+                            shown: evidence.finalRanges.length,
+                            count: evidence.omittedFinalLocationCount,
+                        }),
+                        { className: 'st-devtools-finding-evidence-location-omitted' },
+                    ));
+                }
                 const facts = this.renderFindingComparisonFacts(evidence.comparison);
                 if (facts.childElementCount > 0) evidenceCard.appendChild(facts);
+                const evidenceActions = element('div', {
+                    className: 'st-devtools-rule-actions st-devtools-finding-evidence-item-actions',
+                });
                 const inspect = element('button', {
                     className: 'menu_button st-devtools-finding-evidence-open',
                     text: t('review.workflow.inspectEvidence'),
@@ -14618,7 +14819,24 @@ export class DevToolsWindow {
                         evidence,
                     );
                 });
-                evidenceCard.appendChild(inspect);
+                evidenceActions.appendChild(inspect);
+                if (evidence.finalRanges.length > 0) {
+                    const finalEvidence = element('button', {
+                        className: 'menu_button st-devtools-finding-evidence-open-final',
+                        text: t('review.workflow.inspectFinalEvidence'),
+                        type: 'button',
+                    });
+                    finalEvidence.addEventListener('click', () => {
+                        this.openExplorerForFinding(
+                            snapshot,
+                            finding,
+                            'final',
+                            evidence,
+                        );
+                    });
+                    evidenceActions.appendChild(finalEvidence);
+                }
+                evidenceCard.appendChild(evidenceActions);
                 grid.appendChild(evidenceCard);
             }
             if (evidenceItems.length === 0 && finding.evidence) {
@@ -14639,7 +14857,11 @@ export class DevToolsWindow {
             const actions = element('div', {
                 className: 'st-devtools-rule-actions st-devtools-finding-evidence-actions',
             });
-            if (finding.sourceIds?.length > 0) {
+            const showCombinedEvidenceActions = (
+                evidenceItems.length === 0
+                || finding.ruleId !== 'duplicates'
+            );
+            if (showCombinedEvidenceActions && finding.sourceIds?.length > 0) {
                 const sources = element('button', {
                     className: 'menu_button',
                     text: t('review.workflow.inspectTogether'),
@@ -14653,7 +14875,7 @@ export class DevToolsWindow {
                 }
                 actions.appendChild(sources);
             }
-            if (finding.finalRanges?.length > 0) {
+            if (showCombinedEvidenceActions && finding.finalRanges?.length > 0) {
                 const finalEvidence = element('button', {
                     className: 'menu_button',
                     text: t('action.viewFinalEvidence'),

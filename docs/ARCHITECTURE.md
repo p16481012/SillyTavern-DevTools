@@ -1,6 +1,6 @@
 # 아키텍처
 
-이 문서는 v0.17.2의 Rule Inspector 결과 카드 검토·근거 왕복·단일 finding AI 연결 흐름, v0.17.1의 적용 주체·말투·정체성·안전·메모리 axis와 v0.17.0의 조건·예외 적용 범위 판정·별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
+이 문서는 v0.17.3의 source별 중복 문장 evidence와 정확한 local/final range, v0.17.2의 Rule Inspector 결과 카드 검토·근거 왕복·단일 finding AI 연결 흐름, v0.17.1의 적용 주체·말투·정체성·안전·메모리 axis와 v0.17.0의 조건·예외 적용 범위 판정·별도 양립 relation, 탭별 빈 상태·안정된 스크롤 폭, 세 갈래 도움말 정보 구조, 튜토리얼 fixture와 실제 제품 renderer를 재사용하는 19개 읽기 전용 기능 설명서, 버전별 UI 모듈 캐시 경계, 첫 paint 전 upper-center 선배치와 disclosure viewport·암막 고정을 적용한 기본·고급 coachmark, 다섯 기능 하단 내비게이션·모바일 앱 셸, 스키마 v7, 캡처 우선 저장, 불투명 generation ledger와 usage·비용 출처, 구조 provenance, 저장 정책·무결성·archive, 개인정보 모드, Worker·가상 목록, 선택적 AI Semantic Inspector와 공식 합성 Provider 평가 경계를 기준으로 합니다. Rule Inspector V3와 비교 정책 V2의 로컬 분석 경계도 그대로 유지합니다.
 
 ## 읽기 전용 경계
 
@@ -9,6 +9,20 @@ ST DevTools는 `generate_interceptor`를 선언하지 않고 SillyTavern의 이�
 선택적 AI 의미 검사는 이 읽기 전용 원본 경계를 유지하면서 사용자가 매번 미리보기와 전송에 동의했을 때만 선택한 공개 Connection Manager profile `sendRequest()` 또는 현재 연결의 공개 `getContext().generateRaw()` 중 하나를 호출합니다. 이 호출은 SillyTavern 프롬프트·캐릭터·설정·정적 검사 결과를 수정하지 않고 제안을 현재 패널 메모리에만 반환합니다.
 
 v0.13.1의 `원문 복사`·`내용 복사`·`제안 내용 복사`는 화면에 이미 표시된 문자열만 클립보드로 전달합니다. SillyTavern 저장 API나 prompt interceptor를 호출하지 않으며 raw prompt 복사 동작은 `full` 스냅샷에만 표시합니다. AI 제안 복사는 제목·요약·판단 이유를 복사할 뿐 수정된 프롬프트라고 표시하지 않습니다.
+
+### 중복 문장 source provenance 경계
+
+v0.17.3의 duplicate analyzer는 문장을 정규화해 비교하면서도 원문 content에서 계산한 `localRange`를 버리지 않습니다. 여러 source에 같은 문장이 있으면 source별로 하나의 `evidenceRecord`를 만들고 `sourceId`·표시 이름·문장 원문·`localRanges`·`finalRanges`·`occurrenceCount`를 기록합니다. 한 source 안의 반복은 record 하나에 합치지만 서로 다른 source의 record를 하나로 합치지 않습니다.
+
+local range를 최종 프롬프트 좌표로 바꾸는 것은 source attribution이 `exact`이고 캡처된 source range 길이가 source content 길이와 정확히 일치할 때뿐입니다. 이 조건을 만족하지 않으면 final range를 비워 두며 source 배열 순서, 같은 문자열 검색, 근처 token 또는 다른 source의 range로 위치를 추정하지 않습니다. 모든 range는 유효한 `start < end`만 남기고 `start:end` identity로 중복을 제거합니다.
+
+결과 카드의 `원본 소스 N곳`은 유효한 source별 evidence card 수이고 `최종 프롬프트 위치 M곳`은 모든 evidence record의 final range를 좌표 identity로 중복 제거한 수입니다. source identity와 물리적 최종 위치 identity는 같지 않으므로 여러 source가 같은 final range에 연결되면 `N > M`일 수 있습니다. 이때 UI는 공유 위치 안내를 표시하고 수를 억지로 같게 만들지 않습니다.
+
+각 evidence card의 원본 action은 해당 record의 source ID와 local ranges만, 최종 action은 해당 record의 final ranges만 explorer에 전달합니다. 전체 source·발생·물리적 final 위치 수는 별도 summary에 보존하되 직렬화·DOM 강조는 source 20곳과 source별 local/final 각 100범위로 제한하며, 카드에는 표시·생략 수를 함께 알립니다. 한 source 안의 반복은 source 카드 하나에서 취합하고 보존된 정확한 범위를 함께 강조합니다. 여러 source는 카드별 action으로 필요한 virtual source를 개별 mount하므로 첫 source만 보이는 상태로 조용히 축소하지 않습니다.
+
+중복 문장 finding은 instruction atom relation이 아니므로 v0.17.2의 atom lookup 대신 명시적인 evidence record를 사용합니다. 반대로 atom 기반 finding의 evidence resolution 경계는 그대로 유지됩니다. duplicate finding ID는 기존 앞 40자 prefix를 보존하고 충돌할 때만 전체 정규화 문장의 안정 hash를 suffix로 붙입니다.
+
+`finding-review.js`는 `duplicates` rule의 새 위치 evidence를 review digest에 넣지 않습니다. source 집합·규칙·기존 suppression signature가 같은 finding은 v0.17.2 이전 key를 유지하므로 exact `유효`·`오탐`, suppression 우선순위와 복원 경로가 위치 metadata 추가만으로 초기화되지 않습니다. 원문 위치는 검토 편의를 위한 provenance이며 finding 의미 identity를 재정의하지 않습니다.
 
 ### Rule Inspector 결과 workflow 경계
 

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { prepareSemanticInspection } from '../src/semantic-inspector.js';
 
-test('v0.17.2 sandbox exposes every browser review fixture deterministically', async () => {
+test('v0.17.3 sandbox exposes every browser review fixture deterministically', async () => {
     const harness = await readFile(
         new URL('../sandbox/ui-harness.js', import.meta.url),
         'utf8',
@@ -14,9 +14,9 @@ test('v0.17.2 sandbox exposes every browser review fixture deterministically', a
     ]);
 
     assert.match(harness, /schemaVersion:\s*7/);
-    assert.match(harness, /extensionVersion:\s*'0\.17\.2'/);
+    assert.match(harness, /extensionVersion:\s*'0\.17\.3'/);
     assert.match(harness, /privacy:\s*\{[\s\S]*?mode:\s*'full'/);
-    assert.match(harness, /version:\s*'0\.17\.2'/);
+    assert.match(harness, /version:\s*'0\.17\.3'/);
     assert.match(harness, /Date\.UTC\(2026,\s*6,\s*31,\s*12,\s*0,\s*0\)/);
 
     assert.match(harness, /providerTrace:\s*\{/);
@@ -76,6 +76,8 @@ test('v0.17.2 sandbox exposes every browser review fixture deterministically', a
     assert.match(harness, /semantic-no-provider-call/);
     assert.match(harness, /setSemanticFixtureMode/);
     assert.match(harness, /setFocusedGrowthFixture/);
+    assert.match(harness, /setDuplicateEvidenceFixture/);
+    assert.match(harness, /duplicateEvidenceFixture = fixture\.id/);
     assert.match(harness, /onboardingAutoStart:\s*false/);
     assert.match(harness, /sandbox-onboarding/);
     assert.match(harness, /const requestedPanelWidth = fixtureCount\('panelWidth', 280, 1_200\)/);
@@ -146,7 +148,7 @@ test('v0.17.2 sandbox exposes every browser review fixture deterministically', a
     );
     assert.doesNotMatch(harness, /for \(const tab of \[[^\]]*'context'/u);
 
-    assert.match(html, /ST DevTools v0\.17\.2 UI Sandbox/);
+    assert.match(html, /ST DevTools v0\.17\.3 UI Sandbox/);
     assert.match(html, /초보자 둘러보기/);
     assert.match(html, /실제 제공자·네트워크 호출은 없습니다/);
     assert.match(html, /sandbox-archive-import-valid/);
@@ -154,6 +156,7 @@ test('v0.17.2 sandbox exposes every browser review fixture deterministically', a
     assert.match(html, /sandbox-semantic-error/);
     assert.match(html, /sandbox-semantic-slow/);
     assert.match(html, /sandbox-growth-focused/);
+    assert.match(html, /sandbox-duplicate-evidence/);
     assert.match(server, /requestPath === '\/' \? 'sandbox\/index\.html'/);
     assert.match(server, /127\.0\.0\.1:8766\/sandbox\/index\.html/);
 });

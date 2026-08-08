@@ -1,4 +1,4 @@
-import { DevToolsWindow } from '../src/ui.js?v=0.17.2';
+import { DevToolsWindow } from '../src/ui.js?v=0.17.3';
 import { CaptureController } from '../src/capture.js';
 import { SnapshotStore } from '../src/storage.js';
 import { serializeTimelineDiagnostics } from '../src/diagnostics.js';
@@ -71,7 +71,7 @@ function createSnapshot(id, timestamp, totalTokens, additions = {}) {
     ].join('\n');
     return {
         schemaVersion: 7,
-        extensionVersion: '0.17.2',
+        extensionVersion: '0.17.3',
         privacy: {
             schemaVersion: 1,
             mode: 'full',
@@ -1450,7 +1450,7 @@ const devTools = new DevToolsWindow({
     getContext: () => context,
     store,
     capture,
-    version: '0.17.2',
+    version: '0.17.3',
     semanticInspector: sandboxSemanticInspector,
     semanticEvaluationHarness: sandboxSemanticEvaluationHarness,
     onboardingAutoStart: false,
@@ -1598,9 +1598,97 @@ async function setFocusedGrowthFixture() {
     await devTools.open();
     devTools.selectTab('timeline');
 }
+async function setDuplicateEvidenceFixture() {
+    const repeated = 'Keep private access tokens out of the final response.';
+    const leftContent = `Left prompt introduction.\n${repeated}\nLeft prompt ending.`;
+    const rightContent = `Right prompt introduction.\n${repeated}\nRight prompt ending.`;
+    const finalText = `${leftContent}\n${rightContent}`;
+    const timestamp = Date.UTC(2026, 7, 8, 12, 0, 0);
+    const fixture = createSnapshot(
+        'duplicate-evidence-fixture',
+        timestamp,
+        128,
+        { model: 'duplicate-evidence-model' },
+    );
+    fixture.finalText = finalText;
+    fixture.payload = [{ role: 'system', content: finalText }];
+    fixture.request.body.messages = structuredClone(fixture.payload);
+    fixture.sources = [
+        {
+            id: 'duplicate:left',
+            type: 'extension',
+            label: '출력 보호 규칙',
+            content: leftContent,
+            color: '#2563eb',
+            attribution: 'exact',
+            included: true,
+            configuredEnabled: true,
+            tokenCount: 32,
+            metadata: {
+                sourceKind: 'configuredPrompt',
+                identifier: 'duplicate-left',
+                name: '출력 보호 규칙',
+                enabled: true,
+                configuredEnabled: true,
+                promptOrder: 0,
+            },
+            ranges: [{ start: 0, end: leftContent.length }],
+            provenance: { method: 'configured-payload-exact', confidence: 1 },
+        },
+        {
+            id: 'duplicate:right',
+            type: 'extension',
+            label: '응답 보안 규칙',
+            content: rightContent,
+            color: '#7c3aed',
+            attribution: 'exact',
+            included: true,
+            configuredEnabled: true,
+            tokenCount: 32,
+            metadata: {
+                sourceKind: 'configuredPrompt',
+                identifier: 'duplicate-right',
+                name: '응답 보안 규칙',
+                enabled: true,
+                configuredEnabled: true,
+                promptOrder: 1,
+            },
+            ranges: [{
+                start: leftContent.length + 1,
+                end: finalText.length,
+            }],
+            provenance: { method: 'configured-payload-exact', confidence: 1 },
+        },
+        {
+            id: 'final:duplicate-evidence',
+            type: 'final',
+            label: 'Final Prompt',
+            labelKey: 'source.finalPrompt',
+            content: finalText,
+            color: '#eab308',
+            attribution: 'exact',
+            included: true,
+            tokenCount: 128,
+            metadata: {},
+            ranges: [{ start: 0, end: finalText.length }],
+            provenance: { method: 'exact', confidence: 1 },
+        },
+    ];
+    sandboxAddSnapshot(fixture);
+    document.body.dataset.duplicateEvidenceFixture = fixture.id;
+    await devTools.open();
+    await devTools.refresh();
+    devTools.selectedId = fixture.id;
+    devTools.selectTab('rules');
+    return fixture.id;
+}
 document.getElementById('sandbox-growth-focused')?.addEventListener(
     'click',
     () => void setFocusedGrowthFixture(),
+);
+document.getElementById('sandbox-duplicate-evidence')?.addEventListener(
+    'click',
+    () => void setDuplicateEvidenceFixture(),
 );
 async function setSemanticFixtureMode(mode) {
     semanticFixtureMode = mode;
@@ -1661,7 +1749,7 @@ async function runArchiveImportSmokeTest() {
         timelines: [{ chatId: 'sandbox', timeline: [incoming] }],
         mode: 'full',
         exportedAt: sandboxNow + 4000,
-        extensionVersion: '0.17.2',
+        extensionVersion: '0.17.3',
     });
     const plan = await prepareSnapshotArchiveImport(
         archive,
@@ -1708,7 +1796,7 @@ async function runHungTokenizerCaptureSmokeTest() {
             getTokenCountAsync: () => new Promise(() => {}),
         }),
         store: smokeStore,
-        version: '0.17.2',
+        version: '0.17.3',
         tokenCounterWaitMs: 25,
         storageWaitMs: 1_000,
     });
@@ -2260,6 +2348,7 @@ const sandboxApi = {
     selectPrivacyFixture,
     setRetroThemeConflict,
     setSemanticFixtureMode,
+    setDuplicateEvidenceFixture,
     onboarding: sandboxOnboardingHook,
     help: sandboxHelpHook,
     semantic: {

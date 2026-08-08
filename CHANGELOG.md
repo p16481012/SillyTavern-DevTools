@@ -1,5 +1,21 @@
 # 변경 기록
 
+## 0.17.3 - 2026-08-08
+
+### 여러 소스의 중복 문장 근거 분리
+
+- 여러 소스에 같은 문장이 있는 finding에 소스 이름·문장 원문·정확한 소스 내부 범위·최종 프롬프트 범위를 소스별 evidence record로 보존
+- 근거 비교를 소스별 카드로 나누고 각 카드에 `이 근거를 원문에서 보기`와 `이 근거의 최종 위치 보기`를 배치해 두 근거가 같은 위치로 보이던 문제 수정
+- `원본 소스 N곳 · 최종 프롬프트 위치 M곳` 요약을 추가해 source identity 수와 물리적으로 서로 다른 최종 범위 수를 구분하고, 여러 source가 같은 최종 범위를 공유하는 경우를 별도로 안내
+- 한 소스에서 같은 문장이 여러 번 나오면 finding과 근거 카드를 하나로 취합하고 전체 등장·위치 수를 보존합니다. 화면 이동용 범위는 성능 보호를 위해 source 20곳·source별 local/final 각 100곳으로 제한하며 생략 수를 명시합니다.
+- 문장 앞부분이 같은 서로 다른 중복 finding의 ID 충돌을 전체 정규화 문장 hash로 해소
+
+### 호환성·검증
+
+- 중복 finding의 review key는 새 위치 evidence를 추가하기 전과 동일하게 유지해 기존 `유효`·`오탐` 판정을 잃지 않도록 함
+- source별 exact range, 반복 위치 취합, 서로 다른 최종 위치 수, 가상 목록의 여러 source mount, 원문 다중 강조와 이전 review key 호환성을 단위·UI 회귀로 고정
+- manifest·package·runtime import query·onboarding fixture와 두 sandbox HTML entry·sandbox harness의 버전을 `0.17.3`으로 통일
+
 ## 0.17.2 - 2026-08-08
 
 ### Rule Inspector 결과에서 행동까지의 흐름

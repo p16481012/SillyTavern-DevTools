@@ -217,6 +217,31 @@ test('finding keys are source-order independent and never expose evidence', () =
     assert.equal(suppressionKey(original, sources), suppressionKey(changed, sources));
 });
 
+test('adding source-specific duplicate locations preserves the existing review key', () => {
+    const sources = [source('left'), source('right')];
+    const original = {
+        ruleId: 'duplicates',
+        id: 'duplicate:shared sentence',
+        method: 'source-static',
+        evidence: 'Shared repeated sentence.',
+        evidenceRecords: [],
+        message: '동일한 문장이 2개 소스에 있습니다.',
+        sourceIds: sources.map(({ id }) => id),
+    };
+    const enriched = {
+        ...original,
+        evidenceRecords: sources.map((item, index) => ({
+            sourceId: item.id,
+            sourceLabel: item.label,
+            text: original.evidence,
+            localRange: { start: 20 + index, end: 45 + index },
+            finalRanges: [{ start: 100 + index, end: 125 + index }],
+        })),
+    };
+
+    assert.equal(findingKey(original, sources), findingKey(enriched, sources));
+});
+
 test('suppression signatures keep distinct non-semantic findings isolated', () => {
     const sources = [source('ko'), source('en')];
     const first = finding({

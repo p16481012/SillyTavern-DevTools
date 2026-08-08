@@ -26,6 +26,12 @@ function evidenceRecord({
     text = '한국어로 답합니다.',
     start = 0,
     end = text.length,
+    localRanges = null,
+    finalRanges = null,
+    occurrenceCount = null,
+    locationsTruncated = false,
+    omittedLocationCount = 0,
+    omittedFinalLocationCount = 0,
 } = {}) {
     return {
         atomId,
@@ -33,6 +39,12 @@ function evidenceRecord({
         sourceLabel,
         text,
         localRange: { start, end },
+        ...(localRanges ? { localRanges } : {}),
+        ...(finalRanges ? { finalRanges } : {}),
+        ...(occurrenceCount ? { occurrenceCount } : {}),
+        ...(locationsTruncated ? { locationsTruncated } : {}),
+        ...(omittedLocationCount ? { omittedLocationCount } : {}),
+        ...(omittedFinalLocationCount ? { omittedFinalLocationCount } : {}),
     };
 }
 
@@ -129,6 +141,75 @@ test('finding workflow evidence safely handles zero, one, and three records', ()
             null,
         ],
     }), []);
+});
+
+test('duplicate evidence shows more than two sources with a bounded display limit', () => {
+    const records = Array.from({ length: 25 }, (_, index) => evidenceRecord({
+        atomId: null,
+        sourceId: `source-${index + 1}`,
+        sourceLabel: `Prompt ${index + 1}`,
+        text: 'The same duplicated sentence.',
+        start: index,
+        end: index + 29,
+    }));
+    const result = findingWorkflowEvidence({
+        ruleId: 'duplicates',
+        evidenceRecords: records,
+    });
+
+    assert.equal(result.length, 20);
+    assert.equal(result[0].sourceId, 'source-1');
+    assert.equal(result.at(-1).sourceId, 'source-20');
+});
+
+test('atomless duplicate evidence preserves grouped source and final locations', () => {
+    const result = findingWorkflowEvidence({
+        evidenceRecords: [
+            evidenceRecord({
+                atomId: null,
+                sourceId: 'source-a',
+                sourceLabel: 'Prompt A',
+                text: 'Repeat this sentence.',
+                localRanges: [
+                    { start: 10, end: 31 },
+                    { start: 50, end: 71 },
+                ],
+                finalRanges: [
+                    { start: 110, end: 131 },
+                    { start: 150, end: 171 },
+                    { start: 8, end: 8 },
+                ],
+                occurrenceCount: 2,
+                locationsTruncated: true,
+                omittedLocationCount: 8,
+                omittedFinalLocationCount: 6,
+            }),
+            evidenceRecord({
+                atomId: null,
+                sourceId: 'source-b',
+                sourceLabel: 'Prompt B',
+                text: 'Repeat this sentence.',
+                start: 4,
+                end: 25,
+                finalRanges: [{ start: 204, end: 225 }],
+            }),
+        ],
+    });
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(result[0].localRanges, [
+        { start: 10, end: 31 },
+        { start: 50, end: 71 },
+    ]);
+    assert.equal(result[0].occurrenceCount, 2);
+    assert.equal(result[0].locationsTruncated, true);
+    assert.equal(result[0].omittedLocationCount, 8);
+    assert.equal(result[0].omittedFinalLocationCount, 6);
+    assert.deepEqual(result[0].finalRanges, [
+        { start: 110, end: 131 },
+        { start: 150, end: 171 },
+    ]);
+    assert.deepEqual(result[1].finalRanges, [{ start: 204, end: 225 }]);
 });
 
 test('one finding is prepared as the only AI target without calling a provider', () => {
@@ -308,21 +389,40 @@ test('finding workflow UI keeps evidence, return, immediate review, and AI conse
         '\n    highlightLocalSourceEvidence(',
         '\n    focusRuleSources(',
     );
+    const sourceFocus = sourceBlock(
+        ui,
+        '\n    focusRuleSources(',
+        '\n    highlightFinalEvidence(',
+    );
 
     assert.match(evidence, /findingWorkflowEvidence\(finding, instructionModel\)/u);
     assert.match(evidence, /fallbackEvidenceCount/u);
     assert.match(evidence, /review\.workflow\.evidenceUnavailable/u);
     assert.match(evidence, /st-devtools-finding-evidence-grid/u);
     assert.match(evidence, /openExplorerForFinding\([\s\S]*?'sources'/u);
+    assert.match(evidence, /review\.workflow\.inspectFinalEvidence/u);
+    assert.match(evidence, /review\.workflow\.occurrenceCount/u);
+    assert.match(evidence, /review\.workflow\.locationSummary/u);
+    assert.match(evidence, /review\.workflow\.unmappedFinalLocation/u);
+    assert.match(evidence, /review\.workflow\.sharedFinalLocation/u);
+    assert.match(evidence, /duplicateEvidenceSummary/u);
+    assert.match(evidence, /review\.workflow\.localLocationsOmitted/u);
+    assert.match(evidence, /review\.workflow\.finalLocationsOmitted/u);
+    assert.match(
+        evidence,
+        /evidenceItems\.length === 0[\s\S]*?finding\.ruleId !== 'duplicates'/u,
+    );
     assert.match(explorerReturn, /review\.workflow\.returnAction/u);
     assert.match(explorerReturn, /this\.selectTab\('rules'\)/u);
     assert.match(explorerReturn, /this\.scheduleRuleFindingFocus\(\s*route\.findingKey/u);
     assert.match(explorerNavigation, /ruleWorkflowReturn\?\.sequence !== workflowSequence/u);
     assert.match(explorerNavigation, /this\.selectedSnapshot\(\)\?\.id !== snapshot\.id/u);
     assert.match(explorerNavigation, /focusRuleSources\(sourceIds, finalRanges, evidence\)/u);
-    assert.match(localEvidence, /workflowRange\(localRange\)/u);
+    assert.match(localEvidence, /Array\.isArray\(localRanges\)/u);
     assert.match(localEvidence, /st-devtools-rule-evidence-mark rule-focus/u);
     assert.match(localEvidence, /text\.slice\(range\.start, range\.end\)/u);
+    assert.match(sourceFocus, /for \(const sourceId of sourceIds \?\? \[\]\)/u);
+    assert.match(sourceFocus, /this\.ensureSourceCardMounted\(sourceId\)/u);
 
     assert.match(review, /for \(const decision of \['valid', 'false-positive'\]\)/u);
     assert.match(review, /setAttribute\(\s*'aria-pressed'/u);
@@ -340,6 +440,14 @@ test('finding workflow UI keeps evidence, return, immediate review, and AI conse
     assert.match(i18n, /'review\.workflow\.evidenceTitle':/u);
     assert.match(i18n, /'review\.workflow\.evidenceSingleTitle':/u);
     assert.match(i18n, /'review\.workflow\.evidenceUnavailable':/u);
+    assert.match(i18n, /'review\.workflow\.evidenceOmitted':/u);
+    assert.match(i18n, /'review\.workflow\.inspectFinalEvidence':/u);
+    assert.match(i18n, /'review\.workflow\.occurrenceCount':/u);
+    assert.match(i18n, /'review\.workflow\.locationSummary':/u);
+    assert.match(i18n, /'review\.workflow\.unmappedFinalLocation':/u);
+    assert.match(i18n, /'review\.workflow\.sharedFinalLocation':/u);
+    assert.match(i18n, /'review\.workflow\.localLocationsOmitted':/u);
+    assert.match(i18n, /'review\.workflow\.finalLocationsOmitted':/u);
     assert.match(i18n, /'review\.workflow\.aiUnavailableNoEvidence':/u);
     assert.match(i18n, /'review\.workflow\.returnAction':/u);
     assert.match(i18n, /'review\.workflow\.aiPrepared':/u);

@@ -172,6 +172,224 @@ test('rule inspector detects duplicate sentences across sources', () => {
     assert.deepEqual(duplicate?.sourceIds, ['a', 'b']);
 });
 
+test('duplicate findings preserve one exact source and final location per source', () => {
+    const repeated = 'Always keep every response concise and use exactly one paragraph.';
+    const leftContent = `Left introduction.\n${repeated}\nLeft ending.`;
+    const rightContent = `Right introduction.\n${repeated}\nRight ending.`;
+    const finalText = `${leftContent}\n${rightContent}`;
+    const findings = analyzeSnapshot(snapshot({
+        finalText,
+        sources: [
+            {
+                id: 'left',
+                type: 'system',
+                label: 'Left Prompt',
+                content: leftContent,
+                tokenCount: 30,
+                attribution: 'exact',
+                ranges: [{ start: 0, end: leftContent.length }],
+            },
+            {
+                id: 'right',
+                type: 'extension',
+                label: 'Right Prompt',
+                content: rightContent,
+                tokenCount: 30,
+                attribution: 'exact',
+                ranges: [{
+                    start: leftContent.length + 1,
+                    end: finalText.length,
+                }],
+            },
+        ],
+    }));
+
+    const duplicate = findings.find((item) => item.id.startsWith('duplicate:'));
+    assert.deepEqual(
+        duplicate?.evidenceRecords.map(({ sourceId }) => sourceId),
+        ['left', 'right'],
+    );
+    for (const record of duplicate.evidenceRecords) {
+        const source = record.sourceId === 'left'
+            ? { content: leftContent }
+            : { content: rightContent };
+        assert.equal(
+            source.content.slice(record.localRange.start, record.localRange.end),
+            repeated,
+        );
+        assert.equal(record.localRanges.length, 1);
+        assert.equal(record.finalRanges.length, 1);
+        assert.equal(
+            finalText.slice(record.finalRanges[0].start, record.finalRanges[0].end),
+            repeated,
+        );
+    }
+    assert.equal(duplicate.finalRanges.length, 2);
+});
+
+test('same-source repetition stays one finding while retaining every occurrence', () => {
+    const repeated = 'Always keep every response concise and use exactly one paragraph.';
+    const content = [repeated, repeated, repeated].join('\n');
+    const findings = analyzeSnapshot(snapshot({
+        finalText: content,
+        sources: [{
+            id: 'repeated-source',
+            type: 'system',
+            label: 'Repeated Prompt',
+            content,
+            tokenCount: 60,
+            attribution: 'exact',
+            ranges: [{ start: 0, end: content.length }],
+        }],
+    }));
+
+    const repeatedFindings = findings.filter((item) => item.id.startsWith('repeated:'));
+    assert.equal(repeatedFindings.length, 1);
+    assert.equal(repeatedFindings[0].evidenceRecords.length, 1);
+    assert.equal(repeatedFindings[0].evidenceRecords[0].occurrenceCount, 3);
+    assert.equal(repeatedFindings[0].evidenceRecords[0].localRanges.length, 3);
+    assert.equal(repeatedFindings[0].evidenceRecords[0].finalRanges.length, 3);
+});
+
+test('large same-source repetition keeps exact totals while bounding serialized locations', () => {
+    const repeated = 'Repeat this instruction now.';
+    const occurrenceCount = 50_000;
+    const content = Array.from({ length: occurrenceCount }, () => repeated).join('\n');
+    const findings = analyzeSnapshot(snapshot({
+        finalText: content,
+        sources: [{
+            id: 'large-repeated-source',
+            type: 'system',
+            label: 'Large Repeated Prompt',
+            content,
+            tokenCount: occurrenceCount * 6,
+            attribution: 'exact',
+            ranges: [{ start: 0, end: content.length }],
+        }],
+    }));
+
+    const repeatedFinding = findings.find((item) => item.id.startsWith('repeated:'));
+    const record = repeatedFinding?.evidenceRecords?.[0];
+    assert.equal(record?.occurrenceCount, occurrenceCount);
+    assert.equal(record?.localRanges.length, 100);
+    assert.equal(record?.finalRanges.length, 100);
+    assert.equal(record?.locationsTruncated, true);
+    assert.equal(record?.omittedLocationCount, occurrenceCount - 100);
+    assert.equal(record?.omittedFinalLocationCount, occurrenceCount - 100);
+    assert.equal(repeatedFinding?.evidenceSummary?.finalLocationCount, occurrenceCount);
+    assert.equal(repeatedFinding?.evidenceSummary?.locationsTruncated, true);
+    assert.ok(JSON.stringify(repeatedFinding).length < 100_000);
+});
+
+test('different source evidence can share one physical final prompt location', () => {
+    const repeated = 'Always keep every response concise and use exactly one paragraph.';
+    const findings = analyzeSnapshot(snapshot({
+        finalText: repeated,
+        sources: [
+            {
+                id: 'left',
+                type: 'system',
+                label: 'Left Prompt',
+                content: repeated,
+                tokenCount: 20,
+                attribution: 'exact',
+                ranges: [{ start: 0, end: repeated.length }],
+            },
+            {
+                id: 'right',
+                type: 'extension',
+                label: 'Right Prompt',
+                content: repeated,
+                tokenCount: 20,
+                attribution: 'exact',
+                ranges: [{ start: 0, end: repeated.length }],
+            },
+        ],
+    }));
+
+    const duplicate = findings.find((item) => item.id.startsWith('duplicate:'));
+    assert.equal(duplicate.evidenceRecords.length, 2);
+    assert.equal(duplicate.finalRanges.length, 1);
+    assert.equal(duplicate.evidenceSummary.sourceCount, 2);
+    assert.equal(duplicate.evidenceSummary.finalLocationCount, 1);
+    assert.equal(duplicate.evidenceSummary.sharedFinalLocation, true);
+    assert.equal(duplicate.evidenceSummary.unmappedSourceCount, 0);
+});
+
+test('duplicate evidence caps cards without losing authoritative source and location totals', () => {
+    const repeated = 'Always keep every response concise and use exactly one paragraph.';
+    const sourceCount = 25;
+    const finalText = Array.from({ length: sourceCount }, () => repeated).join('\n');
+    const sources = Array.from({ length: sourceCount }, (_, index) => {
+        const start = index * (repeated.length + 1);
+        return {
+            id: `source-${index + 1}`,
+            type: 'extension',
+            label: `Prompt ${index + 1}`,
+            content: repeated,
+            tokenCount: 20,
+            attribution: 'exact',
+            ranges: [{ start, end: start + repeated.length }],
+        };
+    });
+    const findings = analyzeSnapshot(snapshot({ finalText, sources }));
+
+    const duplicate = findings.find((item) => item.id.startsWith('duplicate:'));
+    assert.equal(duplicate.evidenceRecords.length, 20);
+    assert.equal(duplicate.finalRanges.length, 20);
+    assert.deepEqual(duplicate.evidenceSummary, {
+        sourceCount,
+        displayedSourceCount: 20,
+        omittedSourceCount: 5,
+        mappedSourceCount: sourceCount,
+        unmappedSourceCount: 0,
+        finalLocationCount: sourceCount,
+        sharedFinalLocation: false,
+        locationsTruncated: true,
+    });
+});
+
+test('duplicate findings with the same long prefix keep distinct identifiers', () => {
+    const prefix = 'This deliberately long shared prefix is longer than forty characters ';
+    const first = `${prefix}and ends with the first rule.`;
+    const second = `${prefix}and ends with the second rule.`;
+    const content = `${first}\n${second}`;
+    const finalText = `${content}\n${content}`;
+    const sources = [
+            {
+                id: 'left',
+                type: 'system',
+                label: 'Left Prompt',
+                content,
+                tokenCount: 50,
+                attribution: 'exact',
+                ranges: [{ start: 0, end: content.length }],
+            },
+            {
+                id: 'right',
+                type: 'extension',
+                label: 'Right Prompt',
+                content,
+                tokenCount: 50,
+                attribution: 'exact',
+                ranges: [{ start: content.length + 1, end: (content.length * 2) + 1 }],
+            },
+        ];
+    const duplicateIds = (orderedSources) => analyzeSnapshot(snapshot({
+        finalText,
+        sources: orderedSources,
+    }))
+        .filter((item) => item.id.startsWith('duplicate:'))
+        .map(({ id }) => id)
+        .sort();
+    const forward = duplicateIds(sources);
+    const reversed = duplicateIds([...sources].reverse());
+
+    assert.equal(forward.length, 2);
+    assert.equal(new Set(forward).size, 2);
+    assert.deepEqual(reversed, forward);
+});
+
 test('condition compatibility relations stay out of rule findings', () => {
     const mutuallyExclusive = analyzeSnapshotDetailed(instructionSnapshot([
         'If locale is en-US respond in English.',

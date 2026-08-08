@@ -263,12 +263,15 @@ function allowsLegacyParticipantFallback(finding) {
 
 function evidenceDigest(finding, includeParticipantScope = true) {
     const semanticRecords = own(finding, 'semanticRecords');
+    const evidenceRecords = canonicalText(own(finding, 'ruleId'), 160) === 'duplicates'
+        ? []
+        : own(finding, 'evidenceRecords');
     const evidence = stableEvidence(
         Array.isArray(semanticRecords) && semanticRecords.length > 0
             ? semanticRecordsForKey(finding, includeParticipantScope)
             : [
                 own(finding, 'evidence'),
-                own(finding, 'evidenceRecords'),
+                evidenceRecords,
                 own(finding, 'message'),
             ],
     );

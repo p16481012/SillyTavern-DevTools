@@ -10178,6 +10178,24 @@ button.st-devtools-help-list-row:last-child {
     line-height: 1.55;
 }
 
+.st-devtools-finding-evidence-body > .st-devtools-finding-evidence-location-summary {
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.35rem 0.55rem;
+    border-radius: var(--st-devtools-radius-sm);
+    background: var(--st-devtools-primary-soft);
+    color: var(--st-devtools-primary);
+    font-weight: 750;
+}
+
+.st-devtools-finding-evidence-shared-location,
+.st-devtools-finding-evidence-unmapped-location,
+.st-devtools-finding-evidence-omitted,
+.st-devtools-finding-evidence-location-omitted {
+    padding-left: 0.55rem;
+    border-left: 3px solid var(--st-devtools-border-strong);
+}
+
 .st-devtools-finding-relation-label {
     width: fit-content;
     max-width: 100%;
@@ -10234,6 +10252,26 @@ button.st-devtools-help-list-row:last-child {
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+.st-devtools-evidence-occurrence-count {
+    width: fit-content;
+    max-width: 100%;
+    color: var(--st-devtools-text-muted);
+}
+
+.st-devtools-finding-evidence-item-actions {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.4rem;
+}
+
+.st-devtools-window .st-devtools-finding-evidence-item-actions > .menu_button {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px;
+    white-space: normal !important;
 }
 
 .st-devtools-finding-evidence-facts {
@@ -10385,6 +10423,10 @@ button.st-devtools-help-list-row:last-child {
 
 @container (min-width: 620px) {
     .st-devtools-finding-evidence-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .st-devtools-finding-evidence-item-actions {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 

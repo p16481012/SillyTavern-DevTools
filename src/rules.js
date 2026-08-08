@@ -11,6 +11,8 @@ import { buildInstructionModel } from './instruction-atoms.js';
 
 const SUPPRESSED_COMPARISON_RECORD_LIMIT = 100;
 const CHARACTER_PROFILE_FIELDS = new Set(['description', 'personality']);
+const DUPLICATE_EVIDENCE_SOURCE_LIMIT = 20;
+const DUPLICATE_EVIDENCE_RANGE_LIMIT = 100;
 
 export const RULE_DEFINITIONS = Object.freeze([
     { id: 'context', labelKey: 'rules.setting.context' },
@@ -107,6 +109,7 @@ function finding(ruleId, id, severity, titleKey, messageKey, variables = {}, det
         relationId: details.relationId ?? null,
         clusterId: details.clusterId ?? null,
         evidenceRecords: details.evidenceRecords ?? [],
+        evidenceSummary: details.evidenceSummary ?? null,
         relationKind: details.relationKind ?? null,
         applicabilityKind: details.applicabilityKind ?? null,
         relationDisposition: details.relationDisposition ?? null,
@@ -124,13 +127,38 @@ function normalizeSentence(sentence) {
 }
 
 function getSentences(source, minimumLength) {
-    return source.content
-        .split(/(?<=[.!?。！？])\s+|\n+/u)
-        .map((sentence) => ({
-            original: sentence.trim(),
-            normalized: normalizeSentence(sentence),
-        }))
-        .filter((sentence) => sentence.normalized.length >= minimumLength);
+    const content = String(source?.content ?? '');
+    const separators = /(?<=[.!?。！？])\s+|\n+/gu;
+    const sentences = [];
+    let cursor = 0;
+    const appendSentence = (start, end) => {
+        while (start < end && /\s/u.test(content[start])) start += 1;
+        while (end > start && /\s/u.test(content[end - 1])) end -= 1;
+        if (end <= start) return;
+        const original = content.slice(start, end);
+        const normalized = normalizeSentence(original);
+        if (normalized.length < minimumLength) return;
+        sentences.push({
+            original,
+            normalized,
+            localRange: { start, end },
+        });
+    };
+    for (const separator of content.matchAll(separators)) {
+        appendSentence(cursor, separator.index);
+        cursor = separator.index + separator[0].length;
+    }
+    appendSentence(cursor, content.length);
+    return sentences;
+}
+
+function stableSentenceHash(value) {
+    let hash = 2166136261;
+    for (const character of value) {
+        hash ^= character.codePointAt(0);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
 }
 
 function validRanges(source) {
@@ -144,6 +172,119 @@ function sourceRanges(sources, sourceIds) {
     return sources
         .filter((source) => selected.has(source.id))
         .flatMap(validRanges);
+}
+
+function uniqueRanges(ranges) {
+    const seen = new Set();
+    return ranges
+        .map(({ start, end }) => ({ start: Number(start), end: Number(end) }))
+        .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+        .filter(({ start, end }) => {
+            const key = `${start}:${end}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+}
+
+function projectSentenceRange(source, localRange) {
+    const contentLength = String(source?.content ?? '').length;
+    return uniqueRanges(validRanges(source).flatMap((range) => {
+        if (
+            source?.attribution === 'exact'
+            && contentLength > 0
+            && range.end - range.start === contentLength
+        ) {
+            return [{
+                start: Math.min(range.end, range.start + localRange.start),
+                end: Math.min(range.end, range.start + localRange.end),
+            }];
+        }
+        return [];
+    }));
+}
+
+function duplicateEvidenceDetails(items, sourceIds) {
+    const selected = new Set(sourceIds);
+    const bySource = new Map();
+    for (const item of items) {
+        if (!selected.has(item.source.id)) continue;
+        const list = bySource.get(item.source.id) ?? [];
+        list.push(item);
+        bySource.set(item.source.id, list);
+    }
+    const records = [];
+    const finalRangeOwners = new Map();
+    let mappedSourceCount = 0;
+    let sharedFinalLocation = false;
+    for (const [sourceIndex, sourceId] of sourceIds.entries()) {
+        const occurrences = bySource.get(sourceId) ?? [];
+        const first = occurrences[0];
+        if (!first) continue;
+        const localRanges = [];
+        const localKeys = new Set();
+        const finalRanges = [];
+        const sourceFinalKeys = new Set();
+        for (const { source, localRange } of occurrences) {
+            const localKey = `${localRange.start}:${localRange.end}`;
+            if (
+                sourceIndex < DUPLICATE_EVIDENCE_SOURCE_LIMIT
+                && localRanges.length < DUPLICATE_EVIDENCE_RANGE_LIMIT
+                && !localKeys.has(localKey)
+            ) {
+                localKeys.add(localKey);
+                localRanges.push(localRange);
+            }
+            for (const range of projectSentenceRange(source, localRange)) {
+                const finalKey = `${range.start}:${range.end}`;
+                sourceFinalKeys.add(finalKey);
+                const owner = finalRangeOwners.get(finalKey);
+                if (owner && owner !== sourceId) sharedFinalLocation = true;
+                else if (!owner) finalRangeOwners.set(finalKey, sourceId);
+                if (
+                    sourceIndex < DUPLICATE_EVIDENCE_SOURCE_LIMIT
+                    && finalRanges.length < DUPLICATE_EVIDENCE_RANGE_LIMIT
+                    && !finalRanges.some(({ start, end }) => (
+                        start === range.start && end === range.end
+                    ))
+                ) {
+                    finalRanges.push(range);
+                }
+            }
+        }
+        if (sourceFinalKeys.size > 0) mappedSourceCount += 1;
+        if (sourceIndex >= DUPLICATE_EVIDENCE_SOURCE_LIMIT) continue;
+        const uniqueLocalCount = new Set(occurrences.map(
+            ({ localRange }) => `${localRange.start}:${localRange.end}`,
+        )).size;
+        records.push({
+            sourceId,
+            sourceLabel: sourceDisplayLabel(first.source),
+            text: first.original,
+            localRange: localRanges[0] ?? null,
+            localRanges,
+            finalRanges,
+            occurrenceCount: occurrences.length,
+            locationsTruncated: uniqueLocalCount > localRanges.length
+                || sourceFinalKeys.size > finalRanges.length,
+            omittedLocationCount: Math.max(0, uniqueLocalCount - localRanges.length),
+            omittedFinalLocationCount: Math.max(0, sourceFinalKeys.size - finalRanges.length),
+        });
+    }
+    return {
+        records,
+        summary: {
+            sourceCount: sourceIds.length,
+            displayedSourceCount: records.length,
+            omittedSourceCount: Math.max(0, sourceIds.length - records.length),
+            mappedSourceCount,
+            unmappedSourceCount: Math.max(0, sourceIds.length - mappedSourceCount),
+            finalLocationCount: finalRangeOwners.size,
+            sharedFinalLocation,
+            locationsTruncated: records.some(({ locationsTruncated }) => locationsTruncated)
+                || sourceIds.length > records.length,
+        },
+    };
 }
 
 function isCharacterProfileReference(source) {
@@ -240,10 +381,32 @@ function analyzeDuplicates(sources, minimumLength, collector) {
     for (const source of sources) {
         for (const sentence of getSentences(source, minimumLength)) {
             const list = occurrences.get(sentence.normalized) ?? [];
-            list.push({ source, original: sentence.original });
+            list.push({
+                source,
+                original: sentence.original,
+                localRange: sentence.localRange,
+            });
             occurrences.set(sentence.normalized, list);
         }
     }
+    const findingIdBaseCounts = new Map();
+    const findingIdBase = (normalized, items) => {
+        const uniqueSourceIds = new Set(items.map(({ source }) => source.id));
+        if (uniqueSourceIds.size > 1) return `duplicate:${normalized.slice(0, 40)}`;
+        if (uniqueSourceIds.size === 1 && items.length > 1) {
+            return `repeated:${items[0].source.id}:${normalized.slice(0, 40)}`;
+        }
+        return null;
+    };
+    for (const [normalized, items] of occurrences) {
+        const base = findingIdBase(normalized, items);
+        if (base) findingIdBaseCounts.set(base, (findingIdBaseCounts.get(base) ?? 0) + 1);
+    }
+    const stableFindingId = (base, normalized) => (
+        (findingIdBaseCounts.get(base) ?? 0) > 1
+            ? `${base}:${stableSentenceHash(normalized)}`
+            : base
+    );
 
     const results = [];
     for (const [normalized, items] of occurrences) {
@@ -265,9 +428,12 @@ function analyzeDuplicates(sources, minimumLength, collector) {
 
         if (selected.size > 1) {
             const sourceIds = [...selected].map(({ id }) => id);
+            const evidenceDetails = duplicateEvidenceDetails(items, sourceIds);
+            const evidenceRecords = evidenceDetails.records;
+            const idBase = `duplicate:${normalized.slice(0, 40)}`;
             results.push(finding(
                 'duplicates',
-                `duplicate:${normalized.slice(0, 40)}`,
+                stableFindingId(idBase, normalized),
                 'warning',
                 'rules.duplicate.title',
                 'rules.duplicate.message',
@@ -276,7 +442,11 @@ function analyzeDuplicates(sources, minimumLength, collector) {
                     evidence: items[0].original,
                     suppressionSignature: normalized,
                     sourceIds,
-                    finalRanges: sourceRanges(sources, sourceIds),
+                    finalRanges: uniqueRanges(
+                        evidenceRecords.flatMap(({ finalRanges }) => finalRanges),
+                    ),
+                    evidenceRecords,
+                    evidenceSummary: evidenceDetails.summary,
                     confidence: 'high',
                 },
             ));
@@ -285,9 +455,12 @@ function analyzeDuplicates(sources, minimumLength, collector) {
 
         if (uniqueSources.length === 1 && items.length > 1) {
             const source = uniqueSources[0];
+            const evidenceDetails = duplicateEvidenceDetails(items, [source.id]);
+            const evidenceRecords = evidenceDetails.records;
+            const idBase = `repeated:${source.id}:${normalized.slice(0, 40)}`;
             results.push(finding(
                 'duplicates',
-                `repeated:${source.id}:${normalized.slice(0, 40)}`,
+                stableFindingId(idBase, normalized),
                 'info',
                 'rules.repeated.title',
                 'rules.repeated.message',
@@ -299,7 +472,11 @@ function analyzeDuplicates(sources, minimumLength, collector) {
                     evidence: items[0].original,
                     suppressionSignature: normalized,
                     sourceIds: source.synthetic ? [] : [source.id],
-                    finalRanges: validRanges(source),
+                    finalRanges: source.synthetic
+                        ? []
+                        : evidenceRecords[0]?.finalRanges ?? [],
+                    evidenceRecords: source.synthetic ? [] : evidenceRecords,
+                    evidenceSummary: source.synthetic ? null : evidenceDetails.summary,
                     confidence: 'high',
                 },
             ));

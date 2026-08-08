@@ -1,4 +1,16 @@
-# v0.17.2 기술 구현 현황
+# v0.17.3 기술 구현 현황
+
+## v0.17.3 중복 문장 source별 provenance
+
+- `getSentences()`는 정규화 문장뿐 아니라 source content 기준의 정확한 `localRange`를 함께 반환합니다. exact attribution이고 source range 길이와 content 길이가 일치할 때만 local range를 최종 프롬프트 좌표로 투영하며, 그 외에는 위치를 추정하지 않습니다.
+- 여러 source의 동일 문장 finding은 source마다 하나의 `evidenceRecord`를 가집니다. record는 `sourceId`·`sourceLabel`·원문·대표 `localRange`와 전체 `localRanges`·중복 제거한 `finalRanges`·`occurrenceCount`를 보존합니다.
+- 한 source에 같은 문장이 여러 번 있으면 finding과 근거 카드는 하나로 유지하고 전체 발생·위치 수는 summary에 보존합니다. record에는 local/final range를 각각 최대 100곳까지만 담아 함께 강조하며, 나머지 위치 수는 생략 안내로 표시합니다.
+- `findingWorkflowEvidence()`는 atom 기반 근거와 atom이 없는 중복 문장 evidence를 모두 안전하게 정규화합니다. source별 record는 서로 합치지 않으며 잘못된 range를 제거하고 각 근거의 원본/최종 action에 필요한 범위만 전달합니다.
+- 카드 요약의 source 수는 유효한 source별 evidence card 수이고, 최종 위치 수는 모든 `finalRanges`의 `start:end`를 중복 제거한 물리적 위치 수입니다. 따라서 여러 source가 최종 프롬프트의 같은 문자열 위치에 귀속되면 두 수가 다를 수 있습니다.
+- source별 `이 근거를 원문에서 보기`는 해당 source의 local range만 사용하고, `이 근거의 최종 위치 보기`는 해당 record의 final range만 사용합니다. source별 근거가 있는 finding에서는 혼동을 주던 통합 원문/최종 action을 표시하지 않습니다.
+- 여러 근거가 virtual list 밖에 있어도 source ID마다 mount를 보장한 뒤 원문을 강조합니다. 문장 앞 40자가 같은 별도 finding은 전체 정규화 문장의 안정 hash를 ID suffix로 사용해 충돌을 피합니다.
+- 중복 rule의 `findingKey()`·suppression digest는 v0.17.3에서 추가된 위치 evidence를 identity에 넣지 않습니다. 따라서 새 exact range가 추가되어도 기존 버전에서 저장한 유효·오탐 review와 suppression key가 유지됩니다.
+- 버전 계약은 manifest·package·runtime import query·onboarding fixture·두 sandbox HTML entry·sandbox harness runtime을 `0.17.3`으로 함께 검증합니다.
 
 ## v0.17.2 finding 검토·근거 왕복·AI 연결 흐름
 
